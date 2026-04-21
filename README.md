@@ -60,3 +60,7 @@
 	- Robustness to node and edge ordering.
 - [ ] If cross-topology control works, consider extending to multiple behaviors such as rolling and walking.
 - [ ] If the results are strong, start writing the paper around the graph representation, edge-action decoder, and topology generalization experiments.
+
+# Interesting Potential Avenues of advancement 
+- I could replace the MSE style regression with a discrete regression over bins similar to TD-MPC2 which might add more stability to training and a better reward signal.
+
