@@ -1,0 +1,42 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+.Python
+.venv/
+venv/
+env/
+.env
+.env.*
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+.DS_Store
+
+# Experiment outputs and generated research artifacts
+runs/
+wandb/
+tensorboard/
+checkpoints/
+logs/
+
+# Local datasets and derived data
+data/raw/
+data/processed/
+data/interim/
+
+# Model and replay artifacts
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.pickle
+*.npz
+*.npy
+
+# Notebook checkpoints
+.ipynb_checkpoints/
