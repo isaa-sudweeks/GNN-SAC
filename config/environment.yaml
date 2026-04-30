@@ -4,7 +4,7 @@
 task: truss-velocity-command-right # Registered task key from env/mujoco.py.
 env_name: ${task} # Display/logging name for the selected environment.
 obs: state # Observation type expected by the MuJoCo environment factory.
-xml_path: env/truss/assets/Baseline/2d_pyramid_velocity_integrated_ctr.xml # MuJoCo XML model used by the truss environment.
+xml_path: env/truss/assets/Baseline/octahedron_velocity_integrated_ctr.xml # MuJoCo XML model used by the truss environment.
 
 # Simulation timing
 max_steps: 1_000 # Maximum simulator steps before the Timeout wrapper truncates an episode.
@@ -27,8 +27,8 @@ slip_height: 0.2 # Height threshold used to decide which nodes count as ground c
 critical_eig_threshold: 0.03 # Terminate when normalized rigidity falls below this value.
 
 # Flat observation/action dimensions. make_env overwrites action_dim from the Gym space.
-obs_dim: 30 # Flat observation size for the default 2D pyramid relative-observation truss model.
-action_dim: 6 # Number of normalized tendon actuator commands for the default XML model.
+obs_dim: 36 # Flat observation size placeholder (overwritten at runtime).
+action_dim: 8 # Number of normalized tendon actuator commands.
 
 # Evaluation and rendering
 render_mode: rgb_array # Preferred render mode when videos are enabled.
@@ -36,12 +36,12 @@ success_threshold: null # Optional reward/success threshold; null means the env 
 terminate_on_success: false # Whether future success-aware wrappers should end episodes early.
 
 # Topology metadata for graph-based robot experiments.
-topology_id: 2d-pyramid # Stable identifier for the default robot topology.
+topology_id: octahedron # Stable identifier for the default robot topology.
 use_graph_observations: false # Whether observations should be emitted as graph data instead of flat tensors.
 node_feature_dim: 0 # Per-node feature width for future graph observations.
 edge_feature_dim: 0 # Per-edge feature width for future graph observations.
-num_nodes: 6 # Number of node bodies in the default 2D pyramid XML.
-num_edges: 9 # Number of structural/actuated tendon edges in the default 2D pyramid XML.
-num_actuated_edges: 6 # Number of tendon edges controlled by the policy.
+num_nodes: 6 # Number of node bodies in the default octahedron XML.
+num_edges: 12 # Number of structural/actuated tendon edges in the default octahedron XML.
+num_actuated_edges: 8 # Number of tendon edges controlled by the policy.
 normalize_observations: true # Whether future wrappers should normalize observation features.
 normalize_rewards: false # Whether future wrappers should normalize scalar rewards.
