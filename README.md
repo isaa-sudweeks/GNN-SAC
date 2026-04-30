@@ -64,3 +64,4 @@
 # Interesting Potential Avenues of advancement 
 - I could replace the MSE style regression with a discrete regression over bins similar to TD-MPC2 which might add more stability to training and a better reward signal.
 
+# Current TODOs 
