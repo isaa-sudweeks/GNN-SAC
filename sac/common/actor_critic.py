@@ -16,7 +16,8 @@ class ActorCritic(nn.Module):
 
         # Initialize networks 
         self._pi = layers.mlp(cfg.obs_dim, 2*[cfg.mlp_dim], 2*cfg.action_dim) # Actor or policy 
-        self.Qs = layers.Ensemble([layers.mls(cfg.obs_dim + cfg.action_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1), dropout=cfg.dropout) for _ in range(int(cfg.num_q))])
+        # Standard SAC Q-networks output a single scalar value for the state-action pair
+        self.Qs = layers.Ensemble([layers.mls(cfg.obs_dim + cfg.action_dim, 2*[cfg.mlp_dim], 1, dropout=cfg.dropout) for _ in range(int(cfg.num_q))])
 
         # Okay I don't really know if we need this 
         self.register_buffer("log_std_min", torch.tensor(cfg.log_std_min))
@@ -132,7 +133,7 @@ class ActorCritic(nn.Module):
             return out
         
         qidx = torch.randperm(self.cfg.num_q, device=out.device)[:2]
-        Q = math.two_hot_inv(out[qidx], self.cfg) # I don't understand this super well, but I think I can just get rid of this if I am planning to use normal regression anyway 
+        Q = out[qidx] # Use standard regression output directly
         if return_type == 'min':
             return Q.min(0).values 
         return Q.sum(0) / 2
