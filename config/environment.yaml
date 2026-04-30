@@ -7,9 +7,9 @@ obs: state # Observation type expected by the MuJoCo environment factory.
 xml_path: env/truss/assets/Baseline/octahedron_velocity_integrated_ctr.xml # MuJoCo XML model used by the truss environment.
 
 # Simulation timing
-max_steps: 1_000 # Maximum simulator steps before the Timeout wrapper truncates an episode.
+max_steps: 5_000 # Maximum simulator steps before the Timeout wrapper truncates an episode.
 episode_length: ${max_steps} # Nominal episode length used before make_env overwrites it from the wrapper.
-nsubsteps: 1 # Number of MuJoCo integration steps per environment step.
+nsubsteps: 10 # Number of MuJoCo integration steps per environment step.
 action_repeat: 1 # Number of repeated environment actions; kept for trainer compatibility.
 
 # Truss velocity-control action settings

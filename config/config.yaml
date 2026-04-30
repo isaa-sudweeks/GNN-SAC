@@ -7,7 +7,7 @@ defaults:
 project: gnn-sac # Experiment tracking project name.
 exp_name: truss-velocity-command # Human-readable experiment/run name.
 seed: 1 # Random seed for Python, NumPy, PyTorch, and environment sampling.
-device: cuda # Torch device used for model training; use cpu when CUDA is unavailable.
+device: cpu # Torch device used for model training; use cpu when CUDA is unavailable.
 work_dir: ??? # Output directory; Hydra fills this when left unresolved.
 
 # Training schedule
@@ -27,7 +27,7 @@ tasks: # Task list used by multitask code paths and logging.
 save_csv: true # Whether to write evaluation metrics to eval.csv.
 save_agent: true # Whether to save final model weights at the end of training.
 save_video: false # Whether to render and log video for the first evaluation episode.
-enable_wandb: false # Whether to send metrics, config, video, and artifacts to Weights & Biases.
+enable_wandb: true # Whether to send metrics, config, video, and artifacts to Weights & Biases.
 wandb_project: ${project} # W&B project name.
 wandb_entity: null # Optional W&B entity/team; null uses the local default.
 wandb_name: ${exp_name}-${seed} # W&B run name.
