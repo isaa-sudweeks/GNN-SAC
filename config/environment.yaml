@@ -1,0 +1,47 @@
+# @package _global_
+
+# Environment selection
+task: truss-velocity-command-right # Registered task key from env/mujoco.py.
+env_name: ${task} # Display/logging name for the selected environment.
+obs: state # Observation type expected by the MuJoCo environment factory.
+xml_path: env/truss/assets/Baseline/2d_pyramid_velocity_integrated_ctr.xml # MuJoCo XML model used by the truss environment.
+
+# Simulation timing
+max_steps: 1_000 # Maximum simulator steps before the Timeout wrapper truncates an episode.
+episode_length: ${max_steps} # Nominal episode length used before make_env overwrites it from the wrapper.
+nsubsteps: 1 # Number of MuJoCo integration steps per environment step.
+action_repeat: 1 # Number of repeated environment actions; kept for trainer compatibility.
+
+# Truss velocity-control action settings
+speed: 0.05 # Scale from normalized policy action [-1, 1] to actuator control delta/velocity.
+action_low: -1.0 # Lower bound of the normalized policy action space.
+action_high: 1.0 # Upper bound of the normalized policy action space.
+
+# Reward and termination
+forward_weight: 5.0 # Reward multiplier for commanded center-of-mass velocity.
+energy_weight: 0.005 # Penalty multiplier on squared actuator command magnitude.
+alive_bonus: 0.1 # Reward added each step while the structure remains valid.
+rigidity_weight: 0.5 # Reward multiplier for the normalized rigidity/collapse eigenvalue.
+slip_weight: 0.1 # Penalty multiplier for horizontal velocity at low-contact nodes.
+slip_height: 0.2 # Height threshold used to decide which nodes count as ground contacts.
+critical_eig_threshold: 0.03 # Terminate when normalized rigidity falls below this value.
+
+# Flat observation/action dimensions. make_env overwrites action_dim from the Gym space.
+obs_dim: 30 # Flat observation size for the default 2D pyramid relative-observation truss model.
+action_dim: 6 # Number of normalized tendon actuator commands for the default XML model.
+
+# Evaluation and rendering
+render_mode: rgb_array # Preferred render mode when videos are enabled.
+success_threshold: null # Optional reward/success threshold; null means the env info controls success.
+terminate_on_success: false # Whether future success-aware wrappers should end episodes early.
+
+# Topology metadata for graph-based robot experiments.
+topology_id: 2d-pyramid # Stable identifier for the default robot topology.
+use_graph_observations: false # Whether observations should be emitted as graph data instead of flat tensors.
+node_feature_dim: 0 # Per-node feature width for future graph observations.
+edge_feature_dim: 0 # Per-edge feature width for future graph observations.
+num_nodes: 6 # Number of node bodies in the default 2D pyramid XML.
+num_edges: 9 # Number of structural/actuated tendon edges in the default 2D pyramid XML.
+num_actuated_edges: 6 # Number of tendon edges controlled by the policy.
+normalize_observations: true # Whether future wrappers should normalize observation features.
+normalize_rewards: false # Whether future wrappers should normalize scalar rewards.

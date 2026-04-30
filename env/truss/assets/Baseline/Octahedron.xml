@@ -1,0 +1,180 @@
+<mujoco model="Octahedron">
+    <!-- Set Simulator options -->
+    <compiler inertiafromgeom="true"/>
+    <option timestep="0.001" gravity="0 0 -9.81"/>
+    
+    <!-- Define default geometry properties -->
+    <default>
+    <geom type="sphere" size="0.1"/>
+    </default>
+
+    <worldbody>
+    <!-- Lighting and ground plane -->
+    <light name="key" pos="0 0 2" dir="0 0 -1"/>
+    <geom type="plane" name="plane1" size="2 2 0.1" rgba="0.9 0.9 0.9 1"/>
+
+
+    <body name="Octahedron" pos="0 0 0.1">
+    <!-- Nodes -->
+    <!-- Triangle 1 -->
+    <body name="node_1" pos="0 0 0.1">
+      <!-- 3D sliding joints to allow movement in X, Y, Z -->
+      <joint name="node_1_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+      <joint name="node_1_y" type="slide" pos="0 0 0" axis="0 1 0"/>
+      <joint name="node_1_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+      <geom/>
+      <site name="node_1_site"/>
+    </body>
+
+    <body name="node_2" pos="1 0 0.1">
+      <joint name="node_2_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+      <joint name="node_2_y" type="slide" pos="0 0 0" axis="0 1 0"/>
+      <joint name="node_2_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+      <geom/>
+      <site name="node_2_site"/>
+    </body>
+
+    <body name="node_3" pos="0.5 0.866 0.1">
+      <joint name="node_3_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+      <joint name="node_3_y" type="slide" pos="0 0 0" axis="0 1 0"/>
+      <joint name="node_3_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+      <geom/>
+      <site name="node_3_site"/>
+    </body>
+
+    <!-- Triangle 2 -->
+    <body name="node_4" pos="0.5 0 0.866">
+      <joint name="node_4_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+      <joint name="node_4_y" type="slide" pos="0 0 0" axis="0 1 0"/>
+      <joint name="node_4_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+      <geom/>
+      <site name="node_4_site"/>
+    </body>
+
+    <body name="node_5" pos="0.25 0.433 0.866">
+      <joint name="node_5_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+      <joint name="node_5_y" type="slide" pos="0 0 0" axis="0 1 0"/>
+      <joint name="node_5_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+      <geom/>
+      <site name="node_5_site"/>
+    </body>
+
+    <body name="node_6" pos="0.75 0.433 0.866">
+      <joint name="node_6_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+      <joint name="node_6_y" type="slide" pos="0 0 0" axis="0 1 0"/>
+      <joint name="node_6_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+      <geom/>
+      <site name="node_6_site"/>
+    </body>
+    </body>
+    </worldbody>
+
+    <tendon>
+        <spatial name="edge_12" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.8 2">
+            <site site="node_1_site"/>
+            <site site="node_2_site"/>
+        </spatial>
+        <spatial name="edge_24" width="0.05" rgba="0.0 0.1804 0.3647 1">
+            <site site="node_2_site"/>
+            <site site="node_4_site"/>
+        </spatial>
+        <spatial name="edge_41" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.8 2">
+            <site site="node_4_site"/>
+            <site site="node_1_site"/>
+        </spatial>
+        <spatial name="edge_15" width="0.05" rgba="0.0 0.1804 0.3647 1">
+            <site site="node_1_site"/>
+            <site site="node_5_site"/>
+        </spatial>
+        <spatial name="edge_53" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.8 2">
+            <site site="node_5_site"/>
+            <site site="node_3_site"/>
+        </spatial>
+        <spatial name="edge_31" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.8 2">
+            <site site="node_3_site"/>
+            <site site="node_1_site"/>
+        </spatial>
+        <spatial name="edge_36" width="0.05" rgba="0.0 0.1804 0.3647 1">
+            <site site="node_3_site"/>
+            <site site="node_6_site"/>
+        </spatial>
+        <spatial name="edge_62" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.8 2">
+            <site site="node_6_site"/>
+            <site site="node_2_site"/>
+        </spatial>
+        <spatial name="edge_23" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.8 2">
+            <site site="node_2_site"/>
+            <site site="node_3_site"/>
+        </spatial>
+        <spatial name="edge_45" width="0.05" rgba="0.0 0.1804 0.3647 1">
+            <site site="node_4_site"/>
+            <site site="node_5_site"/>
+        </spatial>
+        <spatial name="edge_56" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.8 2">
+            <site site="node_5_site"/>
+            <site site="node_6_site"/>
+        </spatial>
+        <spatial name="edge_64" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.8 2">
+            <site site="node_6_site"/>
+            <site site="node_4_site"/>
+        </spatial>
+
+        <!-- active tendon definitions -->
+        <spatial name="active_edge_13_35" width="0.05" rgba="0.0 0.1804 0.3647 1">
+            <site site="node_1_site"/>
+            <site site="node_3_site"/>
+            <site site="node_5_site"/>
+        </spatial>
+        
+        <spatial name="active_edge_21_14" width="0.05" rgba="0.0 0.1804 0.3647 1">
+            <site site="node_2_site"/>
+            <site site="node_1_site"/>
+            <site site="node_4_site"/>
+        </spatial>
+
+        <spatial name="active_edge_32_26" width="0.05" rgba="0.0 0.1804 0.3647 1">
+            <site site="node_3_site"/>
+            <site site="node_2_site"/>
+            <site site="node_6_site"/>
+        </spatial>
+
+        <spatial name="active_edge_56_64" width="0.05" rgba="0.0 0.1804 0.3647 1">
+            <site site="node_4_site"/>
+            <site site="node_6_site"/>
+            <site site="node_5_site"/>
+        </spatial>
+
+    </tendon>
+
+    
+
+
+    <actuator>
+        <position name="edge_12" tendon="edge_12" kp="750" inheritrange="1.0" dampratio="1.0"/>
+        <!-- <position name="edge_24" tendon="edge_24" kp="750" inheritrange="1.0" dampratio="1.0"/> -->
+
+        <position name="edge_41" tendon="edge_41" kp="750" inheritrange="1.0" dampratio="1.0"/>
+        <!-- <position name="edge_15" tendon="edge_15" kp="750" inheritrange="1.0" dampratio="1.0"/> -->
+
+        <position name="edge_53" tendon="edge_53" kp="750" inheritrange="1.0" dampratio="1.0"/>
+        <position name="edge_31" tendon="edge_31" kp="750" inheritrange="1.0" dampratio="1.0"/>
+        <!-- <position name="edge_36" tendon="edge_36" kp="750" inheritrange="1.0" dampratio="1.0"/> -->
+
+        <position name="edge_62" tendon="edge_62" kp="750" inheritrange="1.0" dampratio="1.0"/>
+        <position name="edge_23" tendon="edge_23" kp="750" inheritrange="1.0" dampratio="1.0"/>
+        <!-- <position name="edge_45" tendon="edge_45" kp="750" inheritrange="1.0" dampratio="1.0"/> -->
+
+        <position name="edge_56" tendon="edge_56" kp="750" inheritrange="1.0" dampratio="1.0"/>
+        <position name="edge_64" tendon="edge_64" kp="750" inheritrange="1.0" dampratio="1.0"/>
+    </actuator>
+
+    <!-- Equality constrains  -->
+    <equality>
+        <tendon name="active_edge_13_35" tendon1="edge_15" tendon2="active_edge_13_35" polycoef="0 -1 0 0 0" solref="0.02 1" solimp="0.9 0.95 0.001"/>
+        <tendon name="active_edge_21_14" tendon1="edge_24" tendon2="active_edge_21_14" polycoef="0 -1 0 0 0" solref="0.02 1" solimp="0.9 0.95 0.001"/>
+        <tendon name="active_edge_32_26" tendon1="edge_36" tendon2="active_edge_32_26" polycoef="0 -1 0 0 0" solref="0.02 1" solimp="0.9 0.95 0.001"/>
+        <tendon name="active_edge_56_64" tendon1="edge_45" tendon2="active_edge_56_64" polycoef="1.5 -1 0 0 0" solref="0.02 1" solimp="0.9 0.95 0.001"/>
+    </equality>
+    
+</mujoco>
+    

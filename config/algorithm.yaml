@@ -1,0 +1,28 @@
+# @package _global_
+
+# Optimizer
+lr: 3e-4 # Adam learning rate for actor and critic optimizers.
+batch_size: 256 # Number of replay slices sampled for each gradient update.
+grad_clip_norm: 10.0 # Maximum global gradient norm before clipping optimizer steps.
+
+# Replay and update cadence
+buffer_size: 1_000_000 # Maximum number of transitions stored in replay.
+horizon: 2 # Sequence length used by the slice sampler; 2 gives one current/next transition.
+iterations: 1 # Base number of policy/value updates per environment step.
+
+# SAC objective
+entropy_coef: 0.2 # Weight on policy entropy in the actor objective.
+target_entropy: auto # SAC entropy target; auto uses -action_dim.
+tau: 0.005 # Polyak averaging rate for target critic updates and running value scale.
+rho: 0.5 # Temporal weighting factor for multi-step policy losses.
+discount_denom: 500 # Episode-length denominator used to derive the discount heuristic.
+discount_min: 0.95 # Lower bound for the derived discount factor.
+discount_max: 0.995 # Upper bound for the derived discount factor; MuJoCo wrapper may lower this.
+
+# Actor-critic architecture
+mlp_dim: 256 # Hidden width for the MLP actor and critic networks.
+dropout: 0.0 # Dropout probability in critic MLP layers.
+num_q: 2 # Number of critic networks in the Q ensemble.
+log_std_min: -10.0 # Minimum actor log standard deviation before action sampling.
+log_std_max: 2.0 # Maximum actor log standard deviation before action sampling.
+

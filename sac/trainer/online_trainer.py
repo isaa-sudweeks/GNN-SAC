@@ -73,10 +73,12 @@ class OnlineTrainer(Trainer):
         if terminated is None:
             terminated = torch.tensor(float('nan'))
         td = TensorDict(
-            obs=obs,
-            action = action.unsqueeze(0),
-            reward = reward.unsqueeze(0),
-            terminated = terminated.unsqueeze(0),
+            {
+                "obs": obs,
+                "action": action.unsqueeze(0),
+                "reward": reward.unsqueeze(0),
+                "terminated": terminated.unsqueeze(0),
+            },
             batch_size=(1,),
         )
         return td
@@ -102,11 +104,12 @@ class OnlineTrainer(Trainer):
                     eval_next = False
                 if self._step > 0:
                     train_metrics.update(
-                        episode_reward=torch.tensor([td['reward'] for td in self._tds[1:]]).sum(),
-                        episode_success = info['success'],
-                        episode_length = len(self._tds),
-                        episode_terminated=info['terminated'],
-                        episode_truncated=info['truncated'])
+                        episode_reward=torch.stack([td["reward"].view(()) for td in self._tds[1:]]).sum(),
+                        episode_success=info["success"],
+                        episode_length=len(self._tds) - 1,
+                        episode_terminated=info["terminated"],
+                        episode_truncated=info["truncated"],
+                    )
                     train_metrics.update(self.common_metrics())
                     self.logger.log(train_metrics, 'train')
                     self._ep_idx = self.buffer.add(torch.cat(self._tds))
@@ -124,12 +127,12 @@ class OnlineTrainer(Trainer):
             self._tds.append(self.to_td(obs, action, reward, terminated))
 
             # Update agent 
-            if self._step >= self.cfg.seed_steps:
+            if self._step >= self.cfg.seed_steps and self.buffer.size >= self.cfg.batch_size:
                 if self._step == self.cfg.seed_steps:
                     num_updates = pretrain_steps
                     print(f'Pretraining agent on seed data for {num_updates} updates...')
                 else:
-                    num_updates = 1
+                    num_updates = self.cfg.iterations
                 if num_updates > 0:
                     for _ in range(num_updates):
                         _train_metrics = self.agent.update(self.buffer)

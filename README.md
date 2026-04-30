@@ -63,5 +63,6 @@
 
 # Interesting Potential Avenues of advancement 
 - I could replace the MSE style regression with a discrete regression over bins similar to TD-MPC2 which might add more stability to training and a better reward signal.
+- I could do some sort of scaled entropy stuff similar to what is done in TD-MPC2. One of the reasons that this would be needed I think is that as the number of tendons changes so will the entropy. This could lead to some weirdness in training where the agent prefers high entropy in robots with many tendons and low entropy in robots with few tendons. This could be avoided by scaling the entropy.
 
 # Current TODOs 

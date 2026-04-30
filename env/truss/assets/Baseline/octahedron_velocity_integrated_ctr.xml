@@ -1,0 +1,143 @@
+<mujoco model="MuJoCo Model">
+  <compiler angle="radian"/>
+
+  <worldbody>
+    <geom size="50 1 0.1" type="plane" rgba="0.9 0.9 0.9 1"/>
+    <light name="top" pos="0 0 1" dir="0 0 -1"/>
+    <body name="node_1" pos="0 0 0.1">
+      <joint name="node_1_x" pos="0 0 0" axis="1 0 0" type="slide"/>
+      <joint name="node_1_y" pos="0 0 0" axis="0 1 0" type="slide"/>
+      <joint name="node_1_z" pos="0 0 0" axis="0 0 1" type="slide"/>
+      <geom size="0.1" rgba="0.9 0.9 0.9 1"/>
+      <site name="node_1" pos="0 0 0"/>
+    </body>
+    <body name="node_2" pos="1 0 0.1">
+      <joint name="node_2_x" pos="0 0 0" axis="1 0 0" type="slide"/>
+      <joint name="node_2_y" pos="0 0 0" axis="0 1 0" type="slide"/>
+      <joint name="node_2_z" pos="0 0 0" axis="0 0 1" type="slide"/>
+      <geom size="0.1" rgba="0.9 0.9 0.9 1"/>
+      <site name="node_2" pos="0 0 0"/>
+    </body>
+    <body name="node_3" pos="0.5 0.866 0.1">
+      <joint name="node_3_x" pos="0 0 0" axis="1 0 0" type="slide"/>
+      <joint name="node_3_y" pos="0 0 0" axis="0 1 0" type="slide"/>
+      <joint name="node_3_z" pos="0 0 0" axis="0 0 1" type="slide"/>
+      <geom size="0.1" rgba="0.9 0.9 0.9 1"/>
+      <site name="node_3" pos="0 0 0"/>
+    </body>
+    <body name="node_4" pos="0.5 -0.2887 0.9165">
+      <joint name="node_4_x" pos="0 0 0" axis="1 0 0" type="slide"/>
+      <joint name="node_4_y" pos="0 0 0" axis="0 1 0" type="slide"/>
+      <joint name="node_4_z" pos="0 0 0" axis="0 0 1" type="slide"/>
+      <geom size="0.1" rgba="0.9 0.9 0.9 1"/>
+      <site name="node_4" pos="0 0 0"/>
+    </body>
+    <body name="node_5" pos="0 0.5774 0.9165">
+      <joint name="node_5_x" pos="0 0 0" axis="1 0 0" type="slide"/>
+      <joint name="node_5_y" pos="0 0 0" axis="0 1 0" type="slide"/>
+      <joint name="node_5_z" pos="0 0 0" axis="0 0 1" type="slide"/>
+      <geom size="0.1" rgba="0.9 0.9 0.9 1"/>
+      <site name="node_5" pos="0 0 0"/>
+    </body>
+    <body name="node_6" pos="1 0.5774 0.9165">
+      <joint name="node_6_x" pos="0 0 0" axis="1 0 0" type="slide"/>
+      <joint name="node_6_y" pos="0 0 0" axis="0 1 0" type="slide"/>
+      <joint name="node_6_z" pos="0 0 0" axis="0 0 1" type="slide"/>
+      <geom size="0.1" rgba="0.9 0.9 0.9 1"/>
+      <site name="node_6" pos="0 0 0"/>
+    </body>
+  </worldbody>
+
+  <equality>
+
+    <tendon name="Perimeter_Constraint_0" tendon1="tendon_node_2_node_4" tendon2="Perimeter_Constraint_0" polycoef="0 -1 0 0 0" solref="0.04 1.2" solimp="0.85 0.95 0.001 0.5 2.0"/>
+
+    <tendon name="Perimeter_Constraint_1" tendon1="tendon_node_5_node_3" tendon2="Perimeter_Constraint_1" polycoef="0 -1 0 0 0" solref="0.04 1.2" solimp="0.85 0.95 0.001 0.5 2.0"/>
+
+    <tendon name="Perimeter_Constraint_2" tendon1="tendon_node_2_node_3" tendon2="Perimeter_Constraint_2" polycoef="0 -1 0 0 0" solref="0.04 1.2" solimp="0.85 0.95 0.001 0.5 2.0"/>
+
+    <tendon name="Perimeter_Constraint_3" tendon1="tendon_node_5_node_4" tendon2="Perimeter_Constraint_3" polycoef="0 -1 0 0 0" solref="0.04 1.2" solimp="0.85 0.95 0.001 0.5 2.0"/>
+  </equality>
+
+  <tendon>
+    <spatial name="tendon_node_1_node_2" range="0.5 2" width="0.05" rgba="0 0.1804 0.3647 1">
+      <site site="node_1"/>
+      <site site="node_2"/>
+    </spatial>
+    <spatial name="tendon_node_2_node_4" range="0.5 2" width="0.05" rgba="0 0.1804 0.3647 1">
+      <site site="node_2"/>
+      <site site="node_4"/>
+    </spatial>
+    <spatial name="tendon_node_4_node_1" range="0.5 2" width="0.05" rgba="0 0.1804 0.3647 1">
+      <site site="node_4"/>
+      <site site="node_1"/>
+    </spatial>
+    <spatial name="tendon_node_1_node_5" range="0.5 2" width="0.05" rgba="0 0.1804 0.3647 1">
+      <site site="node_1"/>
+      <site site="node_5"/>
+    </spatial>
+    <spatial name="tendon_node_5_node_3" range="0.5 2" width="0.05" rgba="0 0.1804 0.3647 1">
+      <site site="node_5"/>
+      <site site="node_3"/>
+    </spatial>
+    <spatial name="tendon_node_3_node_1" range="0.5 2" width="0.05" rgba="0 0.1804 0.3647 1">
+      <site site="node_3"/>
+      <site site="node_1"/>
+    </spatial>
+    <spatial name="tendon_node_3_node_6" range="0.5 2" width="0.05" rgba="0 0.1804 0.3647 1">
+      <site site="node_3"/>
+      <site site="node_6"/>
+    </spatial>
+    <spatial name="tendon_node_6_node_2" range="0.5 2" width="0.05" rgba="0 0.1804 0.3647 1">
+      <site site="node_6"/>
+      <site site="node_2"/>
+    </spatial>
+    <spatial name="tendon_node_2_node_3" range="0.5 2" width="0.05" rgba="0 0.1804 0.3647 1">
+      <site site="node_2"/>
+      <site site="node_3"/>
+    </spatial>
+    <spatial name="tendon_node_4_node_6" range="0.5 2" width="0.05" rgba="0 0.1804 0.3647 1">
+      <site site="node_4"/>
+      <site site="node_6"/>
+    </spatial>
+    <spatial name="tendon_node_6_node_5" range="0.5 2" width="0.05" rgba="0 0.1804 0.3647 1">
+      <site site="node_6"/>
+      <site site="node_5"/>
+    </spatial>
+    <spatial name="tendon_node_5_node_4" range="0.5 2" width="0.05" rgba="0 0.1804 0.3647 1">
+      <site site="node_5"/>
+      <site site="node_4"/>
+    </spatial>
+    <spatial name="Perimeter_Constraint_0">
+      <site site="node_2"/>
+      <site site="node_1"/>
+      <site site="node_4"/>
+    </spatial>
+    <spatial name="Perimeter_Constraint_1">
+      <site site="node_5"/>
+      <site site="node_1"/>
+      <site site="node_3"/>
+    </spatial>
+    <spatial name="Perimeter_Constraint_2">
+      <site site="node_3"/>
+      <site site="node_6"/>
+      <site site="node_2"/>
+    </spatial>
+    <spatial name="Perimeter_Constraint_3">
+      <site site="node_4"/>
+      <site site="node_6"/>
+      <site site="node_5"/>
+    </spatial>
+  </tendon>
+
+  <actuator>
+    <general name="act_tendon_node_1_node_2" tendon="tendon_node_1_node_2" ctrllimited="true" ctrlrange="-0.05 0.05" actlimited="true" actrange="0 3" dyntype="integrator" biastype="affine" gainprm="1000" biasprm="0 -1000 1"/>
+    <general name="act_tendon_node_4_node_1" tendon="tendon_node_4_node_1" ctrllimited="true" ctrlrange="-0.05 0.05" actlimited="true" actrange="0 3" dyntype="integrator" biastype="affine" gainprm="1000" biasprm="0 -1000 1"/>
+    <general name="act_tendon_node_1_node_5" tendon="tendon_node_1_node_5" ctrllimited="true" ctrlrange="-0.05 0.05" actlimited="true" actrange="0 3" dyntype="integrator" biastype="affine" gainprm="1000" biasprm="0 -1000 1"/>
+    <general name="act_tendon_node_3_node_1" tendon="tendon_node_3_node_1" ctrllimited="true" ctrlrange="-0.05 0.05" actlimited="true" actrange="0 3" dyntype="integrator" biastype="affine" gainprm="1000" biasprm="0 -1000 1"/>
+    <general name="act_tendon_node_3_node_6" tendon="tendon_node_3_node_6" ctrllimited="true" ctrlrange="-0.05 0.05" actlimited="true" actrange="0 3" dyntype="integrator" biastype="affine" gainprm="1000" biasprm="0 -1000 1"/>
+    <general name="act_tendon_node_6_node_2" tendon="tendon_node_6_node_2" ctrllimited="true" ctrlrange="-0.05 0.05" actlimited="true" actrange="0 3" dyntype="integrator" biastype="affine" gainprm="1000" biasprm="0 -1000 1"/>
+    <general name="act_tendon_node_4_node_6" tendon="tendon_node_4_node_6" ctrllimited="true" ctrlrange="-0.05 0.05" actlimited="true" actrange="0 3" dyntype="integrator" biastype="affine" gainprm="1000" biasprm="0 -1000 1"/>
+    <general name="act_tendon_node_6_node_5" tendon="tendon_node_6_node_5" ctrllimited="true" ctrlrange="-0.05 0.05" actlimited="true" actrange="0 3" dyntype="integrator" biastype="affine" gainprm="1000" biasprm="0 -1000 1"/>
+  </actuator>
+</mujoco>

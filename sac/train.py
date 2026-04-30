@@ -2,10 +2,13 @@ from pathlib import Path
 import sys
 import os
 import platform
+import argparse
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SAC_ROOT = Path(__file__).resolve().parent
+for path in (PROJECT_ROOT, SAC_ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
 _default_mujoco_gl = 'glfw' if platform.system() == 'Darwin' else 'egl'
 os.environ['MUJOCO_GL'] = os.getenv("MUJOCO_GL", _default_mujoco_gl)
@@ -21,10 +24,21 @@ import hydra
 from termcolor import colored
 from omegaconf import OmegaConf
 
+if not getattr(argparse._ActionsContainer._check_help, "_hydra_py314_compat", False):
+    _argparse_check_help = argparse._ActionsContainer._check_help
+
+    def _check_help_compat(self, action):
+        if action.help is not None and not isinstance(action.help, str):
+            return
+        return _argparse_check_help(self, action)
+
+    _check_help_compat._hydra_py314_compat = True
+    argparse._ActionsContainer._check_help = _check_help_compat
+
 from common.parser import parse_cfg
 from common.seed import set_seed
 from common.buffer import Buffer
-from envs import make_env
+from env import make_env
 from sac import SAC
 from trainer.online_trainer import OnlineTrainer
 from common.logger import Logger
@@ -78,7 +92,7 @@ def run_training(cfg, trial=None):
         env.close()
 
 
-@hydra.main(config_name='config', config_path='.') # Change this for the real config path
+@hydra.main(config_name='config', config_path='../config')
 def train(cfg):
     """
     Script for training SAC agents.

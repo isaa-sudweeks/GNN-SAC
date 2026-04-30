@@ -1,0 +1,175 @@
+<mujoco model="pyramid">
+    <!-- Set Simulator options -->
+    <compiler inertiafromgeom="true"/>
+    <option timestep="0.002" gravity="0 0 -9.81"/>
+
+    <!-- Assests -->
+    <asset>
+    <texture name="texplane"
+             type="2d"
+             builtin="checker"
+             rgb1="0.2 0.3 0.4"
+             rgb2="0.1 0.2 0.3"
+             width="512"
+             height="512"/>
+
+    <material name="matplane"
+              texture="texplane"
+              texrepeat="20 20"
+              reflectance="0.2"/>
+    
+    <texture type="skybox"
+             builtin="gradient"
+             rgb1="1 1 1"
+             rgb2="0.9 0.9 1"
+             width="512"
+             height="512"/>
+</asset>
+<visual>
+    <headlight ambient="0.6 0.6 0.6"
+               diffuse="0.8 0.8 0.8"
+               specular="0.1 0.1 0.1"/>
+</visual>
+    
+    <!-- Define default geometry properties -->
+    <default>
+    <geom type="box" size="0.1 0.2 0.1"/>
+    </default>
+    
+    <worldbody>
+    <!-- Lighting and ground plane -->
+    <light name="key" pos="0 0 2" dir="0 0 -1"/>
+    <geom type="plane" name="plane1" size="50 50 0.1" rgba="0.9 0.9 0.9 1" material="matplane"/>
+
+    <body name="pyramid" pos="0 0 0.1">
+        <!-- Nodes -->
+        <!-- Triangle 1 -->
+        <body name="node_1" pos="0 0 0">
+        <!-- 3D sliding joints to allow movement in X, Y, Z -->
+        <joint name="node_1_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+        <joint name="node_1_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+        <geom/>
+        <site name="node_1_site"/>
+        </body>
+
+        <body name="node_2" pos="1 0 0">
+        <joint name="node_2_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+        <joint name="node_2_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+        <geom/>
+        <site name="node_2_site"/>
+        </body>
+
+        <body name="node_3" pos="0.5 0 0.866">
+        <joint name="node_3_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+        <joint name="node_3_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+        <geom/>
+        <site name="node_3_site"/>
+        </body>
+
+        <!-- Triangle 2 -->
+        <body name="node_4" pos="2 0 0">
+        <joint name="node_4_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+        <joint name="node_4_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+        <geom/>
+        <site name="node_4_site"/>
+        </body>
+
+        <body name="node_5" pos="1.5 0 0.866">
+        <joint name="node_5_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+        <joint name="node_5_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+        <geom/>
+        <site name="node_5_site"/>
+        </body>
+
+        <body name="node_6" pos="1 0 1.732">
+        <joint name="node_6_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+        <joint name="node_6_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+        <geom/>
+        <site name="node_6_site"/>
+        </body>
+    </body>
+    </worldbody>
+
+    <tendon>
+    <!-- Spatial tendons acting as edges of the triangle -->
+    <spatial name="edge_12" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.2 3">
+      <site site="node_1_site"/>
+      <site site="node_2_site"/>
+    </spatial>
+    <spatial name="edge_23" width="0.05" rgba="0.0 0.1804 0.3647 1" >
+      <site site="node_2_site"/>
+      <site site="node_3_site"/>
+    </spatial>
+
+    <spatial name="edge_31" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.2 3">
+      <site site="node_3_site"/>
+      <site site="node_1_site"/>
+    </spatial>
+
+    <spatial name="edge_45" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.2 3">
+      <site site="node_4_site"/>
+      <site site="node_5_site"/>
+    </spatial>
+    <spatial name="edge_56" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.2 3">
+      <site site="node_5_site"/>
+      <site site="node_6_site"/>
+    </spatial>
+
+    <spatial name="edge_63" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.2 3">
+      <site site="node_6_site"/>
+      <site site="node_3_site"/>
+    </spatial>
+
+    <spatial name="edge_42" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.2 3">
+      <site site="node_4_site"/>
+      <site site="node_2_site"/>
+    </spatial>
+    <spatial name="edge_52" width="0.05" rgba="0.0 0.1804 0.3647 1">
+      <site site="node_5_site"/>
+      <site site="node_2_site"/>
+    </spatial>
+
+    <spatial name="edge_53" width="0.05" rgba="0.0 0.1804 0.3647 1">
+      <site site="node_5_site"/>
+      <site site="node_3_site"/>
+    </spatial>
+
+
+    
+    <!-- A combined spatial tendon tracking the distance of edge 12, and 23 -->
+    <spatial name="213_length" width="0.05" rgba="0.0 0.1804 0.3647 1">
+      <site site="node_2_site"/>
+      <site site="node_1_site"/>
+      <site site="node_3_site"/>
+    </spatial>
+
+    <spatial name="245_length" width="0.05" rgba="0.0 0.1804 0.3647 1">
+      <site site="node_2_site"/>
+      <site site="node_4_site"/>
+      <site site="node_5_site"/>
+    </spatial>
+
+    <spatial name="563_length" width="0.05" rgba="0.0 0.1804 0.3647 1">
+      <site site="node_5_site"/>
+      <site site="node_6_site"/>
+      <site site="node_3_site"/>
+    </spatial>
+    </tendon>
+    
+    <actuator>
+    <position name="Edge_12" tendon="edge_12" kp="750" inheritrange="1.0" dampratio="1.0"/>
+    <position name="Edge_31" tendon="edge_31" kp="750" inheritrange="1.0" dampratio="1.0"/>
+    <position name="Edge_45" tendon="edge_45" kp="750" inheritrange="1.0" dampratio="1.0"/>
+    <position name="Edge_42" tendon="edge_42" kp="750" inheritrange="1.0" dampratio="1.0"/>
+    <position name="Edge_56" tendon="edge_56" kp="750" inheritrange="1.0" dampratio="1.0"/>
+    <position name="Edge_63" tendon="edge_63" kp="750" inheritrange="1.0" dampratio="1.0"/>
+
+    </actuator>
+
+    
+    <equality>
+    <tendon name="213_length" tendon1="edge_23" tendon2="213_length" polycoef="0 -1 0 0 0" solref="0.02 1" solimp="0.9 0.95 0.001"/>
+    <tendon name="245_length" tendon1="edge_52" tendon2="245_length" polycoef="0 -1 0 0 0" solref="0.02 1" solimp="0.9 0.95 0.001"/>
+    <tendon name="563_length" tendon1="edge_53" tendon2="563_length" polycoef="0 -1 0 0 0" solref="0.02 1" solimp="0.9 0.95 0.001"/>
+    </equality>
+</mujoco>

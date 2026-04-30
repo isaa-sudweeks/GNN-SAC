@@ -1,0 +1,10 @@
+torch
+tensordict
+numpy
+gymnasium[mujoco]
+mujoco
+hydra-core
+omegaconf
+termcolor
+optuna
+wandb

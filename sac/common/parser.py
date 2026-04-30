@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import hydra
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 
 
 def cfg_to_dataclass(cfg, frozen=False):
@@ -12,7 +12,7 @@ def cfg_to_dataclass(cfg, frozen=False):
 	Converts an OmegaConf config to a dataclass object.
 	This prevents graph breaks when used with torch.compile.
 	"""
-	cfg_dict = OmegaConf.to_container(cfg)
+	cfg_dict = OmegaConf.to_container(cfg, resolve=True)
 	fields = []
 	for key, value in cfg_dict.items():
 		fields.append((key, Any, dataclasses.field(default_factory=lambda value_=value: value_)))
@@ -55,15 +55,16 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 			pass
 
 	# Convenience
-	if cfg.get("work_dir", None) not in {None, "???"}:
-		cfg.work_dir = Path(cfg.work_dir)
-	else:
-		try:
-			from hydra.core.hydra_config import HydraConfig
-			cfg.work_dir = Path(HydraConfig.get().runtime.output_dir)
-		except Exception:
-			cfg.work_dir = Path(hydra.utils.get_original_cwd()) / 'logs' / cfg.task / str(cfg.seed) / cfg.exp_name
-	cfg.task_title = cfg.task.replace("-", " ").title()
+	with open_dict(cfg):
+		if cfg.get("work_dir", None) not in {None, "???"}:
+			cfg.work_dir = Path(cfg.work_dir)
+		else:
+			try:
+				from hydra.core.hydra_config import HydraConfig
+				cfg.work_dir = Path(HydraConfig.get().runtime.output_dir)
+			except Exception:
+				cfg.work_dir = Path(hydra.utils.get_original_cwd()) / 'logs' / cfg.task / str(cfg.seed) / cfg.exp_name
+		cfg.task_title = cfg.task.replace("-", " ").title()
 
 
 

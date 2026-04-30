@@ -1,0 +1,81 @@
+<mujoco model="triangle">
+    <!-- Set Simulator options -->
+    <compiler inertiafromgeom="true"/>
+    <option timestep="0.01" gravity="0 0 -9.81"/>
+    
+    <!-- Define default geometry properties -->
+    <default>
+    <geom type="sphere" size="0.1"/>
+    </default>
+    
+    <worldbody>
+    <!-- Lighting and ground plane -->
+    <light name="key" pos="0 0 2" dir="0 0 -1"/>
+    <geom type="plane" name="plane1" size="2 2 0.1" rgba="0.9 0.9 0.9 1" priority="1"/>
+
+    <!-- First node at the origin (offset by 0.1 in Z) -->
+    <body name="node_1" pos="0 0 0.1">
+      <!-- 3D sliding joints to allow movement in X, Y, Z -->
+      <joint name="node_1_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+      <joint name="node_1_y" type="slide" pos="0 0 0" axis="0 1 0"/>
+      <joint name="node_1_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+      <geom/>
+      <site name="node_1_site"/>
+    </body>
+    
+    <!-- Second node along the X-axis -->
+    <body name="node_2" pos="1 0 0.1">
+      <joint name="node_2_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+      <joint name="node_2_y" type="slide" pos="0 0 0" axis="0 1 0"/>
+      <joint name="node_2_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+      <geom/>
+      <site name="node_2_site"/>
+    </body>
+    
+    <!-- Third node completing the triangle structure -->
+    <body name="node_3" pos="0.5 0.866 0.1">
+      <joint name="node_3_x" type="slide" pos="0 0 0" axis="1 0 0"/>
+      <joint name="node_3_y" type="slide" pos="0 0 0" axis="0 1 0"/>
+      <joint name="node_3_z" type="slide" pos="0 0 0" axis="0 0 1"/>
+      <geom/>
+      <site name="node_3_site"/>  
+    </body>
+    
+ </worldbody>
+ 
+    <tendon>
+    <!-- Spatial tendons acting as edges of the triangle -->
+    <spatial name="tendon_1" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.5 2">
+      <site site="node_1_site"/>
+      <site site="node_2_site"/>
+    </spatial>
+    <spatial name="tendon_2" width="0.05" rgba="0.0 0.1804 0.3647 1" range="0.5 2">
+      <site site="node_2_site"/>
+      <site site="node_3_site"/>
+    </spatial>
+    <!-- Unconstrained spatial tendon for the third edge -->
+    <spatial name="tendon_3" width="0.05" rgba="0.0 0.1804 0.3647 1">
+      <site site="node_3_site"/>
+      <site site="node_1_site"/>
+    </spatial>
+    
+    <!-- A combined spatial tendon tracking the distance of edge 12, and 23 -->
+    <spatial name="active_tendons" width="0.05" rgba="0.0 0.1804 0.3647 1">
+      <site site="node_1_site"/>
+      <site site="node_2_site"/>
+      <site site="node_3_site"/>
+    </spatial>
+    </tendon>
+    
+    <actuator>
+    <!-- Actuators to control the length of the first two tendons -->
+    <position name="Tendon_1" tendon="tendon_1" kp="750" inheritrange="1.0" dampratio="1.0"/>
+    <position name="Tendon_2" tendon="tendon_2" kp="750" inheritrange="1.0" dampratio="1.0"/>
+    </actuator>
+
+    
+    <equality>
+    <!-- Constraint maintaining relationship between tendon_3 and active_tendons -->
+    <tendon name="active_tendons" tendon1="tendon_3" tendon2="active_tendons" polycoef="0 -1 0 0 0" solref="0.02 1" solimp="0.9 0.95 0.001"/>
+    </equality>
+    </mujoco>
