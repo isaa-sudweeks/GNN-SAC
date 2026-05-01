@@ -5,6 +5,8 @@ import torch
 from tensordict.tensordict import TensorDict 
 from trainer.base import Trainer 
 
+REWARD_INFO_EXCLUDE_KEYS = {"success", "terminated", "truncated"}
+
 
 class OnlineTrainer(Trainer):
     """
@@ -28,6 +30,31 @@ class OnlineTrainer(Trainer):
             elapsed_time= elapsed_time,
             steps_per_sec= self._step / elapsed_time if elapsed_time > 0 else 0,
         )
+
+    def _extract_reward_components(self, info):
+        """
+        Return numeric reward component values from an env info dict.
+        """
+        components = {}
+        for key, value in info.items():
+            if key in REWARD_INFO_EXCLUDE_KEYS:
+                continue
+            if isinstance(value, torch.Tensor):
+                if value.numel() != 1:
+                    continue
+                value = value.detach().cpu().item()
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(value):
+                components[key] = value
+        return components
+
+    def _accumulate_reward_components(self, info):
+        for key, value in self._extract_reward_components(info).items():
+            current_value = self._episode_reward_components.get(key, 0.0)
+            self._episode_reward_components[key] = current_value + value
     
     def eval(self):
         """
@@ -112,10 +139,19 @@ class OnlineTrainer(Trainer):
                     )
                     train_metrics.update(self.common_metrics())
                     self.logger.log(train_metrics, 'train')
+                    if self._episode_reward_components:
+                        reward_metrics = dict(
+                            step=self._step,
+                            episode=self._ep_idx,
+                            episode_length=len(self._tds) - 1,
+                        )
+                        reward_metrics.update(self._episode_reward_components)
+                        self.logger.log(reward_metrics, 'training_rewards')
                     self._ep_idx = self.buffer.add(torch.cat(self._tds))
 
                 obs = self.env.reset()
                 self._tds = [self.to_td(obs)]
+                self._episode_reward_components = {}
             
             # Collect experience 
             if self._step > self.cfg.seed_steps:
@@ -123,6 +159,7 @@ class OnlineTrainer(Trainer):
             else:
                 action = self.env.rand_act()
             obs, reward, done, info = self.env.step(action)
+            self._accumulate_reward_components(info)
             terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
             self._tds.append(self.to_td(obs, action, reward, terminated))
 

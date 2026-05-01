@@ -48,6 +48,7 @@ CONSOLE_FORMAT = [
 CAT_TO_COLOR = {
     "train": "blue",
     "eval": "green",
+    "training_rewards": "magenta",
 }
 
 

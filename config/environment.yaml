@@ -9,7 +9,7 @@ xml_path: env/truss/assets/Baseline/octahedron_velocity_integrated_ctr.xml # MuJ
 # Simulation timing
 max_steps: 5_000 # Maximum simulator steps before the Timeout wrapper truncates an episode.
 episode_length: ${max_steps} # Nominal episode length used before make_env overwrites it from the wrapper.
-nsubsteps: 10 # Number of MuJoCo integration steps per environment step.
+nsubsteps: 100 # Number of MuJoCo integration steps per environment step.
 action_repeat: 1 # Number of repeated environment actions; kept for trainer compatibility.
 
 # Truss velocity-control action settings
@@ -18,12 +18,12 @@ action_low: -1.0 # Lower bound of the normalized policy action space.
 action_high: 1.0 # Upper bound of the normalized policy action space.
 
 # Reward and termination
-forward_weight: 5.0 # Reward multiplier for commanded center-of-mass velocity.
-energy_weight: 0.005 # Penalty multiplier on squared actuator command magnitude.
+forward_weight: 19.65175423 # Reward multiplier for commanded center-of-mass velocity.
+energy_weight: 0.1 # Penalty multiplier on squared actuator command magnitude.
 alive_bonus: 0.1 # Reward added each step while the structure remains valid.
-rigidity_weight: 0.5 # Reward multiplier for the normalized rigidity/collapse eigenvalue.
-slip_weight: 0.1 # Penalty multiplier for horizontal velocity at low-contact nodes.
-slip_height: 0.2 # Height threshold used to decide which nodes count as ground contacts.
+rigidity_weight: 0.1 # Reward multiplier for the normalized rigidity/collapse eigenvalue.
+slip_weight: 0.1215063801500649 # Penalty multiplier for horizontal velocity at low-contact nodes.
+slip_height: 0.1879452990963082 # Height threshold used to decide which nodes count as ground contacts.
 critical_eig_threshold: 0.03 # Terminate when normalized rigidity falls below this value.
 
 # Flat observation/action dimensions. make_env overwrites action_dim from the Gym space.
