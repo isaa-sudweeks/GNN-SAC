@@ -7,6 +7,7 @@ import env.truss.velocity_command_env
 import env.truss.velocity_command_env_left
 import env.truss.velocity_command_env_up
 import env.truss.velocity_command_env_down
+import env.mujoco_gen.octehedron_graph_env_right
 
 # How to add my own custom task
 # Step 1: Add the class task definition to the tasks folder 
@@ -28,6 +29,7 @@ MUJOCO_TASKS = {
     'truss-velocity-command-left': 'MujocoVelocityCommandEnvLeft-v0',
     'truss-velocity-command-up': 'MujocoVelocityCommandEnvUp-v0',
     'truss-velocity-command-down': 'MujocoVelocityCommandEnvDown-v0',
+    'octehedron-graph-right': 'MujocoOctahedronGraphEnvRight-v0',
     
 }
 
