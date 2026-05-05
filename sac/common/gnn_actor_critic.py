@@ -70,7 +70,10 @@ class GNNActorCritic(nn.Module):
         """
         mean, log_std = self._pi(obs.x, obs.edge_index).chunk(2, dim=-1) #TODO: I am not really sure if we need this chunk operation.
         log_std = math.log_std(log_std, self.log_std_min, self.log_std_dif)
-
+        
+        eps = torch.randn_like(mean)
+        log_prob = math.gaussian_logprob(eps, log_std)
+        
         action = mean + eps * log_std.exp()
         mean, action, log_prob = math.squash(mean, action, log_prob)
         entropy = -log_prob
