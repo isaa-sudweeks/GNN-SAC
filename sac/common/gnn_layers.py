@@ -1,4 +1,5 @@
 from copy import deepcopy 
+from typing import List
 
 import torch 
 import torch.nn as nn 
@@ -39,9 +40,11 @@ class Q_GNN(MessagePassing):
         self.gamma = mlp(in_channels + out_channels, hidden_channels, out_channels, dropout=dropout)
         self.head = mlp(out_channels, head_hidden_dims,1)
 
-    def forward(self, x, edge_index):
+    def forward(self, x, edge_index, batch=None):
         x = self.propagate(edge_index, x=x)
-        graph_embedding = global_mean_pool(x)
+        if batch is None:
+            batch = x.new_zeros(x.size(0), dtype=torch.long)
+        graph_embedding = global_mean_pool(x, batch)
         out = self.head(graph_embedding).squeeze(-1)
         return out
 

@@ -1,5 +1,6 @@
 import torch 
 import torch.nn.functional as F 
+from torch_geometric.data import Batch
 
 from common.gnn_actor_critic import GNNActorCritic 
 
@@ -65,11 +66,11 @@ class GNNSAC(torch.nn.Module):
         """
         Right now this assumes that obs is coming in as a torch geometric Data object
         """
-        obs = obs.to(self.device, non_blocking=True).unsqueeze(0)
+        obs = Batch.from_data_list([obs]).to(self.device, non_blocking=True)
         action, info = self.model.pi(obs)
         if eval_mode:
             action = info["mean"]
-        return self._safe_action(action[0]).cpu()
+        return self._safe_action(action).cpu()
 
     @torch.no_grad()
     def _td_target(self, next_obs, reward, terminated):

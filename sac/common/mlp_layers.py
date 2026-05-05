@@ -14,8 +14,8 @@ class Ensemble(nn.Module):
     def __len__(self):
         return len(self.modules_list)
 
-    def forward(self, x):
-        return torch.stack([module(x) for module in self.modules_list], dim=0)
+    def forward(self, *args, **kwargs):
+        return torch.stack([module(*args, **kwargs) for module in self.modules_list], dim=0)
 
     def copy(self):
         return deepcopy(self)

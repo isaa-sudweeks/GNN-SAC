@@ -2,6 +2,7 @@ from copy import deepcopy
 
 import torch 
 import torch.nn as nn 
+from torch_geometric.nn import global_add_pool
 
 from common import math 
 from common import gnn_layers
@@ -76,6 +77,10 @@ class GNNActorCritic(nn.Module):
         
         action = mean + eps * log_std.exp()
         mean, action, log_prob = math.squash(mean, action, log_prob)
+        batch = getattr(obs, "batch", None)
+        if batch is None:
+            batch = log_prob.new_zeros(log_prob.size(0), dtype=torch.long)
+        log_prob = global_add_pool(log_prob, batch)
         entropy = -log_prob
         return action, {
             "mean": mean,
@@ -96,13 +101,11 @@ class GNNActorCritic(nn.Module):
         """
         assert return_type in {"min", "avg", "all"}
         qnet = self._target_Qs if target else self._Qs
-        q_values = qnet(torch.cat([obs.x, action], dim=-1), obs.edge_index)
+        q_values = qnet(torch.cat([obs.x, action], dim=-1), obs.edge_index, getattr(obs, "batch", None))
 
         if return_type == "all":
             return q_values
         if return_type == "min":
             return q_values.min(0).values
         return q_values.mean(0)
-
-
 

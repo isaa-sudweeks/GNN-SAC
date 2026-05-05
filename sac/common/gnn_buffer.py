@@ -34,10 +34,16 @@ class GNNBuffer:
         return self._size
 
     def add(self, td):
-        obs_seq = self._graph_sequence(td["obs"])
-        actions = self._transition_sequence(td["action"])[1:]
-        rewards = self._transition_sequence(td["reward"])[1:]
-        terminated = self._transition_sequence(td["terminated"])[1:]
+        if isinstance(td, list):
+            obs_seq = [step["obs"] for step in td]
+            actions = [step["action"].squeeze(0) for step in td][1:]
+            rewards = [step["reward"].squeeze(0) for step in td][1:]
+            terminated = [step["terminated"].squeeze(0) for step in td][1:]
+        else:
+            obs_seq = self._graph_sequence(td["obs"])
+            actions = self._transition_sequence(td["action"])[1:]
+            rewards = self._transition_sequence(td["reward"])[1:]
+            terminated = self._transition_sequence(td["terminated"])[1:]
 
         obs = obs_seq[:-1]
         next_obs = obs_seq[1:]

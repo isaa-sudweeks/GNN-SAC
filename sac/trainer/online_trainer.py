@@ -5,6 +5,11 @@ import torch
 from tensordict.tensordict import TensorDict 
 from trainer.base import Trainer 
 
+try:
+    from torch_geometric.data import Data
+except ImportError:
+    Data = ()
+
 REWARD_INFO_EXCLUDE_KEYS = {"success", "terminated", "truncated"}
 
 
@@ -89,7 +94,10 @@ class OnlineTrainer(Trainer):
         """
         Creates a TensorDict for a new episode.
         """
-        if isinstance(obs, dict):
+        is_graph_obs = isinstance(obs, Data)
+        if is_graph_obs:
+            obs = obs.cpu()
+        elif isinstance(obs, dict):
             obs = TensorDict(obs, batch_size=(), device='cpu').unsqueeze(0)
         else:
             obs = obs.unsqueeze(0).cpu()
@@ -99,15 +107,16 @@ class OnlineTrainer(Trainer):
             reward = torch.tensor(float('nan'))
         if terminated is None:
             terminated = torch.tensor(float('nan'))
-        td = TensorDict(
-            {
-                "obs": obs,
-                "action": action.unsqueeze(0),
-                "reward": reward.unsqueeze(0),
-                "terminated": terminated.unsqueeze(0),
-            },
-            batch_size=(1,),
-        )
+        fields = {
+            "obs": obs,
+            "action": action.unsqueeze(0),
+            "reward": reward.unsqueeze(0),
+            "terminated": terminated.unsqueeze(0),
+        }
+        if is_graph_obs:
+            td = fields
+        else:
+            td = TensorDict(fields, batch_size=(1,))
         return td
 
     def train(self):
@@ -147,7 +156,8 @@ class OnlineTrainer(Trainer):
                         )
                         reward_metrics.update(self._episode_reward_components)
                         self.logger.log(reward_metrics, 'training_rewards')
-                    self._ep_idx = self.buffer.add(torch.cat(self._tds))
+                    episode_td = self._tds if isinstance(self._tds[0]["obs"], Data) else torch.cat(self._tds)
+                    self._ep_idx = self.buffer.add(episode_td)
 
                 obs = self.env.reset()
                 self._tds = [self.to_td(obs)]
