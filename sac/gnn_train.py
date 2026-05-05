@@ -39,14 +39,14 @@ from common.parser import parse_cfg
 from common.seed import set_seed
 from common.gnn_buffer import GNNBuffer
 from env import make_env # TODO: I need to make this the procedurally generated environment.
-from gnn_sac import GNN_SAC
+from gnn_sac import GNNSAC
 from trainer.online_trainer import OnlineTrainer
 from common.logger import Logger
 
 torch.backends.cudnn.benchmark = True 
 torch.set_float32_matmul_precision('high')
 
-def run_training(cfg, trail=None):
+def run_training(cfg, trial=None):
     """
     Execute one training run and return the best objective value seen.
     """
@@ -62,9 +62,9 @@ def run_training(cfg, trail=None):
     trainer = OnlineTrainer(
         cfg = cfg,
         env = env, # I need to make this 
-        agent=SAC(cfg),
+        agent=GNNSAC(cfg),
         logger=Logger(cfg),
-        buffer=Buffer(cfg),
+        buffer=GNNBuffer(cfg),
         trial=trial,
     )
 
