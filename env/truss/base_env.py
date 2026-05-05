@@ -55,7 +55,7 @@ class MujocoTrussEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.mj_model.reset()
+        self.mj_model.reset(self.np_random)
         self.steps = 0
         return self._get_obs(), {}
 
@@ -199,12 +199,12 @@ class MujocoTrussEnv(gym.Env):
         
         total_reward = forward_weight * foward_vel + alive_bonus - energy_weight * energy_penalty + rigidity_weight * critical_eig - slip_weight * slip_penalty
         reward_dict = {
-            "forward": forward_weight ,
+            "forward": forward_weight * foward_vel,
             "alive": alive_bonus,
-            "energy": -energy_weight,
-            "rigidity": rigidity_weight,
-            "slip": -slip_weight,
-            "total_raw": total_reward + alive_bonus - energy_weight - slip_weight + rigidity_weight 
+            "energy": -energy_weight * energy_penalty,
+            "rigidity": rigidity_weight * critical_eig,
+            "slip": -slip_weight * slip_penalty,
+            "total_raw": total_reward,
         }
 
         return total_reward, reward_dict, terminate

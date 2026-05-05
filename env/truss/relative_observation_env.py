@@ -103,7 +103,7 @@ class MujocoRelativeObsEnv(MujocoTrussEnv):
             "energy": -energy_weight * energy_penalty,
             "rigidity": rigidity_weight * critical_eig,
             "slip": -slip_weight * slip_penalty,
-            "total_raw": total_reward + alive_bonus - energy_weight - slip_weight + rigidity_weight 
+            "total_raw": total_reward,
         }
 
         return total_reward, reward_dict, terminate

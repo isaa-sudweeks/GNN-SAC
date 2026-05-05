@@ -27,7 +27,7 @@ slip_height: 0.1879452990963082 # Height threshold used to decide which nodes co
 critical_eig_threshold: 0.03 # Terminate when normalized rigidity falls below this value.
 
 # Flat observation/action dimensions. make_env overwrites action_dim from the Gym space.
-obs_dim: 36 # Flat observation size placeholder (overwritten at runtime).
+obs_dim: 44 # Flat default octahedron observation size (overwritten at runtime).
 action_dim: 8 # Number of normalized tendon actuator commands.
 
 # Evaluation and rendering
@@ -38,7 +38,7 @@ terminate_on_success: false # Whether future success-aware wrappers should end e
 # Topology metadata for graph-based robot experiments.
 topology_id: octahedron # Stable identifier for the default robot topology.
 use_graph_observations: false # Whether observations should be emitted as graph data instead of flat tensors.
-node_feature_dim: 0 # Per-node feature width for future graph observations.
+node_feature_dim: 6 # Per-node graph feature width: relative xyz position + xyz velocity.
 edge_feature_dim: 0 # Per-edge feature width for future graph observations.
 num_nodes: 6 # Number of node bodies in the default octahedron XML.
 num_edges: 12 # Number of structural/actuated tendon edges in the default octahedron XML.

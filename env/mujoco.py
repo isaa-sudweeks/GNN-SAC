@@ -7,7 +7,6 @@ import env.truss.velocity_command_env
 import env.truss.velocity_command_env_left
 import env.truss.velocity_command_env_up
 import env.truss.velocity_command_env_down
-import env.mujoco_gen.octehedron_graph_env_right
 
 # How to add my own custom task
 # Step 1: Add the class task definition to the tasks folder 
@@ -29,6 +28,7 @@ MUJOCO_TASKS = {
     'truss-velocity-command-left': 'MujocoVelocityCommandEnvLeft-v0',
     'truss-velocity-command-up': 'MujocoVelocityCommandEnvUp-v0',
     'truss-velocity-command-down': 'MujocoVelocityCommandEnvDown-v0',
+    'octahedron-graph-right': 'MujocoOctahedronGraphEnvRight-v0',
     'octehedron-graph-right': 'MujocoOctahedronGraphEnvRight-v0',
     
 }
@@ -37,7 +37,14 @@ CUSTOM_MUJOCO_TASKS = {
     'truss-velocity-command-right',
     'truss-velocity-command-left',
     'truss-velocity-command-up',
-    'truss-velocity-command-down'
+    'truss-velocity-command-down',
+    'octahedron-graph-right',
+    'octehedron-graph-right',
+}
+
+GRAPH_MUJOCO_TASKS = {
+    'octahedron-graph-right',
+    'octehedron-graph-right',
 }
 
 class MuJoCoWrapper(gym.Wrapper):
@@ -79,6 +86,8 @@ def make_env(cfg):
     assert cfg.obs == 'state', 'MuJoCo envs only support state observations' 
     render_mode = 'rgb_array' if cfg.save_video else None
     env_kwargs = {'render_mode': render_mode}
+    if cfg.task in GRAPH_MUJOCO_TASKS:
+        import env.mujoco_gen.octehedron_graph_env_right
     if cfg.task in CUSTOM_MUJOCO_TASKS:
         env_kwargs['config'] = cfg
     if cfg. task == 'lunarlander-continuous':
@@ -93,6 +102,8 @@ def make_env(cfg):
         'truss-velocity-command-left': cfg.max_steps,
         'truss-velocity-command-up': cfg.max_steps,
         'truss-velocity-command-down': cfg.max_steps,
+        'octahedron-graph-right': cfg.max_steps,
+        'octehedron-graph-right': cfg.max_steps,
     }.get(cfg.task, 1000))
     cfg.discount_max = 0.99 
     cfg.rho = 0.7 # Increase this for tasks that are episodic #TODO

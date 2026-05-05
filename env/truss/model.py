@@ -99,9 +99,11 @@ class MujocoModel:
                 self.structural_edges.append(node_pair)
 
     
-    def reset(self):
-        self.data.qpos[:] = self.init_qpos + np.random.uniform(-0.005, 0.005, size=self.model.nq)
-        self.data.qvel[:] = self.init_qvel + np.random.uniform(-0.005, 0.005, size=self.model.nv)
+    def reset(self, rng=None):
+        if rng is None:
+            rng = np.random.default_rng()
+        self.data.qpos[:] = self.init_qpos + rng.uniform(-0.005, 0.005, size=self.model.nq)
+        self.data.qvel[:] = self.init_qvel + rng.uniform(-0.005, 0.005, size=self.model.nv)
         self.data.ctrl[:] = self.ctrl_home.copy()
         if mujoco.mjtDyn.mjDYN_INTEGRATOR in self.model.actuator_dyntype:
             self.data.act[:] = self.act_home.copy()
@@ -199,8 +201,9 @@ class MujocoModel:
         linear_velocities = self.get_node_linear_velocity_matrix()
         return float(np.mean(linear_velocities[:, 1]))
 
-    def get_slip_penalty(self, height=0.2):
+    def get_slip_penalty(self, height=0.2, axis="x"):
         positions = self.get_node_position_matrix()
         linear_velocities = self.get_node_linear_velocity_matrix()
         contact_mask = positions[:, 2] < height
-        return float(np.sum(np.abs(linear_velocities[contact_mask, 0])))
+        axis_idx = "xyz".index(axis)
+        return float(np.sum(np.abs(linear_velocities[contact_mask, axis_idx])))
