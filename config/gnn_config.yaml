@@ -1,0 +1,53 @@
+defaults:
+  - algorithm
+  - environment
+  - _self_
+
+# Run identity
+project: gnn-sac
+exp_name: gnn-octahedron-node-sum
+seed: 1
+device: cpu
+work_dir: ???
+
+# Graph environment
+task: octahedron-graph-right
+env_name: ${task}
+use_graph_observations: true
+topology_id: octahedron-generated
+node_feature_dim: 6
+obs_dim: 6
+node_action_dim: 1 # Per-node stochastic action width used by the GNN actor/critic.
+action_dim: ${node_action_dim} # Backward-compatible alias for current GNN tensor shapes.
+num_policy_actions: 6 # Total sampled node actions for SAC entropy tuning.
+num_actuators: 8 # Total MuJoCo actuator controls after node-to-edge mapping.
+
+# GNN actor-critic architecture
+embedding_dim: 128
+Q_output_dim: 128
+head_hidden_dims:
+  - 256
+  - 256
+
+# Training schedule
+steps: 1_000_000
+seed_steps: 5_000
+pretrain_steps: 1_000
+eval_freq: 10_000
+eval_episodes: 10
+
+# Experiment behavior
+episodic: true
+multitask: false
+tasks:
+  - ${task}
+
+# Outputs and logging
+save_csv: true
+save_agent: true
+save_video: false
+enable_wandb: true
+wandb_project: ${project}
+wandb_entity: null
+wandb_name: ${exp_name}-${seed}
+wandb_silent: true

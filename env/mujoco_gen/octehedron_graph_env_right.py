@@ -1,10 +1,13 @@
 import numpy as np
-import torch
 from gymnasium import spaces
 from gymnasium.envs.registration import register
-from torch_geometric.data import Data
 
-from env.truss.relative_observation_env import MujocoRelativeObsEnv
+from mujoco_truss_gen import (
+    MujocoRelativeObsEnv,
+    TrussEnvConfig,
+    get_mujoco_spec,
+    get_octahedron_definition,
+)
 
 
 register(
@@ -15,16 +18,33 @@ register(
 
 class MujocoOctahedronGraphEnvRight(MujocoRelativeObsEnv):
     """
-    Octahedron truss environment that emits PyG graph observations.
+    Generated octahedron truss environment that emits graph dict observations.
 
-    Actions are intentionally still unresolved for node-level graph policies. The
-    flat actuator action path remains available for environment smoke tests.
+    The policy still acts on nodes. The environment maps node actions to actuator
+    commands by summing the two endpoint node actions for each actuated tendon.
     """
 
     def __init__(self, config, render_mode=None, rank=0):
-        super().__init__(config, render_mode=render_mode, rank=rank)
+        node_dict, triangle_dict = get_octahedron_definition()
+        model_source = get_mujoco_spec(node_dict, triangle_dict)
+        truss_config = TrussEnvConfig(
+            model_source=model_source,
+            max_steps=int(config.max_steps),
+            nsubsteps=int(config.nsubsteps),
+            speed=float(config.speed),
+            forward_weight=float(config.forward_weight),
+            energy_weight=float(config.energy_weight),
+            alive_bonus=float(config.alive_bonus),
+            rigidity_weight=float(config.rigidity_weight),
+            slip_weight=float(config.slip_weight),
+            critical_eig_threshold=float(config.critical_eig_threshold),
+            slip_height=float(config.slip_height),
+        )
+        super().__init__(truss_config, render_mode=render_mode, rank=rank)
         self.node_feature_dim = 2 * len(self.mj_model.active_axes)
         self.node_action_dim = 1
+        self._node_to_idx = {name: idx for idx, name in enumerate(self.mj_model.node_names)}
+        self._actuator_edges = self._build_actuator_edges()
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
@@ -82,15 +102,70 @@ class MujocoOctahedronGraphEnvRight(MujocoRelativeObsEnv):
         if edge_index.size == 0:
             edge_index = np.empty((2, 0), dtype=np.int64)
 
-        return Data(
-            x=torch.as_tensor(np.asarray(features, dtype=np.float32)),
-            edge_index=torch.as_tensor(edge_index, dtype=torch.long),
-        )
+        return {
+            "x": np.asarray(features, dtype=np.float32),
+            "edge_index": edge_index,
+        }
 
     def step(self, action):
         action = np.asarray(action, dtype=np.float32)
         if action.shape == (self.mj_model.model.nu,) or action.size == self.mj_model.model.nu:
-            return super().step(action.reshape(self.mj_model.model.nu))
-        raise NotImplementedError(
-            "Graph node actions must be translated to actuator controls before stepping this environment."
-        )
+            return self._step_actuator_action(action.reshape(self.mj_model.model.nu))
+        actuator_action = self._node_action_to_actuator_action(action)
+        return self._step_actuator_action(actuator_action)
+
+    def _step_actuator_action(self, actuator_action):
+        actuator_action = np.asarray(actuator_action, dtype=np.float32)
+        actuator_action = np.clip(actuator_action, -1.0, 1.0)
+        ctrl = self.mj_model.data.ctrl.copy() + actuator_action * self.config.speed
+        ctrl_low = self.mj_model.model.actuator_ctrlrange[:, 0]
+        ctrl_high = self.mj_model.model.actuator_ctrlrange[:, 1]
+        ctrl = np.clip(ctrl, ctrl_low, ctrl_high)
+        self._advance(ctrl)
+        reward, info, terminated = self._compute_reward(actuator_action)
+        truncated = self.steps >= self.max_steps
+        return self._get_obs(), reward, terminated, truncated, info
+
+    def _build_actuator_edges(self):
+        tendon_edges = {}
+        for tendon_id in range(self.mj_model.model.ntendon):
+            tendon_name = self.mj_model.model.tendon(tendon_id).name
+            node_pair = self._node_pair_from_tendon_name(tendon_name)
+            if node_pair is not None:
+                tendon_edges[tendon_id] = node_pair
+
+        actuator_edges = []
+        for actuator_id in range(self.mj_model.model.nu):
+            tendon_id = int(self.mj_model.model.actuator_trnid[actuator_id, 0])
+            actuator_edges.append(tendon_edges.get(tendon_id))
+        return actuator_edges
+
+    def _node_pair_from_tendon_name(self, tendon_name):
+        if not tendon_name.startswith("tendon_"):
+            return None
+        node_suffixes = tendon_name.removeprefix("tendon_").split("_node_")
+        if len(node_suffixes) != 2:
+            return None
+        node_a = node_suffixes[0] if node_suffixes[0].startswith("node_") else f"node_{node_suffixes[0]}"
+        node_b = f"node_{node_suffixes[1]}"
+        if node_a not in self._node_to_idx or node_b not in self._node_to_idx:
+            return None
+        return node_a, node_b
+
+    def _node_action_to_actuator_action(self, action):
+        node_actions = np.asarray(action, dtype=np.float32)
+        if node_actions.size != len(self.mj_model.node_names) * self.node_action_dim:
+            raise ValueError(
+                "Graph node action must have one scalar action per node; "
+                f"got shape {node_actions.shape} for {len(self.mj_model.node_names)} nodes."
+            )
+        node_actions = node_actions.reshape(len(self.mj_model.node_names), self.node_action_dim)
+
+        actuator_action = np.zeros(self.mj_model.model.nu, dtype=np.float32)
+        for actuator_id, node_pair in enumerate(self._actuator_edges):
+            if node_pair is None:
+                continue
+            node_a, node_b = node_pair
+            ia, ib = self._node_to_idx[node_a], self._node_to_idx[node_b]
+            actuator_action[actuator_id] = node_actions[ia, 0] + node_actions[ib, 0]
+        return np.clip(actuator_action, -1.0, 1.0).astype(np.float32, copy=False)

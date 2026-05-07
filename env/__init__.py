@@ -102,13 +102,16 @@ def make_env(cfg):
             details = '; '.join(errors)
             raise ValueError(f'Failed to make environment "{cfg.task}": {details}')
         episode_length = _max_episode_steps(env)
-        env = TensorWrapper(env)
         is_graph_env = bool(getattr(cfg, "use_graph_observations", False)) or "graph" in getattr(cfg, "task", "")
+        env = TensorWrapper(env, graph_observations=is_graph_env)
         if is_graph_env:
             cfg.obs_shape = {k: v.shape for k, v in env.observation_space.spaces.items()}
             cfg.obs_dim = int(getattr(env.unwrapped, "node_feature_dim", cfg.get("node_feature_dim", 0)))
             cfg.node_feature_dim = cfg.obs_dim
-            cfg.action_dim = int(getattr(env.unwrapped, "node_action_dim", env.action_space.shape[-1]))
+            cfg.node_action_dim = int(getattr(env.unwrapped, "node_action_dim", env.action_space.shape[-1]))
+            cfg.action_dim = cfg.node_action_dim
+            cfg.num_policy_actions = int(np.prod(env.action_space.shape))
+            cfg.num_actuators = int(env.unwrapped.mj_model.model.nu)
             cfg.episode_length = episode_length
             cfg.seed_steps = max(1000, 5*cfg.episode_length)
             return env

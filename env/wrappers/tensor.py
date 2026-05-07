@@ -3,6 +3,7 @@ from collections import defaultdict
 import gymnasium as gym
 import numpy as np
 import torch
+from torch_geometric.data import Data
 
 
 class TensorWrapper(gym.Wrapper):
@@ -10,8 +11,9 @@ class TensorWrapper(gym.Wrapper):
 	Wrapper for converting numpy arrays to torch tensors.
 	"""
 
-	def __init__(self, env):
+	def __init__(self, env, graph_observations=False):
 		super().__init__(env)
+		self.graph_observations = graph_observations
 	
 	def rand_act(self):
 		return torch.from_numpy(self.action_space.sample().astype(np.float32))
@@ -27,6 +29,11 @@ class TensorWrapper(gym.Wrapper):
 		if isinstance(obs, dict):
 			for k in obs.keys():
 				obs[k] = self._try_f32_tensor(obs[k])
+			if self.graph_observations:
+				return Data(
+					x=obs["x"].float(),
+					edge_index=obs["edge_index"].long(),
+				)
 		else:
 			obs = self._try_f32_tensor(obs)
 		return obs

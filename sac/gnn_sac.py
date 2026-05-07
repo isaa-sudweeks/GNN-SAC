@@ -23,7 +23,11 @@ class GNNSAC(torch.nn.Module):
         self.log_alpha = torch.nn.Parameter(torch.log(torch.tensor(init_alpha, device=self.device)))
         self.alpha_optim = torch.optim.Adam([self.log_alpha], lr=self.cfg.lr, capturable=capturable)
         target_entropy = getattr(self.cfg, "target_entropy", "auto")
-        self.target_entropy = -float(cfg.action_dim) if target_entropy == "auto" else float(target_entropy)
+        if target_entropy == "auto":
+            entropy_dim = getattr(cfg, "num_policy_actions", cfg.action_dim)
+            self.target_entropy = -float(entropy_dim)
+        else:
+            self.target_entropy = float(target_entropy)
 
         self.model.eval()
         self.discount = float(getattr(self.cfg, "discount", self._get_discount(self.cfg.episode_length)))
@@ -77,6 +81,8 @@ class GNNSAC(torch.nn.Module):
         """
         Again this assumes that next_obs is coming in as a torch geometric Data object.
         """
+        reward = reward.view(-1)
+        terminated = terminated.view(-1)
         next_action, next_info = self.model.pi(next_obs)
         target_q = self.model.Q(next_obs, next_action, return_type="min", target=True)
         target_v = target_q - self.alpha.detach() * next_info["log_prob"]

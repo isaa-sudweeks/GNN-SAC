@@ -1,6 +1,7 @@
 #Hydra
 */multirun/*
 */outputs/*
+outputs/*
 
 __pycache__/
 *.py[cod]

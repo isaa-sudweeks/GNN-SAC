@@ -12,6 +12,10 @@ from common.mlp_layers import NormedLinear, mlp
 class GNN(MessagePassing):
     def __init__(self, in_channels: int, out_channels: int, hidden_channels: List[int], dropout: float = 0.0):
         super().__init__(aggr = "add") # TODO: make this a config parameter?
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.hidden_channels = hidden_channels
+        self.dropout = dropout
         self.phi = mlp(in_channels*2, hidden_channels, out_channels, dropout=dropout)
         self.gamma = mlp(in_channels + out_channels, hidden_channels, out_channels, dropout=dropout)
 
@@ -36,6 +40,10 @@ class GNN(MessagePassing):
 class Q_GNN(MessagePassing):
     def __init__(self, in_channels: int, out_channels: int, hidden_channels: List[int], head_hidden_dims: List[int], dropout: float = 0.0):
         super().__init__(aggr = "add") # TODO: make this a config parameter?
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.hidden_channels = hidden_channels
+        self.dropout = dropout
         self.phi = mlp(in_channels*2, hidden_channels, out_channels, dropout=dropout)
         self.gamma = mlp(in_channels + out_channels, hidden_channels, out_channels, dropout=dropout)
         self.head = mlp(out_channels, head_hidden_dims,1)

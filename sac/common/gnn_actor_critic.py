@@ -23,7 +23,12 @@ class GNNActorCritic(nn.Module):
         hidden = 2 * [cfg.mlp_dim] # I don't really know what this is about 
 
         self._pi = gnn_layers.GNN(
-            cfg.obs_dim, 2 * cfg.action_dim, hidden, 
+            cfg.obs_dim, cfg.embedding_dim, hidden,
+            dropout=cfg.dropout
+        )
+
+        self._action_head = layers.mlp(
+            cfg.embedding_dim, hidden, 2*cfg.action_dim,
             dropout=cfg.dropout
         )
 
@@ -69,7 +74,7 @@ class GNNActorCritic(nn.Module):
         Args:
             obs:Observation data of a graph in the torch geometric Data format
         """
-        mean, log_std = self._pi(obs.x, obs.edge_index).chunk(2, dim=-1) #TODO: I am not really sure if we need this chunk operation.
+        mean, log_std = self._action_head(self._pi(obs.x, obs.edge_index)).chunk(2, dim=-1)
         log_std = math.log_std(log_std, self.log_std_min, self.log_std_dif)
         
         eps = torch.randn_like(mean)
@@ -80,7 +85,7 @@ class GNNActorCritic(nn.Module):
         batch = getattr(obs, "batch", None)
         if batch is None:
             batch = log_prob.new_zeros(log_prob.size(0), dtype=torch.long)
-        log_prob = global_add_pool(log_prob, batch)
+        log_prob = global_add_pool(log_prob, batch).squeeze(-1)
         entropy = -log_prob
         return action, {
             "mean": mean,
@@ -108,4 +113,3 @@ class GNNActorCritic(nn.Module):
         if return_type == "min":
             return q_values.min(0).values
         return q_values.mean(0)
-
