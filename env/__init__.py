@@ -1,11 +1,8 @@
-from copy import deepcopy 
 import warnings 
 
 import gymnasium as gym
 import numpy as np
 from env.wrappers.tensor import TensorWrapper
-
-# TODO: Add support for multitask envs 
 
 def _missing_dependencies_factory(name, exc):
     def missing_dependencies(cfg):
@@ -53,6 +50,19 @@ def _max_episode_steps(env):
         return spec.max_episode_steps
     raise AttributeError('Environment does not define max_episode_steps')
 
+def _obs_shapes(env, cfg):
+    try:
+        return {k: v.shape for k, v in env.observation_space.spaces.items()}
+    except AttributeError:
+        shape = getattr(env.observation_space, "shape", None)
+        if shape is None:
+            raise AttributeError(f"Unsupported observation space: {env.observation_space}")
+        return {cfg.get('obs', 'state'): shape}
+
+def _is_graph_env(cfg):
+    tasks = list(getattr(cfg, "tasks", [getattr(cfg, "task", "")]))
+    return bool(getattr(cfg, "use_graph_observations", False)) or any("graph" in task for task in tasks)
+
 def make_env(cfg):
     """
     Make an environment for TD-MPC2 experiments.
@@ -61,20 +71,19 @@ def make_env(cfg):
         gym.logger.set_level(40)
     else:
         gym.logger.min_level = 40
-    env = None 
-    if cfg.multitask:
+    env = None
+    num_envs = int(getattr(cfg, "num_envs", 1))
+    multitask = bool(getattr(cfg, "multitask", False))
+    if multitask and num_envs > 1:
+        raise ValueError("Use either multitask=true with cfg.tasks or num_envs>1 for repeated same-task envs, not both.")
+    if multitask or num_envs > 1:
         from env.wrappers.multitask import MultitaskWrapper
         env = MultitaskWrapper(cfg, [make_dm_control_env, make_maniskill_env, make_metaworld_env, make_myosuite_env, make_mujoco_env])
-        for i in range(len(env.envs)):
-            env.envs[i] = TensorWrapper(env.envs[i])
         cfg.obs_shapes = []
         cfg.action_dims = []
         cfg.episode_lengths = []
         for e in env.envs:
-            try:
-                cfg.obs_shapes.append({k: v.shape for k, v in e.observation_space.spaces.items()})
-            except:
-                cfg.obs_shapes.append({cfg.get('obs', 'state'): e.observation_space.shape})
+            cfg.obs_shapes.append(_obs_shapes(e, cfg))
             cfg.action_dims.append(int(e.action_space.shape[0]))
             cfg.episode_lengths.append(int(_max_episode_steps(e)))
         cfg.action_dim = int(max(cfg.action_dims))
@@ -89,6 +98,15 @@ def make_env(cfg):
                     cfg.obs_shape[k] = [max(a, b) for a, b in zip(cfg.obs_shape[k], v)]
         for k in cfg.obs_shape:
             cfg.obs_shape[k] = tuple(cfg.obs_shape[k])
+        is_graph_env = _is_graph_env(cfg)
+        env = TensorWrapper(env, graph_observations=is_graph_env)
+        if is_graph_env:
+            cfg.obs_dim = int(getattr(env.unwrapped, "node_feature_dim", cfg.get("node_feature_dim", 0)))
+            cfg.node_feature_dim = cfg.obs_dim
+            cfg.node_action_dim = int(getattr(env.unwrapped, "node_action_dim", env.action_space.shape[-1]))
+            cfg.action_dim = cfg.node_action_dim
+            cfg.num_policy_actions = int(np.prod(env.action_space.shape))
+            cfg.num_actuators = int(env.unwrapped.mj_model.model.nu)
         return env
     else:
         errors = []
@@ -102,7 +120,7 @@ def make_env(cfg):
             details = '; '.join(errors)
             raise ValueError(f'Failed to make environment "{cfg.task}": {details}')
         episode_length = _max_episode_steps(env)
-        is_graph_env = bool(getattr(cfg, "use_graph_observations", False)) or "graph" in getattr(cfg, "task", "")
+        is_graph_env = _is_graph_env(cfg)
         env = TensorWrapper(env, graph_observations=is_graph_env)
         if is_graph_env:
             cfg.obs_shape = {k: v.shape for k, v in env.observation_space.spaces.items()}

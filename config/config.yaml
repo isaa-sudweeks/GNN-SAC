@@ -20,6 +20,7 @@ eval_episodes: 10 # Number of episodes averaged for each evaluation pass.
 # Experiment behavior
 episodic: true # Whether true environment terminations should stop bootstrap targets.
 multitask: false # Whether to build a multitask wrapper over several environments.
+num_envs: 1 # Number of independent copies of the selected task to use in one run.
 tasks: # Task list used by multitask code paths and logging.
   - ${task}
 

@@ -18,6 +18,15 @@ class TensorWrapper(gym.Wrapper):
 	def rand_act(self):
 		return torch.from_numpy(self.action_space.sample().astype(np.float32))
 
+	def set_active_env(self, env_idx):
+		if not hasattr(self.env, "set_active_env"):
+			raise AttributeError("Wrapped environment does not support multiple active envs")
+		self.env.set_active_env(env_idx)
+
+	@property
+	def num_envs(self):
+		return int(getattr(self.env, "num_envs", 1))
+
 	def _try_f32_tensor(self, x):
 		if isinstance(x, np.ndarray):
 			x = torch.from_numpy(x)

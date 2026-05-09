@@ -23,6 +23,7 @@ class OnlineTrainer(Trainer):
         self._step = 0 
         self._ep_idx = 0 
         self._start_time = time() 
+        self._episode_reward_components = {}
 
     def common_metrics(self):
         """
@@ -123,6 +124,10 @@ class OnlineTrainer(Trainer):
         """
         Train the SAC agent.
         """
+        num_envs = int(getattr(self.env, "num_envs", getattr(self.cfg, "num_envs", 1)))
+        if num_envs > 1 and not bool(getattr(self.cfg, "multitask", False)):
+            return self._train_multi_env(num_envs)
+
         train_metrics, done, eval_next = {}, True, False 
         pretrain_steps = int(getattr(self.cfg, 'pretrain_steps', min(self.cfg.seed_steps, 1000)))
         while self._step <= self.cfg.steps:
@@ -186,6 +191,101 @@ class OnlineTrainer(Trainer):
                     train_metrics.update(_train_metrics)
 
             self._step += 1
+        self.logger.finish(self.agent)
+        return self._best_eval_metrics
+
+    def _train_multi_env(self, num_envs):
+        """
+        Train from multiple independent copies of the same task.
+        """
+        train_metrics, eval_next = {}, False
+        done = [True] * num_envs
+        infos = [None] * num_envs
+        observations = [None] * num_envs
+        episode_tds = [None] * num_envs
+        reward_components = [None] * num_envs
+        pretrain_steps = int(getattr(self.cfg, 'pretrain_steps', min(self.cfg.seed_steps, 1000)))
+
+        while self._step <= self.cfg.steps:
+            if self._step % self.cfg.eval_freq == 0:
+                eval_next = True
+
+            for env_idx in range(num_envs):
+                if self._step > self.cfg.steps:
+                    break
+
+                self.env.set_active_env(env_idx)
+
+                if done[env_idx]:
+                    if eval_next:
+                        eval_metrics = self.eval()
+                        eval_metrics.update(self.common_metrics())
+                        self.logger.log(eval_metrics, 'eval')
+                        self.report_eval_metrics(eval_metrics, self._step)
+                        eval_next = False
+                        self.env.set_active_env(env_idx)
+
+                    if episode_tds[env_idx] is not None and len(episode_tds[env_idx]) > 1:
+                        info = infos[env_idx]
+                        train_metrics.update(
+                            episode_reward=torch.stack([td["reward"].view(()) for td in episode_tds[env_idx][1:]]).sum(),
+                            episode_success=info["success"],
+                            episode_length=len(episode_tds[env_idx]) - 1,
+                            episode_terminated=info["terminated"],
+                            episode_truncated=info["truncated"],
+                            episode_env_idx=env_idx,
+                        )
+                        train_metrics.update(self.common_metrics())
+                        self.logger.log(train_metrics, 'train')
+                        if reward_components[env_idx]:
+                            reward_metrics = dict(
+                                step=self._step,
+                                episode=self._ep_idx,
+                                episode_length=len(episode_tds[env_idx]) - 1,
+                                episode_env_idx=env_idx,
+                            )
+                            reward_metrics.update(reward_components[env_idx])
+                            self.logger.log(reward_metrics, 'training_rewards')
+                        episode_td = (
+                            episode_tds[env_idx]
+                            if isinstance(episode_tds[env_idx][0]["obs"], Data)
+                            else torch.cat(episode_tds[env_idx])
+                        )
+                        self._ep_idx = self.buffer.add(episode_td)
+
+                    observations[env_idx] = self.env.reset(task_idx=env_idx)
+                    episode_tds[env_idx] = [self.to_td(observations[env_idx])]
+                    reward_components[env_idx] = {}
+                    done[env_idx] = False
+
+                if self._step > self.cfg.seed_steps:
+                    action = self.agent.act(observations[env_idx], t0=len(episode_tds[env_idx]) == 1)
+                else:
+                    action = self.env.rand_act()
+                observations[env_idx], reward, done[env_idx], infos[env_idx] = self.env.step(action)
+
+                previous_components = self._episode_reward_components
+                self._episode_reward_components = reward_components[env_idx]
+                self._accumulate_reward_components(infos[env_idx])
+                reward_components[env_idx] = self._episode_reward_components
+                self._episode_reward_components = previous_components
+
+                terminated = infos[env_idx]['terminated'] if self.cfg.episodic else torch.tensor(0.0)
+                episode_tds[env_idx].append(self.to_td(observations[env_idx], action, reward, terminated))
+
+                if self._step >= self.cfg.seed_steps and self.buffer.size >= self.cfg.batch_size:
+                    if self._step == self.cfg.seed_steps:
+                        num_updates = pretrain_steps
+                        print(f'Pretraining agent on seed data for {num_updates} updates...')
+                    else:
+                        num_updates = self.cfg.iterations
+                    if num_updates > 0:
+                        for _ in range(num_updates):
+                            _train_metrics = self.agent.update(self.buffer)
+                        train_metrics.update(_train_metrics)
+
+                self._step += 1
+
         self.logger.finish(self.agent)
         return self._best_eval_metrics
                     

@@ -17,6 +17,29 @@ from env import make_env
 from gnn_sac import GNNSAC
 
 
+def flat_test_cfg(**overrides):
+    cfg = OmegaConf.merge(
+        OmegaConf.load(ROOT / "config" / "algorithm.yaml"),
+        OmegaConf.load(ROOT / "config" / "environment.yaml"),
+        OmegaConf.create(
+            {
+                "save_video": False,
+                "multitask": False,
+                "device": "cpu",
+                "steps": 20,
+                "seed_steps": 1,
+                "batch_size": 2,
+                "enable_wandb": False,
+                "save_csv": False,
+                "save_agent": False,
+                "work_dir": str(ROOT / "logs" / "test-smoke"),
+            }
+        ),
+    )
+    cfg = OmegaConf.merge(cfg, OmegaConf.create(overrides))
+    return parse_cfg(cfg)
+
+
 def graph_test_cfg(**overrides):
     cfg = OmegaConf.merge(
         OmegaConf.load(ROOT / "config" / "algorithm.yaml"),
@@ -42,6 +65,29 @@ def graph_test_cfg(**overrides):
 
 
 class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
+    def test_repeated_truss_envs_reset_and_step(self):
+        cfg = flat_test_cfg(
+            num_envs=4,
+            max_steps=2,
+            episode_length=2,
+        )
+        env = make_env(cfg)
+        try:
+            self.assertEqual(len(env.env.envs), 4)
+            self.assertEqual(cfg.action_dim, 8)
+            for env_idx in range(cfg.num_envs):
+                obs = env.reset(task_idx=env_idx)
+                action = env.rand_act()
+                next_obs, reward, done, info = env.step(action)
+                self.assertEqual(obs.shape, next_obs.shape)
+                self.assertEqual(action.shape, (cfg.action_dim,))
+                self.assertEqual(info["task"], cfg.task)
+                self.assertEqual(info["env_idx"], env_idx)
+                self.assertNotIn("task_idx", info)
+                self.assertTrue(float(reward) == float(reward))
+        finally:
+            env.close()
+
     def test_graph_env_reset_and_node_action_step(self):
         cfg = graph_test_cfg()
         env = make_env(cfg)

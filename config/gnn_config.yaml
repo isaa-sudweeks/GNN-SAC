@@ -39,6 +39,7 @@ eval_episodes: 10
 # Experiment behavior
 episodic: true
 multitask: false
+num_envs: 10
 tasks:
   - ${task}
 
