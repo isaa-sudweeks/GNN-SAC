@@ -77,8 +77,12 @@ def make_env(cfg):
     if multitask and num_envs > 1:
         raise ValueError("Use either multitask=true with cfg.tasks or num_envs>1 for repeated same-task envs, not both.")
     if multitask or num_envs > 1:
-        from env.wrappers.multitask import MultitaskWrapper
-        env = MultitaskWrapper(cfg, [make_dm_control_env, make_maniskill_env, make_metaworld_env, make_myosuite_env, make_mujoco_env])
+        if multitask:
+            from env.wrappers.multitask import MultitaskWrapper
+            env = MultitaskWrapper(cfg, [make_dm_control_env, make_maniskill_env, make_metaworld_env, make_myosuite_env, make_mujoco_env])
+        else:
+            from env.wrappers.repeated import RepeatedEnvWrapper
+            env = RepeatedEnvWrapper(cfg, [make_dm_control_env, make_maniskill_env, make_metaworld_env, make_myosuite_env, make_mujoco_env])
         cfg.obs_shapes = []
         cfg.action_dims = []
         cfg.episode_lengths = []

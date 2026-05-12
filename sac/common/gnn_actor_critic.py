@@ -106,7 +106,7 @@ class GNNActorCritic(nn.Module):
         """
         assert return_type in {"min", "avg", "all"}
         qnet = self._target_Qs if target else self._Qs
-        q_values = qnet(torch.cat([obs.x, action], dim=-1), obs.edge_index, getattr(obs, "batch", None))
+        q_values = qnet(torch.cat([obs.x, action], dim=-1), obs.edge_index, getattr(obs, "batch", None)) # TODO: I am not sure if this works well or correctly because the dimensionality between the observation and actions seem off.
 
         if return_type == "all":
             return q_values

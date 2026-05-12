@@ -17,12 +17,12 @@ except ImportError:
 class MujocoTrussEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 20}
 
-    def __init__(self, xml_path, render_mode=None, rank=0):
+    def __init__(self, xml_path, render_mode=None, rank=0, mujoco_backend="mjx"):
         super().__init__()
         self.render_mode = render_mode
         self.rank = rank
         self.xml_path = self._resolve_xml_path(xml_path)
-        self.mj_model = MujocoModel(self.xml_path)
+        self.mj_model = MujocoModel(self.xml_path, backend=mujoco_backend)
         self._define_action_space()
         self._define_observation_space()
 
@@ -67,8 +67,8 @@ class MujocoTrussEnv(gym.Env):
         com_vel = np.mean(node_velocities, axis=0)
 
         return np.concatenate([
-            self.mj_model.data.ten_length,
-            self.mj_model.data.ten_velocity,
+            self.mj_model._data_array("ten_length"),
+            self.mj_model._data_array("ten_velocity"),
             [com[0], com[2]],
             [com_vel[0], com_vel[2]]
         ]).astype(np.float32)
@@ -100,14 +100,13 @@ class MujocoTrussEnv(gym.Env):
         ctrl_high = self.mj_model.model.actuator_ctrlrange[:, 1].astype(np.float32, copy=False)
         return self._sanitize_box_value(ctrl, ctrl_low, ctrl_high)
 
+    def _advance(self, ctrl):
+        self.mj_model.set_ctrl(ctrl)
+        self.mj_model.advance(self.nsubsteps, viewer=self.viewer)
+
     def step(self, action):
         action = self._sanitize_ctrl(action)
-        self.mj_model.data.ctrl[:] = action
-
-        for _ in range(self.nsubsteps):
-            mujoco.mj_step(self.mj_model.model, self.mj_model.data)
-            if self.viewer is not None:
-                self.viewer.sync()
+        self._advance(action)
 
         self.steps += 1
 
@@ -125,6 +124,7 @@ class MujocoTrussEnv(gym.Env):
             if self._rgb_render_failed:
                 return np.zeros((480, 640, 3), dtype=np.uint8)
             try:
+                self.mj_model.sync_for_render()
                 if self.renderer is None:
                     renderer = mujoco.Renderer(self.mj_model.model, 480, 640)
                     cam = mujoco.MjvCamera()
@@ -160,6 +160,7 @@ class MujocoTrussEnv(gym.Env):
                     )
                 self.viewer = mujoco_viewer.launch_passive(self.mj_model.model, self.mj_model.data)
             
+            self.mj_model.sync_for_render()
             # Update camera lookat to track the robot's COM in the viewer
             com = np.mean(self.mj_model.get_node_position_matrix(), axis=0)
             self.viewer.cam.lookat[:] = com

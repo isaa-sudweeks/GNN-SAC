@@ -52,8 +52,28 @@ class TensorWrapper(gym.Wrapper):
 			return self._obs_to_tensor(self.env.reset(task_idx=task_idx))
 		return self._obs_to_tensor(self.env.reset())
 
+	def reset_many(self, env_indices=None):
+		if not hasattr(self.env, "reset_many"):
+			raise AttributeError("Wrapped environment does not support batched reset")
+		return [self._obs_to_tensor(obs) for obs in self.env.reset_many(env_indices=env_indices)]
+
 	def step(self, action):
-		obs, reward, done, info = self.env.step(action.numpy())
+		obs, reward, done, info = self.env.step(self._action_to_numpy(action))
+		return self._step_to_tensor(obs, reward, done, info)
+
+	def step_many(self, actions, env_indices=None):
+		if not hasattr(self.env, "step_many"):
+			raise AttributeError("Wrapped environment does not support batched step")
+		np_actions = [self._action_to_numpy(action) for action in actions]
+		results = self.env.step_many(np_actions, env_indices=env_indices)
+		return [self._step_to_tensor(obs, reward, done, info) for obs, reward, done, info in results]
+
+	def _action_to_numpy(self, action):
+		if isinstance(action, torch.Tensor):
+			return action.detach().cpu().numpy()
+		return action
+
+	def _step_to_tensor(self, obs, reward, done, info):
 		info = defaultdict(float, info)
 		info['success'] = float(info['success'])
 		info['terminated'] = torch.tensor(float(info['terminated']))

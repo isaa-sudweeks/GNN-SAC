@@ -1,4 +1,3 @@
-import mujoco
 import numpy as np
 from gymnasium import spaces
 
@@ -23,12 +22,7 @@ class MujocoVelocityCommandEnv(MujocoRelativeObsEnv):
     def step(self, action):
         action = self._sanitize_action(action)
         ctrl = self._sanitize_ctrl(action * self.config.speed)
-        self.mj_model.data.ctrl[:] = ctrl
-
-        for _ in range(self.nsubsteps):
-            mujoco.mj_step(self.mj_model.model, self.mj_model.data)
-            if self.viewer is not None:
-                self.viewer.sync()
+        self._advance(ctrl)
 
         self.steps += 1
 

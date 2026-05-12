@@ -75,6 +75,16 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         try:
             self.assertEqual(len(env.env.envs), 4)
             self.assertEqual(cfg.action_dim, 8)
+            observations = env.reset_many(env_indices=range(cfg.num_envs))
+            actions = [env.rand_act() for _ in range(cfg.num_envs)]
+            results = env.step_many(actions, env_indices=range(cfg.num_envs))
+            self.assertEqual(len(observations), cfg.num_envs)
+            self.assertEqual(len(results), cfg.num_envs)
+            for env_idx, (next_obs, reward, done, info) in enumerate(results):
+                self.assertEqual(observations[env_idx].shape, next_obs.shape)
+                self.assertEqual(info["task"], cfg.task)
+                self.assertEqual(info["env_idx"], env_idx)
+                self.assertTrue(float(reward) == float(reward))
             for env_idx in range(cfg.num_envs):
                 obs = env.reset(task_idx=env_idx)
                 action = env.rand_act()

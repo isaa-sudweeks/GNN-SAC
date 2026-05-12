@@ -210,20 +210,17 @@ class OnlineTrainer(Trainer):
             if self._step % self.cfg.eval_freq == 0:
                 eval_next = True
 
-            for env_idx in range(num_envs):
-                if self._step > self.cfg.steps:
-                    break
-
-                self.env.set_active_env(env_idx)
-
-                if done[env_idx]:
+            done_indices = [env_idx for env_idx, is_done in enumerate(done) if is_done]
+            if done_indices:
+                previous_components = self._episode_reward_components
+                for env_idx in done_indices:
                     if eval_next:
+                        self.env.set_active_env(env_idx)
                         eval_metrics = self.eval()
                         eval_metrics.update(self.common_metrics())
                         self.logger.log(eval_metrics, 'eval')
                         self.report_eval_metrics(eval_metrics, self._step)
                         eval_next = False
-                        self.env.set_active_env(env_idx)
 
                     if episode_tds[env_idx] is not None and len(episode_tds[env_idx]) > 1:
                         info = infos[env_idx]
@@ -252,39 +249,56 @@ class OnlineTrainer(Trainer):
                             else torch.cat(episode_tds[env_idx])
                         )
                         self._ep_idx = self.buffer.add(episode_td)
+                self._episode_reward_components = previous_components
 
-                    observations[env_idx] = self.env.reset(task_idx=env_idx)
-                    episode_tds[env_idx] = [self.to_td(observations[env_idx])]
+                reset_obs = self.env.reset_many(env_indices=done_indices)
+                for env_idx, obs in zip(done_indices, reset_obs):
+                    observations[env_idx] = obs
+                    episode_tds[env_idx] = [self.to_td(obs)]
                     reward_components[env_idx] = {}
                     done[env_idx] = False
 
+            remaining_steps = self.cfg.steps - self._step + 1
+            env_indices = list(range(min(num_envs, remaining_steps)))
+            if not env_indices:
+                break
+
+            actions = []
+            for env_idx in env_indices:
                 if self._step > self.cfg.seed_steps:
                     action = self.agent.act(observations[env_idx], t0=len(episode_tds[env_idx]) == 1)
                 else:
                     action = self.env.rand_act()
-                observations[env_idx], reward, done[env_idx], infos[env_idx] = self.env.step(action)
+                actions.append(action)
+
+            results = self.env.step_many(actions, env_indices=env_indices)
+            for env_idx, action, (obs, reward, is_done, info) in zip(env_indices, actions, results):
+                observations[env_idx] = obs
+                done[env_idx] = is_done
+                infos[env_idx] = info
 
                 previous_components = self._episode_reward_components
                 self._episode_reward_components = reward_components[env_idx]
-                self._accumulate_reward_components(infos[env_idx])
+                self._accumulate_reward_components(info)
                 reward_components[env_idx] = self._episode_reward_components
                 self._episode_reward_components = previous_components
 
-                terminated = infos[env_idx]['terminated'] if self.cfg.episodic else torch.tensor(0.0)
-                episode_tds[env_idx].append(self.to_td(observations[env_idx], action, reward, terminated))
+                terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
+                episode_tds[env_idx].append(self.to_td(obs, action, reward, terminated))
 
-                if self._step >= self.cfg.seed_steps and self.buffer.size >= self.cfg.batch_size:
-                    if self._step == self.cfg.seed_steps:
-                        num_updates = pretrain_steps
-                        print(f'Pretraining agent on seed data for {num_updates} updates...')
-                    else:
-                        num_updates = self.cfg.iterations
-                    if num_updates > 0:
-                        for _ in range(num_updates):
-                            _train_metrics = self.agent.update(self.buffer)
-                        train_metrics.update(_train_metrics)
+            previous_step = self._step
+            self._step += len(env_indices)
 
-                self._step += 1
+            if self._step >= self.cfg.seed_steps and self.buffer.size >= self.cfg.batch_size:
+                if previous_step < self.cfg.seed_steps <= self._step:
+                    num_updates = pretrain_steps
+                    print(f'Pretraining agent on seed data for {num_updates} updates...')
+                else:
+                    num_updates = int(self.cfg.iterations) * len(env_indices)
+                if num_updates > 0:
+                    for _ in range(num_updates):
+                        _train_metrics = self.agent.update(self.buffer)
+                    train_metrics.update(_train_metrics)
 
         self.logger.finish(self.agent)
         return self._best_eval_metrics
