@@ -61,6 +61,10 @@ class OnlineTrainer(Trainer):
         for key, value in self._extract_reward_components(info).items():
             current_value = self._episode_reward_components.get(key, 0.0)
             self._episode_reward_components[key] = current_value + value
+
+    @staticmethod
+    def _crossed_eval_interval(previous_step, current_step, eval_freq):
+        return previous_step // eval_freq < current_step // eval_freq
     
     def eval(self):
         """
@@ -288,6 +292,8 @@ class OnlineTrainer(Trainer):
 
             previous_step = self._step
             self._step += len(env_indices)
+            if self._crossed_eval_interval(previous_step, self._step, self.cfg.eval_freq):
+                eval_next = True
 
             if self._step >= self.cfg.seed_steps and self.buffer.size >= self.cfg.batch_size:
                 if previous_step < self.cfg.seed_steps <= self._step:
