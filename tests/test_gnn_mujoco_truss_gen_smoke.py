@@ -15,6 +15,7 @@ from common.gnn_buffer import GNNBuffer
 from common.parser import parse_cfg
 from env import make_env
 from gnn_sac import GNNSAC
+from trainer.online_trainer import OnlineTrainer
 
 
 def flat_test_cfg(**overrides):
@@ -65,6 +66,12 @@ def graph_test_cfg(**overrides):
 
 
 class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
+    def test_eval_interval_crossing_with_batched_steps(self):
+        self.assertFalse(OnlineTrainer._crossed_eval_interval(0, 3, 5))
+        self.assertTrue(OnlineTrainer._crossed_eval_interval(3, 6, 5))
+        self.assertFalse(OnlineTrainer._crossed_eval_interval(6, 9, 5))
+        self.assertTrue(OnlineTrainer._crossed_eval_interval(9, 12, 5))
+
     def test_repeated_truss_envs_reset_and_step(self):
         cfg = flat_test_cfg(
             num_envs=4,
