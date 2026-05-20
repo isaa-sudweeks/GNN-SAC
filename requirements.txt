@@ -3,6 +3,7 @@ tensordict
 numpy
 gymnasium[mujoco]
 mujoco
+mujoco-mjx
 hydra-core
 omegaconf
 termcolor

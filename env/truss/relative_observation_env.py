@@ -1,5 +1,4 @@
 import numpy as np
-import mujoco
 from gymnasium import spaces
 
 from env.truss.base_env import MujocoTrussEnv
@@ -11,7 +10,12 @@ class MujocoRelativeObsEnv(MujocoTrussEnv):
     """
 
     def __init__(self, config, render_mode=None, rank=0):
-        super().__init__(config.xml_path, render_mode=render_mode, rank=rank)
+        super().__init__(
+            config.xml_path,
+            render_mode=render_mode,
+            rank=rank,
+            mujoco_backend=getattr(config, "mujoco_backend", "mjx"),
+        )
         self.config = config
         self.max_steps = config.max_steps
         self.nsubsteps = config.nsubsteps
@@ -46,11 +50,11 @@ class MujocoRelativeObsEnv(MujocoTrussEnv):
         return np.concatenate([
             np.array(relative_positions),
             np.array(absolute_velocities),
-            self.mj_model.data.ctrl.copy()
+            self.mj_model.get_ctrl()
         ]).astype(np.float32)
 
     def step(self, action):
-        current_ctrl = self._sanitize_ctrl(self.mj_model.data.ctrl.copy())
+        current_ctrl = self._sanitize_ctrl(self.mj_model.get_ctrl())
         
         # Action is interpreted as a delta: [-1, 1] means [-speed, speed]
         action = self._sanitize_action(action)
@@ -60,12 +64,7 @@ class MujocoRelativeObsEnv(MujocoTrussEnv):
         # Clip to hardware (global actuator) limits so we don't break simulation bounds.
         new_ctrl = self._sanitize_ctrl(new_ctrl)
         
-        self.mj_model.data.ctrl[:] = new_ctrl
-
-        for _ in range(self.nsubsteps):
-            mujoco.mj_step(self.mj_model.model, self.mj_model.data)
-            if self.viewer is not None:
-                self.viewer.sync()
+        self._advance(new_ctrl)
 
         self.steps += 1
 

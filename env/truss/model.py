@@ -3,18 +3,129 @@ import numpy as np
 import xml.etree.ElementTree as ET
 
 
+def _load_mjx():
+    try:
+        import jax
+        import jax.numpy as jnp
+        from mujoco import mjx
+    except ImportError as exc:
+        raise ImportError(
+            "The MJX backend requires JAX and mujoco.mjx. Install the project "
+            "dependencies with JAX support before using mujoco_backend='mjx'."
+        ) from exc
+    return jax, jnp, mjx
+
+
 class MujocoModel:
-    def __init__(self, xml_path):
+    def __init__(self, xml_path, backend="mjx"):
         self.xml_path = xml_path
+        self.backend = backend
         self.model = mujoco.MjModel.from_xml_path(xml_path)
         self.data = mujoco.MjData(self.model)
+        self._jax = None
+        self._jnp = None
+        self._mjx = None
+        self._mjx_model = None
+        self._mjx_data = None
+        self._compiled_steps = {}
         self._load_model_metadata(xml_path)
         self.init_qpos = self.data.qpos.copy()
         self.init_qvel = self.data.qvel.copy()
         self.ctrl_home = np.zeros(self.model.nu)
         self.act_home = np.ones(self.model.na)
         mujoco.mj_forward(self.model, self.data)
+        self._init_backend()
         self.initial_critical_eig = max(self._critical_eig(), 1e-8)
+
+    def _init_backend(self):
+        if self.backend in ("mujoco", "native", None):
+            self.backend = "mujoco"
+            return
+        if self.backend != "mjx":
+            raise ValueError(f"Unsupported MuJoCo backend '{self.backend}'. Use 'mjx' or 'mujoco'.")
+
+        self._jax, self._jnp, self._mjx = _load_mjx()
+        self._mjx_model = self._mjx.put_model(self.model)
+        self._mjx_data = self._mjx.put_data(self.model, self.data)
+
+    @property
+    def uses_mjx(self):
+        return self.backend == "mjx"
+
+    def _to_numpy(self, value):
+        return np.asarray(value)
+
+    def _data_array(self, name):
+        if self.uses_mjx:
+            return self._to_numpy(getattr(self._mjx_data, name))
+        return getattr(self.data, name)
+
+    def _replace_mjx_data(self, **kwargs):
+        self._mjx_data = self._mjx_data.replace(**kwargs)
+
+    def _sync_mjx_to_mujoco_data(self):
+        if not self.uses_mjx:
+            return
+        try:
+            self.data = self._mjx.get_data(self.model, self._mjx_data)
+        except AttributeError:
+            self.data.qpos[:] = self._data_array("qpos")
+            self.data.qvel[:] = self._data_array("qvel")
+            self.data.ctrl[:] = self._data_array("ctrl")
+            if self.model.na:
+                self.data.act[:] = self._data_array("act")
+            mujoco.mj_forward(self.model, self.data)
+
+    def sync_for_render(self):
+        self._sync_mjx_to_mujoco_data()
+
+    def get_ctrl(self):
+        return self._data_array("ctrl").copy()
+
+    def set_ctrl(self, ctrl):
+        ctrl = np.asarray(ctrl, dtype=np.float32)
+        if ctrl.shape != (self.model.nu,):
+            ctrl = np.reshape(ctrl, (self.model.nu,))
+        if self.uses_mjx:
+            self._replace_mjx_data(ctrl=self._jnp.asarray(ctrl))
+            self.data.ctrl[:] = ctrl
+        else:
+            self.data.ctrl[:] = ctrl
+
+    def _compile_stepper(self, nsubsteps):
+        if nsubsteps in self._compiled_steps:
+            return self._compiled_steps[nsubsteps]
+
+        mjx_model = self._mjx_model
+        mjx = self._mjx
+
+        @self._jax.jit
+        def step_n(data, ctrl):
+            data = data.replace(ctrl=ctrl)
+
+            def body(_, current_data):
+                return mjx.step(mjx_model, current_data)
+
+            return self._jax.lax.fori_loop(0, nsubsteps, body, data)
+
+        self._compiled_steps[nsubsteps] = step_n
+        return step_n
+
+    def advance(self, nsubsteps=1, viewer=None):
+        if self.uses_mjx:
+            ctrl = self._jnp.asarray(self._data_array("ctrl"))
+            step_n = self._compile_stepper(int(nsubsteps))
+            self._mjx_data = step_n(self._mjx_data, ctrl)
+            self._mjx_data = self._jax.block_until_ready(self._mjx_data)
+            if viewer is not None:
+                self._sync_mjx_to_mujoco_data()
+                viewer.sync()
+            return
+
+        for _ in range(int(nsubsteps)):
+            mujoco.mj_step(self.model, self.data)
+            if viewer is not None:
+                viewer.sync()
 
     def _load_model_metadata(self, xml_path):
         tree = ET.parse(xml_path)
@@ -108,48 +219,58 @@ class MujocoModel:
         if mujoco.mjtDyn.mjDYN_INTEGRATOR in self.model.actuator_dyntype:
             self.data.act[:] = self.act_home.copy()
         mujoco.mj_forward(self.model, self.data)
+        if self.uses_mjx:
+            self._mjx_data = self._mjx.put_data(self.model, self.data)
     
     def get_node_loc_dict(self):
         node_dict = {}
+        xpos = self._data_array("xpos")
         for i in range(self.model.nbody):
-            node_dict[self.model.body(i).name] = self.data.xpos[i]
+            node_dict[self.model.body(i).name] = xpos[i]
         return node_dict
 
     def get_node_velocity_dict(self):
         vel_dict = {}
+        cvel = self._data_array("cvel")
         for i in range(self.model.nbody):
-            vel_dict[self.model.body(i).name] = self.data.cvel[i]
+            vel_dict[self.model.body(i).name] = cvel[i]
         return vel_dict
 
     def get_edge_length_dict(self):
         tendon_dict = {}
+        ten_length = self._data_array("ten_length")
         for ten in range(self.model.ntendon):
-            tendon_dict[self.model.tendon(ten).name] = self.data.ten_length[ten]
+            tendon_dict[self.model.tendon(ten).name] = ten_length[ten]
         return tendon_dict
 
     def get_edge_velocity_dict(self):
         tendon_dict = {}
+        ten_velocity = self._data_array("ten_velocity")
         for ten in range(self.model.ntendon):
-            tendon_dict[self.model.tendon(ten).name] = self.data.ten_velocity[ten]
+            tendon_dict[self.model.tendon(ten).name] = ten_velocity[ten]
         return tendon_dict
 
     def get_node_position_dict(self):
+        xpos = self._data_array("xpos")
         return {
-            node_name: self.data.xpos[self.node_body_ids[node_name]].copy()
+            node_name: xpos[self.node_body_ids[node_name]].copy()
             for node_name in self.node_names
         }
 
     def get_node_velocity_linear_dict(self):
+        cvel = self._data_array("cvel")
         return {
-            node_name: self.data.cvel[self.node_body_ids[node_name]][3:].copy()
+            node_name: cvel[self.node_body_ids[node_name]][3:].copy()
             for node_name in self.node_names
         }
 
     def get_node_position_matrix(self):
-        return np.array([self.data.xpos[self.node_body_ids[node_name]] for node_name in self.node_names])
+        xpos = self._data_array("xpos")
+        return np.array([xpos[self.node_body_ids[node_name]] for node_name in self.node_names])
 
     def get_node_linear_velocity_matrix(self):
-        return np.array([self.data.cvel[self.node_body_ids[node_name]][3:] for node_name in self.node_names])
+        cvel = self._data_array("cvel")
+        return np.array([cvel[self.node_body_ids[node_name]][3:] for node_name in self.node_names])
 
     def _rigidity_matrix(self):
         dims = len(self.active_axes)

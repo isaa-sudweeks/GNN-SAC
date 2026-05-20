@@ -38,7 +38,7 @@ if not getattr(argparse._ActionsContainer._check_help, "_hydra_py314_compat", Fa
 from common.parser import parse_cfg
 from common.seed import set_seed
 from common.gnn_buffer import GNNBuffer
-from env import make_env # TODO: I need to make this the procedurally generated environment.
+from env import make_env
 from gnn_sac import GNNSAC
 from trainer.online_trainer import OnlineTrainer
 from common.logger import Logger

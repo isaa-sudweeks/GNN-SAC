@@ -2,7 +2,7 @@ from copy import deepcopy
 
 import torch 
 import torch.nn as nn 
-from torch_geometric.nn import global_add_pool
+from torch_geometric.nn import global_add_pool, global_mean_pool
 
 from common import math 
 from common import gnn_layers
@@ -85,7 +85,7 @@ class GNNActorCritic(nn.Module):
         batch = getattr(obs, "batch", None)
         if batch is None:
             batch = log_prob.new_zeros(log_prob.size(0), dtype=torch.long)
-        log_prob = global_add_pool(log_prob, batch).squeeze(-1)
+        log_prob = global_mean_pool(log_prob, batch).squeeze(-1) # Using a global mean pool means that the entropy then becomes normalized by the number of nodes.
         entropy = -log_prob
         return action, {
             "mean": mean,
@@ -106,7 +106,7 @@ class GNNActorCritic(nn.Module):
         """
         assert return_type in {"min", "avg", "all"}
         qnet = self._target_Qs if target else self._Qs
-        q_values = qnet(torch.cat([obs.x, action], dim=-1), obs.edge_index, getattr(obs, "batch", None))
+        q_values = qnet(torch.cat([obs.x, action], dim=-1), obs.edge_index, getattr(obs, "batch", None)) # TODO: I am not sure if this works well or correctly because the dimensionality between the observation and actions seem off.
 
         if return_type == "all":
             return q_values

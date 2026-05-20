@@ -3,6 +3,9 @@
 */outputs/*
 outputs/*
 
+# VS Code
+.vscode/*
+
 __pycache__/
 *.py[cod]
 *$py.class

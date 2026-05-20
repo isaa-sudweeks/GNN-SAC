@@ -29,7 +29,10 @@ MUJOCO_TASKS = {
     'truss-velocity-command-up': 'MujocoVelocityCommandEnvUp-v0',
     'truss-velocity-command-down': 'MujocoVelocityCommandEnvDown-v0',
     'octahedron-graph-right': 'MujocoOctahedronGraphEnvRight-v0',
+    'octahedron-graph-right-realistic': 'MujocoOctahedronGraphEnvRightRealistic-v0',
     'octehedron-graph-right': 'MujocoOctahedronGraphEnvRight-v0',
+    'octehedron-graph-right-realistic': 'MujocoOctahedronGraphEnvRightRealistic-v0',
+    'tetrehedron-graph-right': 'MujocoTetrahedronGraphEnvRight-v0',
     
 }
 
@@ -39,12 +42,18 @@ CUSTOM_MUJOCO_TASKS = {
     'truss-velocity-command-up',
     'truss-velocity-command-down',
     'octahedron-graph-right',
+    'octahedron-graph-right-realistic',
     'octehedron-graph-right',
+    'octehedron-graph-right-realistic',
+    'tetrehedron-graph-right',
 }
 
 GRAPH_MUJOCO_TASKS = {
     'octahedron-graph-right',
+    'octahedron-graph-right-realistic',
     'octehedron-graph-right',
+    'octehedron-graph-right-realistic',
+    'tetrehedron-graph-right',
 }
 
 class MuJoCoWrapper(gym.Wrapper):
@@ -88,6 +97,8 @@ def make_env(cfg):
     env_kwargs = {'render_mode': render_mode}
     if cfg.task in GRAPH_MUJOCO_TASKS:
         import env.mujoco_gen.octehedron_graph_env_right
+        import env.mujoco_gen.octehedron_graph_env_right_realistic
+        import env.mujoco_gen.tetrehedron_graph_env_right
     if cfg.task in CUSTOM_MUJOCO_TASKS:
         env_kwargs['config'] = cfg
     if cfg. task == 'lunarlander-continuous':
@@ -103,7 +114,10 @@ def make_env(cfg):
         'truss-velocity-command-up': cfg.max_steps,
         'truss-velocity-command-down': cfg.max_steps,
         'octahedron-graph-right': cfg.max_steps,
+        'octahedron-graph-right-realistic': cfg.max_steps,
         'octehedron-graph-right': cfg.max_steps,
+        'octehedron-graph-right-realistic': cfg.max_steps,
+        'tetrehedron-graph-right': cfg.max_steps,
     }.get(cfg.task, 1000))
     cfg.discount_max = 0.99 
     cfg.rho = 0.7 # Increase this for tasks that are episodic #TODO

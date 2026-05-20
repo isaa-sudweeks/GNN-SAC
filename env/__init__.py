@@ -63,6 +63,10 @@ def _is_graph_env(cfg):
     tasks = list(getattr(cfg, "tasks", [getattr(cfg, "task", "")]))
     return bool(getattr(cfg, "use_graph_observations", False)) or any("graph" in task for task in tasks)
 
+def _num_policy_actuators(env):
+    mj_model = env.unwrapped.mj_model
+    return int(len(getattr(mj_model, "external_actuator_ids", range(mj_model.model.nu))))
+
 def make_env(cfg):
     """
     Make an environment for TD-MPC2 experiments.
@@ -77,8 +81,12 @@ def make_env(cfg):
     if multitask and num_envs > 1:
         raise ValueError("Use either multitask=true with cfg.tasks or num_envs>1 for repeated same-task envs, not both.")
     if multitask or num_envs > 1:
-        from env.wrappers.multitask import MultitaskWrapper
-        env = MultitaskWrapper(cfg, [make_dm_control_env, make_maniskill_env, make_metaworld_env, make_myosuite_env, make_mujoco_env])
+        if multitask:
+            from env.wrappers.multitask import MultitaskWrapper
+            env = MultitaskWrapper(cfg, [make_dm_control_env, make_maniskill_env, make_metaworld_env, make_myosuite_env, make_mujoco_env])
+        else:
+            from env.wrappers.repeated import RepeatedEnvWrapper
+            env = RepeatedEnvWrapper(cfg, [make_dm_control_env, make_maniskill_env, make_metaworld_env, make_myosuite_env, make_mujoco_env])
         cfg.obs_shapes = []
         cfg.action_dims = []
         cfg.episode_lengths = []
@@ -106,7 +114,7 @@ def make_env(cfg):
             cfg.node_action_dim = int(getattr(env.unwrapped, "node_action_dim", env.action_space.shape[-1]))
             cfg.action_dim = cfg.node_action_dim
             cfg.num_policy_actions = int(np.prod(env.action_space.shape))
-            cfg.num_actuators = int(env.unwrapped.mj_model.model.nu)
+            cfg.num_actuators = _num_policy_actuators(env)
         return env
     else:
         errors = []
@@ -129,7 +137,7 @@ def make_env(cfg):
             cfg.node_action_dim = int(getattr(env.unwrapped, "node_action_dim", env.action_space.shape[-1]))
             cfg.action_dim = cfg.node_action_dim
             cfg.num_policy_actions = int(np.prod(env.action_space.shape))
-            cfg.num_actuators = int(env.unwrapped.mj_model.model.nu)
+            cfg.num_actuators = _num_policy_actuators(env)
             cfg.episode_length = episode_length
             cfg.seed_steps = max(1000, 5*cfg.episode_length)
             return env
