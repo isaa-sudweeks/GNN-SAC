@@ -5,18 +5,17 @@ from gymnasium.envs.registration import register
 from mujoco_truss_gen import (
     MujocoRelativeObsEnv,
     TrussEnvConfig,
-    get_mujoco_spec,
-    get_octahedron_definition,
+    get_mujoco_spec
 )
 
 
 register(
-    id="MujocoOctahedronGraphEnvRight-v0",
-    entry_point="env.mujoco_gen.octehedron_graph_env_right:MujocoOctahedronGraphEnvRight",
+    id="MujocoTetrahedronGraphEnvRight-v0",
+    entry_point="env.mujoco_gen.tetrehedron_graph_env_right:MujocoTetrahedronGraphEnvRight",
 )
 
 
-class MujocoOctahedronGraphEnvRight(MujocoRelativeObsEnv):
+class MujocoTetrahedronGraphEnvRight(MujocoRelativeObsEnv):
     """
     Generated octahedron truss environment that emits graph dict observations.
 
@@ -25,8 +24,7 @@ class MujocoOctahedronGraphEnvRight(MujocoRelativeObsEnv):
     """
 
     def __init__(self, config, render_mode=None, rank=0):
-        node_dict, triangle_dict = get_octahedron_definition()
-        model_source = get_mujoco_spec(node_dict, triangle_dict)
+        model_source = get_mujoco_spec("tetrahedron", realistic=False)
         truss_config = TrussEnvConfig(
             model_source=model_source,
             max_steps=int(config.max_steps),
