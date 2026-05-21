@@ -23,7 +23,7 @@ class BatchedMJXGraphTrussEnv(gym.Env):
 
     metadata = {"render_modes": []}
 
-    def __init__(self, cfg, model_xml: str):
+    def __init__(self, cfg, model_xml):
         super().__init__()
         self.cfg = cfg
         self.task = cfg.task
@@ -32,9 +32,8 @@ class BatchedMJXGraphTrussEnv(gym.Env):
             raise ValueError("BatchedMJXGraphTrussEnv requires at least one environment")
 
         self.jax, self.jnp, self.mjx = _load_mjx_deps()
-        self.model_xml = model_xml
-        self._metadata_xml_path = self._write_metadata_xml(model_xml)
-        self.model = mujoco.MjModel.from_xml_string(model_xml)
+        self.model_xml, self.model = self._normalize_model_source(model_xml)
+        self._metadata_xml_path = self._write_metadata_xml(self.model_xml)
         self.host_data = mujoco.MjData(self.model)
         mujoco.mj_forward(self.model, self.host_data)
 
@@ -112,6 +111,25 @@ class BatchedMJXGraphTrussEnv(gym.Env):
         self._act_home = self.jnp.asarray(self.act_home)
         self._compile_kernels()
         self.reset_many()
+
+    @staticmethod
+    def _normalize_model_source(model_source):
+        if isinstance(model_source, bytes):
+            model_source = model_source.decode("utf-8")
+        if isinstance(model_source, str):
+            return model_source, mujoco.MjModel.from_xml_string(model_source)
+        if hasattr(model_source, "compile"):
+            model = model_source.compile()
+            if hasattr(model_source, "to_xml"):
+                return model_source.to_xml(), model
+            raise TypeError(
+                "BatchedMJXGraphTrussEnv received an MjSpec-like model source "
+                "without to_xml(); cannot build metadata from it."
+            )
+        raise TypeError(
+            "BatchedMJXGraphTrussEnv model source must be an XML string, bytes, "
+            f"or mujoco.MjSpec-like object; got {type(model_source)!r}."
+        )
 
     @staticmethod
     def _write_metadata_xml(model_xml):
