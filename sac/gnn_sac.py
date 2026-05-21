@@ -142,8 +142,8 @@ class GNNSAC(torch.nn.Module):
         }
     def update(self, buffer):
         obs, action, reward, terminated, next_obs = buffer.sample()
-        if self.device.type == 'cuda':
-            torch.compiler.cudagraph_mark_step_begin()
+       # if self.device.type == 'cuda':
+       #     torch.compiler.cudagraph_mark_step_begin()
         
         self.model.train()
         q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
