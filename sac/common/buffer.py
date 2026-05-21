@@ -101,3 +101,34 @@ class Buffer:
             self._terminated[idx].to(self._device, non_blocking=True),
             self._next_obs[idx].to(self._device, non_blocking=True),
         )
+
+    def state_dict(self):
+        return {
+            "capacity": self._capacity,
+            "batch_size": self._batch_size,
+            "num_eps": self._num_eps,
+            "size": self._size,
+            "idx": self._idx,
+            "obs": self._obs,
+            "next_obs": self._next_obs,
+            "action": self._action,
+            "reward": self._reward,
+            "terminated": self._terminated,
+        }
+
+    def load_state_dict(self, state_dict):
+        saved_capacity = int(state_dict["capacity"])
+        if saved_capacity != self._capacity:
+            raise ValueError(
+                f"Checkpoint replay capacity ({saved_capacity}) does not match current capacity ({self._capacity}). "
+                "Resume with the same buffer_size and steps, or start a fresh run."
+            )
+        self._batch_size = int(state_dict.get("batch_size", self._batch_size))
+        self._num_eps = int(state_dict["num_eps"])
+        self._size = int(state_dict["size"])
+        self._idx = int(state_dict["idx"])
+        self._obs = state_dict["obs"]
+        self._next_obs = state_dict["next_obs"]
+        self._action = state_dict["action"]
+        self._reward = state_dict["reward"]
+        self._terminated = state_dict["terminated"]

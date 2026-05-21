@@ -27,6 +27,10 @@ tasks: # Task list used by multitask code paths and logging.
 # Outputs and logging
 save_csv: true # Whether to write evaluation metrics to eval.csv.
 save_agent: true # Whether to save final model weights at the end of training.
+checkpoint_freq: 50_000 # Save resumable training checkpoints every N environment steps; 0 disables.
+checkpoint_dir: checkpoints # Directory for resumable checkpoints, relative to work_dir unless absolute.
+checkpoint_keep_last: 3 # Number of numbered step checkpoints to keep; latest.pt is always retained.
+resume_from_checkpoint: null # Path to a checkpoint, or "latest" to load checkpoint_dir/latest.pt.
 save_video: false # Whether to render and log video for the first evaluation episode.
 enable_wandb: true # Whether to send metrics, config, video, and artifacts to Weights & Biases.
 wandb_project: ${project} # W&B project name.

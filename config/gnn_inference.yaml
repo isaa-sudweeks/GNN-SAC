@@ -1,0 +1,26 @@
+defaults:
+  - gnn_config
+  - _self_
+
+# Checkpoint source. Accepted values:
+# - Local path, e.g. model=/path/to/final.pt
+# - W&B artifact ref, e.g. model=entity/project/artifact-name:latest
+# - W&B artifact URL from the browser
+# - W&B run file URL pointing at a .pt file
+model: ???
+
+# Optional file name inside a W&B artifact directory. If omitted, the script
+# looks for models/final.pt, final.pt, then a single *.pt file.
+model_file: null
+
+# Inference behavior
+episodes: 5
+deterministic: true
+inference_max_steps: null
+output_csv: null
+
+# Keep training-side logging disabled during standalone inference.
+enable_wandb: false
+save_agent: false
+save_csv: false
+save_video: false

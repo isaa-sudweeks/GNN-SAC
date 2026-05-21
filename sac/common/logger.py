@@ -286,6 +286,14 @@ class Logger:
         if self._wandb:
             self._wandb.finish()
 
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "eval_rows": list(self._eval_rows),
+        }
+
+    def load_state_dict(self, state_dict: Mapping[str, Any]) -> None:
+        self._eval_rows = list(state_dict.get("eval_rows", []))
+
     def _format(self, key: str, value: Any, ty: str) -> str:
         value = _to_plain_value(value)
         if ty == "int":

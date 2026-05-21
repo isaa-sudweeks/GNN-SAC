@@ -65,6 +65,24 @@ class GNNSAC(torch.nn.Module):
         if isinstance(state_dict, dict) and "log_alpha" in state_dict:
             self.log_alpha.data.copy_(state_dict["log_alpha"].to(self.device))
 
+    def training_state_dict(self):
+        return {
+            "model": self.model.state_dict(),
+            "log_alpha": self.log_alpha.detach().cpu(),
+            "q_optim": self.q_optim.state_dict(),
+            "pi_optim": self.pi_optim.state_dict(),
+            "alpha_optim": self.alpha_optim.state_dict(),
+        }
+
+    def load_training_state_dict(self, state_dict):
+        self.load(state_dict)
+        if "q_optim" in state_dict:
+            self.q_optim.load_state_dict(state_dict["q_optim"])
+        if "pi_optim" in state_dict:
+            self.pi_optim.load_state_dict(state_dict["pi_optim"])
+        if "alpha_optim" in state_dict:
+            self.alpha_optim.load_state_dict(state_dict["alpha_optim"])
+
     @torch.no_grad()
     def act(self, obs, t0 = False, eval_mode = False):
         """

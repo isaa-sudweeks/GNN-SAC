@@ -5,6 +5,7 @@ gymnasium[mujoco]
 mujoco
 mujoco-mjx
 hydra-core
+hydra-submitit-launcher
 omegaconf
 termcolor
 optuna

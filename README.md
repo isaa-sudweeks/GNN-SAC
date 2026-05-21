@@ -65,4 +65,28 @@
 - I could replace the MSE style regression with a discrete regression over bins similar to TD-MPC2 which might add more stability to training and a better reward signal.
 - I could do some sort of scaled entropy stuff similar to what is done in TD-MPC2. One of the reasons that this would be needed I think is that as the number of tendons changes so will the entropy. This could lead to some weirdness in training where the agent prefers high entropy in robots with many tendons and low entropy in robots with few tendons. This could be avoided by scaling the entropy.
 
+# Resuming Preempted Training
+- Training writes resumable checkpoints to `${work_dir}/checkpoints` every `checkpoint_freq` environment steps. Each checkpoint contains the agent weights, optimizer states, replay buffer, trainer counters, logger state, RNG state, and resolved config metadata.
+- `latest.pt` is always updated alongside numbered `step_<N>.pt` checkpoints. `checkpoint_keep_last` controls how many numbered checkpoints are retained.
+- Resume a run by using the same training config and setting `resume_from_checkpoint=latest` with the same `work_dir`, or by passing an explicit checkpoint path:
+
+```bash
+python sac/gnn_train.py work_dir=/path/to/run resume_from_checkpoint=latest
+python sac/gnn_train.py resume_from_checkpoint=/path/to/run/checkpoints/step_50000.pt
+```
+- For Slurm preemption/requeue runs, use the Submitit-backed supercomputer config. It uses a stable `work_dir`, `resume_from_checkpoint=latest`, and passes `--requeue` through Submitit:
+
+```bash
+python sac/gnn_train.py --config-name supercomputer --multirun
+```
+
+Set `GNN_SAC_RUN_ROOT` to put runs on shared persistent storage, and override cluster-specific values on the command line as needed:
+
+```bash
+GNN_SAC_RUN_ROOT=/scratch/$USER/gnn-sac-runs \
+python sac/gnn_train.py --config-name supercomputer --multirun \
+  hydra.launcher.partition=gpu hydra.launcher.account=my_account
+```
+- Resume starts a fresh environment episode at the restored global step. The replay buffer and optimizer state are restored; any episode that was in progress when the checkpoint was written is not continued because the MuJoCo environment state is not currently serialized.
+
 # Current TODOs 

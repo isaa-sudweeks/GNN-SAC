@@ -24,6 +24,7 @@ class OnlineTrainer(Trainer):
         self._ep_idx = 0 
         self._start_time = time() 
         self._episode_reward_components = {}
+        self.maybe_load_checkpoint()
 
     def common_metrics(self):
         """
@@ -194,7 +195,10 @@ class OnlineTrainer(Trainer):
                         _train_metrics = self.agent.update(self.buffer)
                     train_metrics.update(_train_metrics)
 
+            previous_step = self._step
             self._step += 1
+            self.maybe_save_checkpoint(previous_step)
+        self.maybe_save_checkpoint(force=True)
         self.logger.finish(self.agent)
         return self._best_eval_metrics
 
@@ -305,7 +309,9 @@ class OnlineTrainer(Trainer):
                     for _ in range(num_updates):
                         _train_metrics = self.agent.update(self.buffer)
                     train_metrics.update(_train_metrics)
+            self.maybe_save_checkpoint(previous_step)
 
+        self.maybe_save_checkpoint(force=True)
         self.logger.finish(self.agent)
         return self._best_eval_metrics
                     
