@@ -330,14 +330,17 @@ class BatchedMJXGraphTrussEnv(gym.Env):
         split_keys = self.jax.vmap(self.jax.random.split)(keys)
         new_keys = split_keys[:, 0]
         reset_keys = split_keys[:, 1]
-        keys_host = np.asarray(self._keys)
+        keys_host = np.array(self._keys)
         keys_host[indices] = np.asarray(new_keys)
         self._keys = self.jnp.asarray(keys_host)
         new_data, x = self._reset_batch(reset_keys)
         self._scatter_data(indices, new_data)
         self.steps[indices] = 0
         x = np.asarray(self.jax.block_until_ready(x), dtype=np.float32)
-        return [{"x": x[i], "edge_index": self.directed_edge_index} for i in range(x.shape[0])]
+        return [
+            {"x": x[i].copy(), "edge_index": self.directed_edge_index.copy()}
+            for i in range(x.shape[0])
+        ]
 
     def rand_act(self):
         return self.action_space.sample().astype(np.float32)
@@ -376,7 +379,7 @@ class BatchedMJXGraphTrussEnv(gym.Env):
                 "slip": float(components[local_idx, 4]),
                 "total_raw": float(components[local_idx, 5]),
             }
-            obs = {"x": x[local_idx], "edge_index": self.directed_edge_index}
+            obs = {"x": x[local_idx].copy(), "edge_index": self.directed_edge_index.copy()}
             results.append((obs, float(reward[local_idx]), bool(done[local_idx]), info))
         return results
 

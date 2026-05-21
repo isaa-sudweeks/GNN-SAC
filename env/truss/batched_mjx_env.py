@@ -272,9 +272,9 @@ class BatchedMJXTrussEnv(gym.Env):
         split_keys = self.jax.vmap(self.jax.random.split)(keys)
         new_keys = split_keys[:, 0]
         reset_keys = split_keys[:, 1]
-        self._keys = np.asarray(self._keys)
-        self._keys[indices] = np.asarray(new_keys)
-        self._keys = self.jnp.asarray(self._keys)
+        keys_host = np.array(self._keys)
+        keys_host[indices] = np.asarray(new_keys)
+        self._keys = self.jnp.asarray(keys_host)
         new_data, obs = self._reset_batch(reset_keys)
         self._scatter_data(indices, new_data)
         self.steps[indices] = 0
