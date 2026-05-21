@@ -271,13 +271,18 @@ class OnlineTrainer(Trainer):
             if not env_indices:
                 break
 
-            actions = []
-            for env_idx in env_indices:
-                if self._step > self.cfg.seed_steps:
-                    action = self.agent.act(observations[env_idx], t0=len(episode_tds[env_idx]) == 1)
-                else:
-                    action = self.env.rand_act()
-                actions.append(action)
+            if self._step > self.cfg.seed_steps and hasattr(self.agent, "act_many"):
+                batch_observations = [observations[env_idx] for env_idx in env_indices]
+                batch_t0 = [len(episode_tds[env_idx]) == 1 for env_idx in env_indices]
+                actions = self.agent.act_many(batch_observations, t0=batch_t0)
+            else:
+                actions = []
+                for env_idx in env_indices:
+                    if self._step > self.cfg.seed_steps:
+                        action = self.agent.act(observations[env_idx], t0=len(episode_tds[env_idx]) == 1)
+                    else:
+                        action = self.env.rand_act()
+                    actions.append(action)
 
             results = self.env.step_many(actions, env_indices=env_indices)
             for env_idx, action, (obs, reward, is_done, info) in zip(env_indices, actions, results):

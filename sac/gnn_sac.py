@@ -95,6 +95,21 @@ class GNNSAC(torch.nn.Module):
         return self._safe_action(action).cpu()
 
     @torch.no_grad()
+    def act_many(self, observations, t0=None, eval_mode=False):
+        """
+        Run policy inference for many graph observations as one PyG batch.
+        """
+        if not observations:
+            return []
+        node_counts = [int(obs.num_nodes) for obs in observations]
+        obs = Batch.from_data_list(observations).to(self.device, non_blocking=True)
+        action, info = self.model.pi(obs)
+        if eval_mode:
+            action = info["mean"]
+        action = self._safe_action(action).cpu()
+        return list(action.split(node_counts, dim=0))
+
+    @torch.no_grad()
     def _td_target(self, next_obs, reward, terminated):
         """
         Again this assumes that next_obs is coming in as a torch geometric Data object.

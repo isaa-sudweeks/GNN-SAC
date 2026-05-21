@@ -8,6 +8,7 @@ xml_path: env/truss/assets/Baseline/octahedron_velocity_integrated_ctr.xml # MuJ
 
 # Simulation timing
 mujoco_backend: mujoco # Simulation backend for custom truss envs: mjx for MuJoCo-JAX, mujoco for native MuJoCo.
+mjx_vectorized: false # Use the opt-in single-program batched MJX path for supported truss/graph tasks when num_envs > 1.
 max_steps: 5_000 # Maximum simulator steps before the Timeout wrapper truncates an episode.
 episode_length: ${max_steps} # Nominal episode length used before make_env overwrites it from the wrapper.
 nsubsteps: 100 # Number of MuJoCo integration steps per environment step.

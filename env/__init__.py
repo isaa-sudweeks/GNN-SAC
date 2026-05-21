@@ -67,6 +67,67 @@ def _num_policy_actuators(env):
     mj_model = env.unwrapped.mj_model
     return int(len(getattr(mj_model, "external_actuator_ids", range(mj_model.model.nu))))
 
+def _make_vectorized_mjx_env(cfg):
+    if not bool(getattr(cfg, "mjx_vectorized", False)):
+        return None
+    if getattr(cfg, "mujoco_backend", None) != "mjx":
+        return None
+    if int(getattr(cfg, "num_envs", 1)) <= 1:
+        return None
+    if bool(getattr(cfg, "multitask", False)):
+        raise ValueError("mjx_vectorized=true supports repeated single-task runs, not multitask=true.")
+
+    graph_tasks = {
+        "octahedron-graph-right",
+        "octehedron-graph-right",
+        "tetrehedron-graph-right",
+    }
+    flat_tasks = {
+        "truss-velocity-command-right",
+        "truss-velocity-command-left",
+        "truss-velocity-command-up",
+        "truss-velocity-command-down",
+    }
+    task = getattr(cfg, "task", "")
+    if task in graph_tasks:
+        from env.truss.batched_mjx_graph_env import BatchedMJXGraphTrussEnv
+        from mujoco_truss_gen import get_mujoco_spec, get_octahedron_definition
+
+        if task in {"octahedron-graph-right", "octehedron-graph-right"}:
+            node_dict, triangle_dict = get_octahedron_definition()
+            model_xml = get_mujoco_spec(node_dict, triangle_dict)
+        elif task == "tetrehedron-graph-right":
+            model_xml = get_mujoco_spec("tetrahedron", realistic=False)
+        else:
+            return None
+        env = BatchedMJXGraphTrussEnv(cfg, model_xml=model_xml)
+        cfg.obs_shape = {
+            "x": env.observation_space.spaces["x"].shape,
+            "edge_index": env.observation_space.spaces["edge_index"].shape,
+        }
+        cfg.obs_dim = int(env.node_feature_dim)
+        cfg.node_feature_dim = cfg.obs_dim
+        cfg.node_action_dim = int(env.node_action_dim)
+        cfg.action_dim = cfg.node_action_dim
+        cfg.num_policy_actions = int(np.prod(env.action_space.shape))
+        cfg.num_actuators = _num_policy_actuators(env)
+        cfg.episode_length = int(env.max_episode_steps)
+        cfg.seed_steps = int(max(1000, 5 * cfg.episode_length))
+        return TensorWrapper(env, graph_observations=True)
+
+    if task in flat_tasks:
+        from env.truss.batched_mjx_env import BatchedMJXTrussEnv
+
+        env = BatchedMJXTrussEnv(cfg)
+        cfg.obs_shape = {cfg.get("obs", "state"): env.observation_space.shape}
+        cfg.obs_dim = int(np.prod(env.observation_space.shape))
+        cfg.action_dim = int(env.action_space.shape[0])
+        cfg.episode_length = int(env.max_episode_steps)
+        cfg.seed_steps = int(max(1000, 5 * cfg.episode_length))
+        return TensorWrapper(env, graph_observations=False)
+
+    return None
+
 def make_env(cfg):
     """
     Make an environment for TD-MPC2 experiments.
@@ -78,6 +139,9 @@ def make_env(cfg):
     env = None
     num_envs = int(getattr(cfg, "num_envs", 1))
     multitask = bool(getattr(cfg, "multitask", False))
+    vectorized_env = _make_vectorized_mjx_env(cfg)
+    if vectorized_env is not None:
+        return vectorized_env
     if multitask and num_envs > 1:
         raise ValueError("Use either multitask=true with cfg.tasks or num_envs>1 for repeated same-task envs, not both.")
     if multitask or num_envs > 1:
