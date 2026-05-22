@@ -7,6 +7,8 @@ import os
 import platform
 import re
 import sys
+import time
+import types
 from urllib.parse import parse_qs, unquote, urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -26,16 +28,17 @@ import torch
 from omegaconf import open_dict
 from termcolor import colored
 
-if not getattr(argparse._ActionsContainer._check_help, "_hydra_py314_compat", False):
-    _argparse_check_help = argparse._ActionsContainer._check_help
+if sys.version_info >= (3, 14):
+    if not getattr(argparse._ActionsContainer._check_help, "_hydra_py314_compat", False):
+        _argparse_check_help = argparse._ActionsContainer._check_help
 
-    def _check_help_compat(self, action):
-        if action.help is not None and not isinstance(action.help, str):
-            return
-        return _argparse_check_help(self, action)
+        def _check_help_compat(self, action):
+            if action.help is not None and not isinstance(action.help, str):
+                return
+            return _argparse_check_help(self, action)
 
-    _check_help_compat._hydra_py314_compat = True
-    argparse._ActionsContainer._check_help = _check_help_compat
+        _check_help_compat._hydra_py314_compat = True
+        argparse._ActionsContainer._check_help = _check_help_compat
 
 from common.parser import parse_cfg
 from common.seed import set_seed
@@ -162,10 +165,141 @@ def resolve_checkpoint(model_ref: str, cfg) -> Path:
     )
 
 
+def load_agent_checkpoint(agent: GNNSAC, checkpoint: Path) -> dict:
+    state_dict = torch.load(checkpoint, map_location=agent.device, weights_only=False)
+    if isinstance(state_dict, dict) and "agent" in state_dict:
+        agent.load(state_dict["agent"])
+        return state_dict
+    agent.load(state_dict)
+    return state_dict if isinstance(state_dict, dict) else {}
+
+
 def _to_float(value) -> float:
     if isinstance(value, torch.Tensor):
         return float(value.detach().cpu().item())
     return float(value)
+
+
+def _unwrap_env(env):
+    current = env
+    while hasattr(current, "env"):
+        current = current.env
+    return current
+
+
+def _iter_wrapped_envs(env):
+    current = env
+    while current is not None:
+        yield current
+        current = getattr(current, "env", None)
+
+
+def _simulation_step_seconds(env) -> float:
+    current = env
+    while current is not None:
+        mj_model = getattr(current, "mj_model", None)
+        model = getattr(mj_model, "model", None)
+        timestep = getattr(getattr(model, "opt", None), "timestep", None)
+        if timestep is not None:
+            nsubsteps = int(getattr(current, "nsubsteps", 1))
+            return float(timestep) * float(nsubsteps)
+        current = getattr(current, "env", None)
+
+    render_fps = getattr(getattr(env, "metadata", {}), "get", lambda *_: None)("render_fps")
+    if render_fps:
+        return 1.0 / float(render_fps)
+    render_fps = getattr(_unwrap_env(env), "metadata", {}).get("render_fps", None)
+    return 1.0 / float(render_fps) if render_fps else 0.0
+
+
+def _update_viewer_camera(env_obj) -> None:
+    viewer = getattr(env_obj, "viewer", None)
+    if viewer is None:
+        return
+    if hasattr(env_obj, "_update_camera_lookat"):
+        env_obj._update_camera_lookat(viewer.cam)
+        return
+    mj_model = getattr(env_obj, "mj_model", None)
+    if mj_model is not None and hasattr(mj_model, "get_node_position_matrix"):
+        viewer.cam.lookat[:] = np.mean(mj_model.get_node_position_matrix(), axis=0)
+
+
+def _enable_smooth_human_rendering(env, cfg) -> bool:
+    if not (bool(getattr(cfg, "visualize", False)) and bool(getattr(cfg, "visualize_smooth", True))):
+        return False
+    if not bool(getattr(cfg, "visualize_realtime", True)):
+        return False
+
+    try:
+        import mujoco
+    except ImportError:
+        return False
+
+    for env_obj in _iter_wrapped_envs(env):
+        mj_model = getattr(env_obj, "mj_model", None)
+        if mj_model is None or not hasattr(env_obj, "_advance"):
+            continue
+        model = getattr(mj_model, "model", None)
+        data = getattr(mj_model, "data", None)
+        if model is None or data is None:
+            continue
+        if bool(getattr(mj_model, "uses_mjx", False)):
+            continue
+        original_advance = env_obj._advance
+        original_code = getattr(getattr(original_advance, "__func__", original_advance), "__code__", None)
+        increments_steps = original_code is not None and "steps" in original_code.co_names
+
+        def smooth_advance(self, ctrl, _mujoco=mujoco, _increments_steps=increments_steps, _cfg=cfg):
+            smooth_cfg = getattr(self, "config", _cfg)
+            speed = max(float(getattr(smooth_cfg, "visualize_speed", 1.0) or 1.0), 1e-9)
+            target_fps = max(float(getattr(smooth_cfg, "visualize_fps", 60) or 60), 1.0)
+            nsubsteps = max(int(getattr(self, "nsubsteps", 1)), 1)
+            timestep = float(self.mj_model.model.opt.timestep)
+            render_every = max(1, int(round(1.0 / (target_fps * timestep))))
+            start_time = time.perf_counter()
+
+            if hasattr(self, "_apply_control_noise") and hasattr(self.mj_model, "set_external_ctrl"):
+                self.mj_model.set_external_ctrl(self._apply_control_noise(ctrl))
+            elif hasattr(self.mj_model, "set_ctrl"):
+                self.mj_model.set_ctrl(ctrl)
+            else:
+                self.mj_model.data.ctrl[:] = ctrl
+
+            for substep in range(nsubsteps):
+                if hasattr(self.mj_model, "apply_angle_bisector_control"):
+                    self.mj_model.apply_angle_bisector_control()
+                _mujoco.mj_step(self.mj_model.model, self.mj_model.data)
+
+                is_render_step = (substep + 1) % render_every == 0 or substep + 1 == nsubsteps
+                if self.viewer is not None and is_render_step:
+                    _update_viewer_camera(self)
+                    self.viewer.sync()
+                    target_time = start_time + ((substep + 1) * timestep / speed)
+                    sleep_seconds = target_time - time.perf_counter()
+                    if sleep_seconds > 0:
+                        time.sleep(sleep_seconds)
+            if _increments_steps:
+                self.steps += 1
+
+        env_obj._advance = types.MethodType(smooth_advance, env_obj)
+        return True
+
+    return False
+
+
+def _render_if_enabled(env, cfg, step_started_at: float | None = None, realtime_pacing: bool = True) -> None:
+    if not bool(getattr(cfg, "visualize", False)):
+        return
+    env.render()
+    sleep_seconds = 0.0
+    if realtime_pacing and bool(getattr(cfg, "visualize_realtime", True)) and step_started_at is not None:
+        speed = max(float(getattr(cfg, "visualize_speed", 1.0) or 1.0), 1e-9)
+        target_seconds = _simulation_step_seconds(env) / speed
+        elapsed_seconds = time.perf_counter() - step_started_at
+        sleep_seconds = max(0.0, target_seconds - elapsed_seconds)
+    sleep_seconds += float(getattr(cfg, "visualize_sleep", 0.0) or 0.0)
+    if sleep_seconds > 0:
+        time.sleep(sleep_seconds)
 
 
 def run_inference(cfg):
@@ -185,13 +319,15 @@ def run_inference(cfg):
     print(colored("Task:", "yellow", attrs=["bold"]), cfg.task)
 
     env = make_env(cfg)
+    smooth_rendering = _enable_smooth_human_rendering(env, cfg)
     agent = GNNSAC(cfg)
     try:
-        agent.load(checkpoint)
+        load_agent_checkpoint(agent, checkpoint)
         agent.model.eval()
         results = []
         for episode in range(int(cfg.episodes)):
             obs = env.reset()
+            _render_if_enabled(env, cfg)
             done = False
             ep_reward = 0.0
             ep_success = 0.0
@@ -199,8 +335,10 @@ def run_inference(cfg):
             step = 0
             max_steps = getattr(cfg, "inference_max_steps", None)
             while not done:
+                step_started_at = time.perf_counter()
                 action = agent.act(obs, t0=step == 0, eval_mode=bool(cfg.deterministic))
                 obs, reward, done, info = env.step(action)
+                _render_if_enabled(env, cfg, step_started_at, realtime_pacing=not smooth_rendering)
                 ep_reward += _to_float(reward)
                 ep_success = float(info.get("success", ep_success))
                 step += 1

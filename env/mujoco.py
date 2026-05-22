@@ -93,7 +93,8 @@ def make_env(cfg):
     if not cfg.task in MUJOCO_TASKS:
         raise ValueError(f'Task {cfg.task} not found in MuJoCo tasks')
     assert cfg.obs == 'state', 'MuJoCo envs only support state observations' 
-    render_mode = 'rgb_array' if cfg.save_video else None
+    visualize = bool(getattr(cfg, "visualize", False))
+    render_mode = 'human' if visualize else ('rgb_array' if cfg.save_video else None)
     env_kwargs = {'render_mode': render_mode}
     if cfg.task in GRAPH_MUJOCO_TASKS:
         import env.mujoco_gen.octehedron_graph_env_right

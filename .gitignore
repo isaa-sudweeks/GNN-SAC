@@ -47,3 +47,4 @@ data/interim/
 
 # Notebook checkpoints
 .ipynb_checkpoints/
+MUJOCO_LOG.TXT

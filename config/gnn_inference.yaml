@@ -18,6 +18,12 @@ episodes: 5
 deterministic: true
 inference_max_steps: null
 output_csv: null
+visualize: false
+visualize_realtime: true
+visualize_smooth: true
+visualize_fps: 60
+visualize_speed: 1.0
+visualize_sleep: 0.0
 
 # Keep training-side logging disabled during standalone inference.
 enable_wandb: false

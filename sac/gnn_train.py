@@ -24,16 +24,17 @@ import hydra
 from termcolor import colored
 from omegaconf import OmegaConf
 
-#if not getattr(argparse._ActionsContainer._check_help, "_hydra_py314_compat", False):
-#    _argparse_check_help = argparse._ActionsContainer._check_help
-#
-#    def _check_help_compat(self, action):
-#        if action.help is not None and not isinstance(action.help, str):
-#            return
-#        return _argparse_check_help(self, action)
-#
-#    _check_help_compat._hydra_py314_compat = True
-#    argparse._ActionsContainer._check_help = _check_help_compat
+if sys.version_info >= (3, 14):
+    if not getattr(argparse._ActionsContainer._check_help, "_hydra_py314_compat", False):
+        _argparse_check_help = argparse._ActionsContainer._check_help
+
+        def _check_help_compat(self, action):
+            if action.help is not None and not isinstance(action.help, str):
+                return
+            return _argparse_check_help(self, action)
+
+        _check_help_compat._hydra_py314_compat = True
+        argparse._ActionsContainer._check_help = _check_help_compat
 
 from common.parser import parse_cfg
 from common.seed import set_seed

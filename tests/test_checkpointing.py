@@ -134,6 +134,14 @@ class CheckpointingTest(unittest.TestCase):
             self.assertIsNone(trainer.maybe_load_checkpoint())
             self.assertEqual(trainer._step, 0)
 
+    def test_rng_restore_accepts_non_byte_tensor_state(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = make_trainer(Path(tmp_dir))
+            state = trainer._rng_state_dict()
+            state["torch"] = state["torch"].to(torch.int16)
+
+            trainer._load_rng_state_dict(state)
+
 
 if __name__ == "__main__":
     unittest.main()

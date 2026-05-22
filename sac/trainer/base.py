@@ -55,11 +55,16 @@ class Trainer:
     def _load_rng_state_dict(self, state):
         if not state:
             return
+        def _cpu_byte_tensor(value):
+            if not isinstance(value, torch.Tensor):
+                value = torch.as_tensor(value)
+            return value.detach().cpu().to(torch.uint8)
+
         random.setstate(state["python"])
         np.random.set_state(state["numpy"])
-        torch.random.set_rng_state(state["torch"])
+        torch.random.set_rng_state(_cpu_byte_tensor(state["torch"]))
         if torch.cuda.is_available() and "cuda" in state:
-            torch.cuda.set_rng_state_all(state["cuda"])
+            torch.cuda.set_rng_state_all([_cpu_byte_tensor(cuda_state) for cuda_state in state["cuda"]])
 
     def _config_state_dict(self):
         if OmegaConf is not None and OmegaConf.is_config(self.cfg):
@@ -136,7 +141,7 @@ class Trainer:
                 print(f"No checkpoint found at {checkpoint_path}; starting a fresh run.")
                 return None
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-        state_dict = torch.load(checkpoint_path, map_location=getattr(self.agent, "device", "cpu"), weights_only=False)
+        state_dict = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         self.load_checkpoint_state_dict(state_dict)
         print(f"Resumed checkpoint: {checkpoint_path} at step {self._step}")
         return checkpoint_path
