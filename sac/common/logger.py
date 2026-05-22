@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import dataclasses
 import datetime as _datetime
+import json
 import os
 import re
 from pathlib import Path
@@ -118,6 +119,69 @@ def _safe_name(value: Any, fallback: str) -> str:
     return re.sub(r"[^0-9a-zA-Z_.-]+", "-", value).strip("-") or fallback
 
 
+def _checkpoint_dir(cfg: Any) -> Path:
+    checkpoint_dir = _cfg_get(cfg, "checkpoint_dir", None)
+    if checkpoint_dir in (None, "", "???"):
+        return Path(_cfg_get(cfg, "work_dir", ".")) / "checkpoints"
+    checkpoint_dir = Path(checkpoint_dir)
+    if not checkpoint_dir.is_absolute():
+        checkpoint_dir = Path(_cfg_get(cfg, "work_dir", ".")) / checkpoint_dir
+    return checkpoint_dir
+
+
+def _resolve_checkpoint_path(cfg: Any) -> Path | None:
+    checkpoint_ref = _cfg_get(cfg, "resume_from_checkpoint", None)
+    if checkpoint_ref in (None, "", "???", False):
+        return None
+    if str(checkpoint_ref).lower() == "latest":
+        return _checkpoint_dir(cfg) / "latest.pt"
+    return Path(checkpoint_ref).expanduser()
+
+
+def _wandb_metadata_path(log_dir: Path) -> Path:
+    return log_dir / "wandb_run.json"
+
+
+def _load_wandb_run_info(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open() as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _checkpoint_wandb_run_info(checkpoint_path: Path | None) -> dict[str, Any]:
+    if checkpoint_path is None or not checkpoint_path.exists() or torch is None:
+        return {}
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except Exception:
+        return {}
+    logger_state = checkpoint.get("logger", {}) if isinstance(checkpoint, Mapping) else {}
+    wandb_state = logger_state.get("wandb", {}) if isinstance(logger_state, Mapping) else {}
+    return wandb_state if isinstance(wandb_state, dict) else {}
+
+
+def wandb_resume_info(cfg: Any, log_dir: Path) -> dict[str, Any]:
+    """Return persisted W&B identity when this launch is resuming a checkpoint."""
+    checkpoint_path = _resolve_checkpoint_path(cfg)
+    if checkpoint_path is None or not checkpoint_path.exists():
+        return {}
+
+    explicit_id = _cfg_get(cfg, "wandb_id", None)
+    if explicit_id not in (None, "", "???"):
+        return {"id": str(explicit_id)}
+
+    run_info = _load_wandb_run_info(_wandb_metadata_path(log_dir))
+    if run_info.get("id"):
+        return run_info
+
+    return _checkpoint_wandb_run_info(checkpoint_path)
+
+
 def cfg_to_group(cfg: Any, return_list: bool = False) -> str | list[str]:
     """Return a W&B-safe group name from available run identity fields."""
     env_name = _cfg_get(cfg, "env_name", _cfg_get(cfg, "task", "env"))
@@ -218,6 +282,7 @@ class Logger:
         self.project = _cfg_get(cfg, "wandb_project", _cfg_get(cfg, "project", "none"))
         self.entity = _cfg_get(cfg, "wandb_entity", _cfg_get(cfg, "entity", None))
         enable_wandb = bool(_cfg_get(cfg, "enable_wandb", True))
+        self._wandb_run_info: dict[str, Any] = {}
 
         self._wandb = None
         if enable_wandb and self.project not in (None, "", "none", "???"):
@@ -257,10 +322,36 @@ class Logger:
         )
         if self.entity not in (None, "", "none", "???"):
             init_kwargs["entity"] = self.entity
+        if bool(_cfg_get(cfg, "set_wandb_offline", False)):
+            init_kwargs["mode"] = "offline"
 
-        wandb.init(**init_kwargs)
-        print(colored("Logs will be synced with W&B.", "blue", attrs=["bold"]))
+        run_info = wandb_resume_info(cfg, self._log_dir)
+        if run_info.get("id"):
+            init_kwargs["id"] = str(run_info["id"])
+            init_kwargs["resume"] = str(_cfg_get(cfg, "wandb_resume", "allow"))
+
+        run = wandb.init(**init_kwargs)
+        self._wandb_run_info = {
+            "id": getattr(run, "id", None) or getattr(wandb.run, "id", None),
+            "project": self.project,
+            "entity": self.entity,
+            "name": str(name),
+        }
+        self._write_wandb_run_info()
+        if bool(_cfg_get(cfg, "set_wandb_offline", False)):
+            print(colored("W&B logging is offline.", "blue", attrs=["bold"]))
+        else:
+            print(colored("Logs will be synced with W&B.", "blue", attrs=["bold"]))
         self._wandb = wandb
+
+    def _write_wandb_run_info(self) -> None:
+        if not self._wandb_run_info.get("id"):
+            return
+        try:
+            with _wandb_metadata_path(self._log_dir).open("w") as f:
+                json.dump(self._wandb_run_info, f, indent=2, sort_keys=True)
+        except OSError as exc:
+            print(colored(f"Failed to write W&B run metadata: {exc}", "red"))
 
     def save_agent(self, agent: Any = None, identifier: str = "final") -> None:
         if not self._save_agent or agent is None:
@@ -289,10 +380,14 @@ class Logger:
     def state_dict(self) -> dict[str, Any]:
         return {
             "eval_rows": list(self._eval_rows),
+            "wandb": dict(self._wandb_run_info),
         }
 
     def load_state_dict(self, state_dict: Mapping[str, Any]) -> None:
         self._eval_rows = list(state_dict.get("eval_rows", []))
+        wandb_state = state_dict.get("wandb", {})
+        if isinstance(wandb_state, Mapping):
+            self._wandb_run_info = dict(wandb_state)
 
     def _format(self, key: str, value: Any, ty: str) -> str:
         value = _to_plain_value(value)

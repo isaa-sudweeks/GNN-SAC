@@ -37,3 +37,4 @@ wandb_project: ${project} # W&B project name.
 wandb_entity: null # Optional W&B entity/team; null uses the local default.
 wandb_name: ${exp_name}-${seed} # W&B run name.
 wandb_silent: true # Whether to silence W&B console output.
+set_wandb_offline: false # Whether to force W&B into offline mode for this run.

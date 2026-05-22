@@ -1,8 +1,10 @@
 from pathlib import Path
 from types import SimpleNamespace
+import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import torch
 
@@ -13,6 +15,7 @@ for path in (ROOT, SAC_ROOT):
         sys.path.insert(0, str(path))
 
 from trainer.base import Trainer
+from common.logger import Logger, wandb_resume_info
 
 
 class DummyModel(torch.nn.Module):
@@ -141,6 +144,87 @@ class CheckpointingTest(unittest.TestCase):
             state["torch"] = state["torch"].to(torch.int16)
 
             trainer._load_rng_state_dict(state)
+
+    def test_wandb_resume_info_uses_local_run_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            work_dir = Path(tmp_dir)
+            checkpoint_dir = work_dir / "checkpoints"
+            checkpoint_dir.mkdir()
+            torch.save({"logger": {"wandb": {"id": "checkpoint-run"}}}, checkpoint_dir / "latest.pt")
+            (work_dir / "wandb_run.json").write_text(json.dumps({"id": "local-run"}))
+
+            cfg = SimpleNamespace(
+                work_dir=str(work_dir),
+                checkpoint_dir="checkpoints",
+                resume_from_checkpoint="latest",
+            )
+
+            self.assertEqual(wandb_resume_info(cfg, work_dir)["id"], "local-run")
+
+    def test_wandb_resume_info_falls_back_to_checkpoint_metadata(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            work_dir = Path(tmp_dir)
+            checkpoint_dir = work_dir / "checkpoints"
+            checkpoint_dir.mkdir()
+            torch.save({"logger": {"wandb": {"id": "checkpoint-run"}}}, checkpoint_dir / "latest.pt")
+
+            cfg = SimpleNamespace(
+                work_dir=str(work_dir),
+                checkpoint_dir="checkpoints",
+                resume_from_checkpoint="latest",
+            )
+
+            self.assertEqual(wandb_resume_info(cfg, work_dir)["id"], "checkpoint-run")
+
+
+class WandbInitTest(unittest.TestCase):
+    def test_logger_resumes_wandb_run_and_can_set_offline_mode(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            work_dir = Path(tmp_dir)
+            checkpoint_dir = work_dir / "checkpoints"
+            checkpoint_dir.mkdir()
+            torch.save({"logger": {"wandb": {"id": "resume-run"}}}, checkpoint_dir / "latest.pt")
+
+            init_calls = []
+
+            class FakeRun:
+                id = "resume-run"
+
+            class FakeWandb:
+                run = FakeRun()
+
+                @staticmethod
+                def init(**kwargs):
+                    init_calls.append(kwargs)
+                    return FakeRun()
+
+            cfg = SimpleNamespace(
+                work_dir=str(work_dir),
+                save_csv=False,
+                save_agent=False,
+                env_name="env",
+                exp_name="exp",
+                seed=1,
+                steps=10,
+                wandb_project="project",
+                wandb_entity=None,
+                wandb_name="run-name",
+                wandb_silent=True,
+                enable_wandb=True,
+                save_video=False,
+                checkpoint_dir="checkpoints",
+                resume_from_checkpoint="latest",
+                set_wandb_offline=True,
+            )
+
+            with patch.dict(sys.modules, {"wandb": FakeWandb}), patch.dict("os.environ", {}, clear=True):
+                logger = Logger(cfg)
+
+            self.assertEqual(init_calls[0]["id"], "resume-run")
+            self.assertEqual(init_calls[0]["resume"], "allow")
+            self.assertEqual(init_calls[0]["mode"], "offline")
+            self.assertEqual(json.loads((work_dir / "wandb_run.json").read_text())["id"], "resume-run")
+            self.assertEqual(logger.state_dict()["wandb"]["id"], "resume-run")
 
 
 if __name__ == "__main__":

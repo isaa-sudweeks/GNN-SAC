@@ -10,6 +10,7 @@ work_dir: ${run_root}/${task}/${exp_name}/seed_${seed}
 resume_from_checkpoint: latest
 checkpoint_freq: 10_000
 checkpoint_keep_last: 5
+set_wandb_offline: true
 
 # Submitit uses this Slurm launcher only in Hydra multirun mode:
 # python sac/gnn_train.py --config-name supercomputer --multirun

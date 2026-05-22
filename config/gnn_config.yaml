@@ -56,3 +56,4 @@ wandb_project: ${project}
 wandb_entity: null
 wandb_name: ${exp_name}-${seed}
 wandb_silent: true
+set_wandb_offline: false

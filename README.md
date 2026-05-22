@@ -74,6 +74,8 @@
 python sac/gnn_train.py work_dir=/path/to/run resume_from_checkpoint=latest
 python sac/gnn_train.py resume_from_checkpoint=/path/to/run/checkpoints/step_50000.pt
 ```
+- When W&B is enabled, resumed training reuses the previous W&B run ID from `${work_dir}/wandb_run.json` or the checkpoint metadata, so resumed logs append to the original run instead of creating a new one.
+- Set `set_wandb_offline=true` to force W&B offline logging. The supercomputer config enables this by default; local configs leave it false.
 - For Slurm preemption/requeue runs, use the Submitit-backed supercomputer config. It uses a stable `work_dir`, `resume_from_checkpoint=latest`, and passes `--requeue` through Submitit:
 
 ```bash
