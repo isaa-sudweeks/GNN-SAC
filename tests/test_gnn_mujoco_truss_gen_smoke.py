@@ -1,6 +1,10 @@
 from pathlib import Path
+from types import SimpleNamespace
 import sys
 import unittest
+
+import numpy as np
+import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 SAC_ROOT = ROOT / "sac"
@@ -128,6 +132,103 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             self.assertIn("truncated", info)
         finally:
             env.close()
+
+    def test_graph_multitask_octahedron_and_tetrahedron_step(self):
+        cfg = graph_test_cfg(
+            multitask=True,
+            tasks=["octahedron-graph-right", "tetrehedron-graph-right"],
+            num_envs=1,
+        )
+        env = make_env(cfg)
+        try:
+            self.assertEqual(env.num_envs, 2)
+            observations = env.reset_many(env_indices=[0, 1])
+            self.assertEqual([obs.num_nodes for obs in observations], [6, 4])
+
+            actions = [env.rand_act(env_idx=0), env.rand_act(env_idx=1)]
+            self.assertEqual([tuple(action.shape) for action in actions], [(6, 1), (4, 1)])
+
+            results = env.step_many(actions, env_indices=[0, 1])
+            self.assertEqual([result[0].num_nodes for result in results], [6, 4])
+            self.assertEqual([result[3]["task"] for result in results], cfg.tasks)
+            self.assertEqual([result[3]["env_idx"] for result in results], [0, 1])
+            self.assertEqual([result[3]["task_idx"] for result in results], [0, 1])
+        finally:
+            env.close()
+
+    def test_multitask_eval_records_each_task_video_key(self):
+        class DummyEnv:
+            num_envs = 2
+
+            def __init__(self):
+                self.active_env_idx = None
+                self.reset_task_indices = []
+
+            def reset(self, task_idx=None):
+                self.active_env_idx = task_idx
+                self.reset_task_indices.append(task_idx)
+                return torch.tensor([float(task_idx)])
+
+            def step(self, action):
+                info = {
+                    "success": float(self.active_env_idx),
+                    "terminated": torch.tensor(0.0),
+                    "truncated": torch.tensor(1.0),
+                }
+                reward = torch.tensor(float(self.active_env_idx + 1))
+                return torch.tensor([float(self.active_env_idx)]), reward, True, info
+
+            def render(self):
+                return np.zeros((4, 4, 3), dtype=np.uint8)
+
+        class DummyAgent:
+            model = "dummy"
+
+            def act(self, obs, t0=False, eval_mode=False):
+                return torch.tensor([0.0])
+
+        class DummyVideo:
+            def __init__(self):
+                self.saved_keys = []
+
+            def init(self, env, enabled=True):
+                return
+
+            def record(self, env):
+                return
+
+            def save(self, step, key="videos/eval_video"):
+                self.saved_keys.append(key)
+
+        class DummyLogger:
+            def __init__(self):
+                self.video = DummyVideo()
+
+        cfg = SimpleNamespace(
+            eval_episodes=1,
+            save_video=True,
+            multitask=True,
+            tasks=["octahedron-graph-right", "tetrehedron-graph-right"],
+            resume_from_checkpoint=None,
+            work_dir=str(ROOT / "logs" / "test-smoke"),
+        )
+        env = DummyEnv()
+        logger = DummyLogger()
+        trainer = OnlineTrainer(cfg=cfg, env=env, agent=DummyAgent(), buffer=None, logger=logger)
+
+        metrics = trainer.eval()
+
+        self.assertEqual(env.reset_task_indices, [0, 1])
+        self.assertEqual(
+            logger.video.saved_keys,
+            [
+                "videos/eval_video/octahedron-graph-right",
+                "videos/eval_video/tetrehedron-graph-right",
+            ],
+        )
+        self.assertEqual(metrics["octahedron-graph-right_episode_reward"], 1.0)
+        self.assertEqual(metrics["tetrehedron-graph-right_episode_reward"], 2.0)
+        self.assertEqual(metrics["episode_reward"], 1.5)
 
     def test_gnn_sac_update_smoke(self):
         cfg = graph_test_cfg()

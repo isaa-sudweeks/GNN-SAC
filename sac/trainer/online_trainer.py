@@ -1,6 +1,7 @@
 from time import time 
 
 import numpy as np 
+import re
 import torch 
 from tensordict.tensordict import TensorDict 
 from trainer.base import Trainer 
@@ -71,9 +72,15 @@ class OnlineTrainer(Trainer):
         """
         Evaluate a SAC agent.
         """
+        if bool(getattr(self.cfg, "multitask", False)) and int(getattr(self.env, "num_envs", 1)) > 1:
+            return self._eval_multitask()
+        return self._eval_one()
+
+    def _eval_one(self, task_idx=None, video_key="videos/eval_video"):
         ep_rewards, ep_successes, ep_lengths = [], [], []
         for i in range(self.cfg.eval_episodes):
-            obs, done, ep_reward, t = self.env.reset(), False, 0, 0
+            obs = self.env.reset(task_idx=task_idx) if task_idx is not None else self.env.reset()
+            done, ep_reward, t = False, 0, 0
             if self.cfg.save_video:
                 self.logger.video.init(self.env, enabled=(i==0))
             while not done:
@@ -89,12 +96,44 @@ class OnlineTrainer(Trainer):
             ep_successes.append(info['success'])
             ep_lengths.append(t)
             if self.cfg.save_video:
-                self.logger.video.save(self._step)
+                self.logger.video.save(self._step, key=video_key)
         return dict(
             episode_reward=np.nanmean(ep_rewards),
             episode_success=np.nanmean(ep_successes),
             episode_length=np.nanmean(ep_lengths),
         )
+
+    def _eval_multitask(self):
+        metrics = {}
+        task_rewards, task_successes, task_lengths = [], [], []
+        for task_idx in range(int(getattr(self.env, "num_envs", 1))):
+            task_name = self._eval_task_name(task_idx)
+            task_key = self._metric_key(task_name)
+            task_metrics = self._eval_one(
+                task_idx=task_idx,
+                video_key=f"videos/eval_video/{task_key}",
+            )
+            metrics[f"{task_key}_episode_reward"] = task_metrics["episode_reward"]
+            metrics[f"{task_key}_episode_success"] = task_metrics["episode_success"]
+            metrics[f"{task_key}_episode_length"] = task_metrics["episode_length"]
+            task_rewards.append(task_metrics["episode_reward"])
+            task_successes.append(task_metrics["episode_success"])
+            task_lengths.append(task_metrics["episode_length"])
+        metrics.update(
+            episode_reward=np.nanmean(task_rewards),
+            episode_success=np.nanmean(task_successes),
+            episode_length=np.nanmean(task_lengths),
+        )
+        return metrics
+
+    def _eval_task_name(self, task_idx):
+        tasks = list(getattr(self.cfg, "tasks", []))
+        if task_idx < len(tasks):
+            return str(tasks[task_idx])
+        return f"env_{task_idx}"
+
+    def _metric_key(self, value):
+        return re.sub(r"[^0-9a-zA-Z_.-]+", "_", str(value)).strip("_") or "env"
     
     def to_td(self, obs, action=None, reward=None, terminated=None):
         """
@@ -130,7 +169,7 @@ class OnlineTrainer(Trainer):
         Train the SAC agent.
         """
         num_envs = int(getattr(self.env, "num_envs", getattr(self.cfg, "num_envs", 1)))
-        if num_envs > 1 and not bool(getattr(self.cfg, "multitask", False)):
+        if num_envs > 1:
             return self._train_multi_env(num_envs)
 
         train_metrics, done, eval_next = {}, True, False 
@@ -276,7 +315,7 @@ class OnlineTrainer(Trainer):
                 if self._step > self.cfg.seed_steps:
                     action = self.agent.act(observations[env_idx], t0=len(episode_tds[env_idx]) == 1)
                 else:
-                    action = self.env.rand_act()
+                    action = self.env.rand_act(env_idx=env_idx)
                 actions.append(action)
 
             results = self.env.step_many(actions, env_indices=env_indices)

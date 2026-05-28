@@ -15,8 +15,10 @@ class TensorWrapper(gym.Wrapper):
 		super().__init__(env)
 		self.graph_observations = graph_observations
 	
-	def rand_act(self):
-		return torch.from_numpy(self.action_space.sample().astype(np.float32))
+	def rand_act(self, env_idx=None):
+		if env_idx is not None and hasattr(self.env, "set_active_env"):
+			self.env.set_active_env(env_idx)
+		return torch.from_numpy(self.env.action_space.sample().astype(np.float32))
 
 	def set_active_env(self, env_idx):
 		if not hasattr(self.env, "set_active_env"):
