@@ -5,7 +5,7 @@ defaults:
 
 # Stable run identity for preemptible/requeued jobs. Override run_root or set
 # GNN_SAC_RUN_ROOT to place checkpoints on persistent shared storage.
-run_root: ${oc.env:GNN_SAC_RUN_ROOT,${hydra:runtime.cwd}/runs}
+run_root: ${oc.env:GNN_SAC_RUN_ROOT,/home/isuds/robotics/GNN-SAC/runs}
 work_dir: ${run_root}/${task}/${exp_name}/seed_${seed}
 resume_from_checkpoint: latest
 checkpoint_freq: 10_000
@@ -19,14 +19,17 @@ hydra:
     dir: ${work_dir}/hydra
     subdir: submitit
   launcher:
+    setup:
+      - export PYTHONPATH=${oc.env:PWD}/sac:${oc.env:PWD}:${oc.env:PYTHONPATH,}
     timeout_min: 1440
     nodes: 1
     tasks_per_node: 1
-    cpus_per_task: 8
+    cpus_per_task: 5
     gpus_per_node: 1
     mem_gb: 32
     name: ${exp_name}-${seed}
     signal_delay_s: 120
     max_num_timeout: 20
+    qos: standby
     additional_parameters:
       requeue: true
