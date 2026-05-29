@@ -37,6 +37,7 @@ def flat_test_cfg(**overrides):
                 "enable_wandb": False,
                 "save_csv": False,
                 "save_agent": False,
+                "target_entropy": "auto",
                 "work_dir": str(ROOT / "logs" / "test-smoke"),
             }
         ),
@@ -61,6 +62,7 @@ def graph_test_cfg(**overrides):
                 "enable_wandb": False,
                 "save_csv": False,
                 "save_agent": False,
+                "target_entropy": "auto",
                 "work_dir": str(ROOT / "logs" / "test-smoke"),
             }
         ),

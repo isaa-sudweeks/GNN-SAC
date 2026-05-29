@@ -46,3 +46,8 @@ num_edges: 12 # Number of structural/actuated tendon edges in the default octahe
 num_actuated_edges: 8 # Number of tendon edges controlled by the policy.
 normalize_observations: true # Whether future wrappers should normalize observation features.
 normalize_rewards: false # Whether future wrappers should normalize scalar rewards.
+
+#Domain Radomization
+domain_randomization: true # Enable domain randomization.
+length_scale_min: 0.75 # Minimum length scale.
+length_scale_max: 2.0 # Maximum length scale.

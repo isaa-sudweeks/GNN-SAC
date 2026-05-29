@@ -25,6 +25,23 @@ class OnlineTrainer(Trainer):
         self._ep_idx = 0 
         self._start_time = time() 
         self._episode_reward_components = {}
+        
+        self.eval_env = self.env
+        eval_task = getattr(self.cfg, "eval_task", None)
+        has_domain_randomization = getattr(self.cfg, "domain_randomization", False)
+        
+        if (eval_task is not None and eval_task != self.cfg.task) or has_domain_randomization:
+            from copy import deepcopy
+            from env import make_env
+            eval_cfg = deepcopy(self.cfg)
+            eval_cfg.domain_randomization = False
+            if eval_task is not None:
+                eval_cfg.task = eval_task
+                eval_cfg.env_name = eval_task
+                if hasattr(eval_cfg, "tasks"):
+                    eval_cfg.tasks = [eval_task]
+            self.eval_env = make_env(eval_cfg)
+            
         self.maybe_load_checkpoint()
 
     def common_metrics(self):
@@ -72,26 +89,26 @@ class OnlineTrainer(Trainer):
         """
         Evaluate a SAC agent.
         """
-        if bool(getattr(self.cfg, "multitask", False)) and int(getattr(self.env, "num_envs", 1)) > 1:
+        if bool(getattr(self.cfg, "multitask", False)) and int(getattr(self.eval_env, "num_envs", 1)) > 1:
             return self._eval_multitask()
         return self._eval_one()
 
     def _eval_one(self, task_idx=None, video_key="videos/eval_video"):
         ep_rewards, ep_successes, ep_lengths = [], [], []
         for i in range(self.cfg.eval_episodes):
-            obs = self.env.reset(task_idx=task_idx) if task_idx is not None else self.env.reset()
+            obs = self.eval_env.reset(task_idx=task_idx) if task_idx is not None else self.eval_env.reset()
             done, ep_reward, t = False, 0, 0
             if self.cfg.save_video:
-                self.logger.video.init(self.env, enabled=(i==0))
+                self.logger.video.init(self.eval_env, enabled=(i==0))
             while not done:
                 #if getattr(self.cfg, 'device', 'cuda') == 'cuda':
                     #torch.compiler.cudagraph_mark_step_begin()
                 action = self.agent.act(obs, t0=t==0, eval_mode=True)
-                obs, reward, done, info = self.env.step(action)
+                obs, reward, done, info = self.eval_env.step(action)
                 ep_reward += reward
                 t += 1
                 if self.cfg.save_video:
-                    self.logger.video.record(self.env)
+                    self.logger.video.record(self.eval_env)
             ep_rewards.append(ep_reward)
             ep_successes.append(info['success'])
             ep_lengths.append(t)
@@ -106,7 +123,7 @@ class OnlineTrainer(Trainer):
     def _eval_multitask(self):
         metrics = {}
         task_rewards, task_successes, task_lengths = [], [], []
-        for task_idx in range(int(getattr(self.env, "num_envs", 1))):
+        for task_idx in range(int(getattr(self.eval_env, "num_envs", 1))):
             task_name = self._eval_task_name(task_idx)
             task_key = self._metric_key(task_name)
             task_metrics = self._eval_one(
@@ -239,6 +256,8 @@ class OnlineTrainer(Trainer):
             self.maybe_save_checkpoint(previous_step)
         self.maybe_save_checkpoint(force=True)
         self.logger.finish(self.agent)
+        if self.eval_env is not self.env:
+            self.eval_env.close()
         return self._best_eval_metrics
 
     def _train_multi_env(self, num_envs):
@@ -262,7 +281,8 @@ class OnlineTrainer(Trainer):
                 previous_components = self._episode_reward_components
                 for env_idx in done_indices:
                     if eval_next:
-                        self.env.set_active_env(env_idx)
+                        if hasattr(self.eval_env, "set_active_env"):
+                            self.eval_env.set_active_env(env_idx)
                         eval_metrics = self.eval()
                         eval_metrics.update(self.common_metrics())
                         self.logger.log(eval_metrics, 'eval')
@@ -352,6 +372,8 @@ class OnlineTrainer(Trainer):
 
         self.maybe_save_checkpoint(force=True)
         self.logger.finish(self.agent)
+        if self.eval_env is not self.env:
+            self.eval_env.close()
         return self._best_eval_metrics
                     
 

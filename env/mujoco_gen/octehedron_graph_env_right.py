@@ -7,6 +7,7 @@ from mujoco_truss_gen import (
     TrussEnvConfig,
     get_mujoco_spec,
     get_octahedron_definition,
+    DomainRandomizationConfig,
 )
 
 
@@ -14,6 +15,7 @@ register(
     id="MujocoOctahedronGraphEnvRight-v0",
     entry_point="env.mujoco_gen.octehedron_graph_env_right:MujocoOctahedronGraphEnvRight",
 )
+
 
 
 class MujocoOctahedronGraphEnvRight(MujocoRelativeObsEnv):
@@ -25,8 +27,22 @@ class MujocoOctahedronGraphEnvRight(MujocoRelativeObsEnv):
     """
 
     def __init__(self, config, render_mode=None, rank=0):
+        self.node_action_dim = 1
         node_dict, triangle_dict = get_octahedron_definition()
         model_source = get_mujoco_spec(node_dict, triangle_dict)
+
+        if getattr(config, "domain_randomization", False):
+            def randomized_model(rng: np.random.Generator):
+                scale = rng.uniform(config.length_scale_min, config.length_scale_max)
+                node_dict_rand, triangle_dict_rand = get_octahedron_definition(scale=scale)
+                return get_mujoco_spec(node_dict_rand, triangle_dict_rand)
+
+            domain_randomization = DomainRandomizationConfig(
+                model_factory=randomized_model
+            )
+        else:
+            domain_randomization = None
+
         truss_config = TrussEnvConfig(
             model_source=model_source,
             max_steps=int(config.max_steps),
@@ -39,18 +55,25 @@ class MujocoOctahedronGraphEnvRight(MujocoRelativeObsEnv):
             slip_weight=float(config.slip_weight),
             critical_eig_threshold=float(config.critical_eig_threshold),
             slip_height=float(config.slip_height),
+            domain_randomization=domain_randomization,
         )
         super().__init__(truss_config, render_mode=render_mode, rank=rank)
-        self.node_feature_dim = 2 * len(self.mj_model.active_axes)
-        self.node_action_dim = 1
-        self._node_to_idx = {name: idx for idx, name in enumerate(self.mj_model.node_names)}
-        self._actuator_edges = self._build_actuator_edges()
+
+    def _define_action_space(self):
+        num_nodes = len(self.mj_model.node_names)
+        node_action_dim = getattr(self, "node_action_dim", 1)
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(len(self.mj_model.node_names), self.node_action_dim),
+            shape=(num_nodes, node_action_dim),
             dtype=np.float32,
         )
+
+    def _on_model_changed(self) -> None:
+        super()._on_model_changed()
+        self.node_feature_dim = 2 * len(self.mj_model.active_axes)
+        self._node_to_idx = {name: idx for idx, name in enumerate(self.mj_model.node_names)}
+        self._actuator_edges = self._build_actuator_edges()
 
     def _define_observation_space(self):
         num_nodes = len(self.mj_model.node_names)

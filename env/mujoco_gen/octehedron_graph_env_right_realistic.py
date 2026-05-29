@@ -10,6 +10,7 @@ from mujoco_truss_gen import (
     get_mujoco_spec,
     get_edge_index,
     get_node_features,
+    DomainRandomizationConfig,
 )
 
 
@@ -28,7 +29,20 @@ class MujocoOctahedronGraphEnvRightRealistic(MujocoRelativeObsEnv):
     """
 
     def __init__(self, config, render_mode=None, rank=0):
+        self.node_action_dim = 1
         model_source = get_mujoco_spec("octahedron", realistic=True)
+
+        if getattr(config, "domain_randomization", False):
+            def randomized_model(rng: np.random.Generator):
+                scale = rng.uniform(config.length_scale_min, config.length_scale_max)
+                return get_mujoco_spec("octahedron", realistic=True, scale=scale)
+
+            domain_randomization = DomainRandomizationConfig(
+                model_factory=randomized_model
+            )
+        else:
+            domain_randomization = None
+
         truss_config = TrussEnvConfig(
             model_source=model_source,
             max_steps=int(config.max_steps),
@@ -41,19 +55,26 @@ class MujocoOctahedronGraphEnvRightRealistic(MujocoRelativeObsEnv):
             slip_weight=float(config.slip_weight),
             critical_eig_threshold=float(config.critical_eig_threshold),
             slip_height=float(config.slip_height),
+            domain_randomization=domain_randomization,
         )
         super().__init__(truss_config, render_mode=render_mode, rank=rank)
-        self.logical_node_names = self._logical_node_names()
-        self.node_feature_dim = 6
-        self.node_action_dim = 1
-        self._node_to_idx = {name: idx for idx, name in enumerate(self.logical_node_names)}
-        self._actuator_edges = self._build_actuator_edges()
+
+    def _define_action_space(self):
+        logical_nodes = self._logical_node_names()
+        node_action_dim = getattr(self, "node_action_dim", 1)
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(len(self.logical_node_names), self.node_action_dim),
+            shape=(len(logical_nodes), node_action_dim),
             dtype=np.float32,
         )
+
+    def _on_model_changed(self) -> None:
+        super()._on_model_changed()
+        self.logical_node_names = self._logical_node_names()
+        self.node_feature_dim = 6
+        self._node_to_idx = {name: idx for idx, name in enumerate(self.logical_node_names)}
+        self._actuator_edges = self._build_actuator_edges()
 
     def _define_observation_space(self):
         num_nodes = len(self._logical_node_names())
