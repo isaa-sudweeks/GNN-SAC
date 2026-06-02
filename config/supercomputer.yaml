@@ -11,6 +11,7 @@ resume_from_checkpoint: latest
 checkpoint_freq: 10_000
 checkpoint_keep_last: 5
 set_wandb_offline: true
+device: cuda
 
 # Submitit uses this Slurm launcher only in Hydra multirun mode:
 # python sac/gnn_train.py --config-name supercomputer --multirun

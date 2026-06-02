@@ -9,7 +9,6 @@ from mujoco_truss_gen import (
     DomainRandomizationConfig,
 )
 
-
 register(
     id="MujocoTetrahedronGraphEnvRight-v0",
     entry_point="env.mujoco_gen.tetrehedron_graph_env_right:MujocoTetrahedronGraphEnvRight",
@@ -140,8 +139,9 @@ class MujocoTetrahedronGraphEnvRight(MujocoRelativeObsEnv):
         ctrl_low = self.mj_model.model.actuator_ctrlrange[:, 0]
         ctrl_high = self.mj_model.model.actuator_ctrlrange[:, 1]
         ctrl = np.clip(ctrl, ctrl_low, ctrl_high)
+        previous_com = self._center_of_mass()
         self._advance(ctrl)
-        reward, info, terminated = self._compute_reward(actuator_action)
+        reward, info, terminated = self._compute_reward(actuator_action, previous_com)
         truncated = self.steps >= self.max_steps
         return self._get_obs(), reward, terminated, truncated, info
 
@@ -188,6 +188,3 @@ class MujocoTetrahedronGraphEnvRight(MujocoRelativeObsEnv):
             ia, ib = self._node_to_idx[node_a], self._node_to_idx[node_b]
             actuator_action[actuator_id] = node_actions[ia, 0] + node_actions[ib, 0]
         return np.clip(actuator_action, -1.0, 1.0).astype(np.float32, copy=False)
-
-
-
