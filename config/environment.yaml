@@ -51,3 +51,6 @@ normalize_rewards: false # Whether future wrappers should normalize scalar rewar
 domain_randomization: true # Enable domain randomization.
 length_scale_min: 0.75 # Minimum length scale.
 length_scale_max: 2.0 # Maximum length scale.
+
+# Observation normalization 
+obs_norm: true 

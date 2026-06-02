@@ -55,6 +55,7 @@ class MujocoOctahedronGraphEnvRightRealistic(MujocoRelativeObsEnv):
             critical_eig_threshold=float(config.critical_eig_threshold),
             slip_height=float(config.slip_height),
             domain_randomization=domain_randomization,
+            normalize_observations = bool(getattr(config, "obs_norm", False)),
         )
         super().__init__(truss_config, render_mode=render_mode, rank=rank)
 
@@ -102,6 +103,25 @@ class MujocoOctahedronGraphEnvRightRealistic(MujocoRelativeObsEnv):
             graph_view="logical",
             aggregation="connector_ball",
         )
+
+        normalize_observations = bool(getattr(self.config, "normalize_observations", False))
+        bbox_dimensions = self.mj_model.initial_bounding_box_dimensions
+
+        # Calculate Center of Mass from the logical node positions (columns 0, 1, 2)
+        com = np.mean(features[:, :3], axis=0)
+
+        # Make positions translationally invariant (x, y relative to CoM; z absolute)
+        pos_rel = features[:, :3].copy()
+        pos_rel[:, 0] -= com[0]
+        pos_rel[:, 1] -= com[1]
+
+        if normalize_observations:
+            pos_rel /= bbox_dimensions
+            vel_norm = features[:, 3:] / bbox_dimensions
+        else:
+            vel_norm = features[:, 3:]
+
+        features = np.concatenate([pos_rel, vel_norm], axis=1)
 
         return {
             "x": np.asarray(features, dtype=np.float32),

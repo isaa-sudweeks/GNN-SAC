@@ -51,6 +51,7 @@ class MujocoTetrahedronGraphEnvRight(MujocoRelativeObsEnv):
             critical_eig_threshold=float(config.critical_eig_threshold),
             slip_height=float(config.slip_height),
             domain_randomization=domain_randomization,
+            normalize_observations = bool(getattr(config, "obs_norm", False))
         )
         super().__init__(truss_config, render_mode=render_mode, rank=rank)
 
@@ -97,6 +98,9 @@ class MujocoTetrahedronGraphEnvRight(MujocoRelativeObsEnv):
         com = np.mean(self.mj_model.get_node_position_matrix(), axis=0)
         active_axes = self.mj_model.active_axes
 
+        normalize_observations = bool(getattr(self.config, "normalize_observations", False))
+        bbox_dimensions = self.mj_model.initial_bounding_box_dimensions
+
         features = []
         for node_name in self.mj_model.node_names:
             pos = node_positions[node_name]
@@ -104,9 +108,12 @@ class MujocoTetrahedronGraphEnvRight(MujocoRelativeObsEnv):
             node_features = []
             for axis in active_axes:
                 axis_idx = "xyz".index(axis)
-                node_features.append(pos[axis_idx] if axis == "z" else pos[axis_idx] - com[axis_idx])
+                divisor = bbox_dimensions[axis_idx] if normalize_observations else 1.0
+                node_features.append((pos[axis_idx] if axis == "z" else pos[axis_idx] - com[axis_idx]) / divisor)
             for axis in active_axes:
-                node_features.append(vel["xyz".index(axis)])
+                axis_idx = "xyz".index(axis)
+                divisor = bbox_dimensions[axis_idx] if normalize_observations else 1.0
+                node_features.append(vel[axis_idx] / divisor)
             features.append(node_features)
 
         node_to_idx = {name: idx for idx, name in enumerate(self.mj_model.node_names)}
