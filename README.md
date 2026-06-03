@@ -91,4 +91,48 @@ python sac/gnn_train.py --config-name supercomputer --multirun \
 ```
 - Resume starts a fresh environment episode at the restored global step. The replay buffer and optimizer state are restored; any episode that was in progress when the checkpoint was written is not continued because the MuJoCo environment state is not currently serialized.
 
+# Unified Truss Topology Environments
+- `truss-graph` is the reusable graph-observation environment for `mujoco_truss_gen` presets. It emits PyTorch Geometric graph observations through the wrapper layer and maps one scalar node action per graph node to tendon actuator commands.
+- `truss-mlp` is the reusable flat observation/action environment for standard MLP policies. It uses the same generated topology source, but keeps fixed-size vector observations and actions.
+- Select one generated topology with `truss_topology`. Valid names come from `mujoco_truss_gen.PRESETS`; currently this includes `octahedron`, `tetrahedron`, `icosahedron`, and `solar_array`.
+
+```yaml
+task: truss-graph
+truss_topology: octahedron
+```
+
+```yaml
+task: truss-mlp
+truss_topology: solar_array
+```
+
+- Train or evaluate a graph policy across several topologies by listing `truss_topologies`. The environment factory expands this into topology-specific tasks such as `truss-graph:octahedron`.
+
+```yaml
+task: truss-graph
+truss_topologies:
+  - octahedron
+  - tetrahedron
+```
+
+- Use `eval_task` for a different evaluation topology. The `task:topology` form sets the base environment task and the generated topology in one string.
+
+```yaml
+task: truss-graph
+truss_topologies:
+  - octahedron
+  - tetrahedron
+eval_task: truss-graph:icosahedron
+```
+
+- For flat MLP baselines, different topologies are only valid together when their flat observation and action spaces match. Mismatched MLP topology lists fail early instead of padding or masking.
+
+```yaml
+task: truss-mlp
+truss_topology: octahedron
+eval_task: truss-mlp:tetrahedron
+```
+
+- `truss_realistic` requests realistic generated models. `truss_graph_view: auto` uses physical graph nodes by default and logical graph nodes for realistic models; set it explicitly to `physical` or `logical` only when needed.
+
 # Current TODOs 

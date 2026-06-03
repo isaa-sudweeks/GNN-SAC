@@ -14,6 +14,7 @@ for path in (ROOT, SAC_ROOT):
 
 from omegaconf import OmegaConf
 from torch_geometric.data import Data
+from mujoco_truss_gen import PRESETS
 
 from common.gnn_buffer import GNNBuffer
 from common.parser import parse_cfg
@@ -135,6 +136,34 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_unified_graph_env_supports_all_mujoco_truss_gen_presets(self):
+        for topology in sorted(PRESETS):
+            with self.subTest(topology=topology):
+                cfg = graph_test_cfg(
+                    task="truss-graph",
+                    truss_topology=topology,
+                    max_steps=2,
+                    nsubsteps=1,
+                    domain_randomization=False,
+                )
+                env = make_env(cfg)
+                try:
+                    obs = env.reset()
+                    self.assertIsInstance(obs, Data)
+                    self.assertGreater(obs.num_nodes, 0)
+                    self.assertEqual(obs.x.shape[1], 6)
+                    self.assertEqual(obs.edge_index.shape[0], 2)
+
+                    action = env.rand_act()
+                    next_obs, reward, done, info = env.step(action)
+                    self.assertIsInstance(next_obs, Data)
+                    self.assertEqual(action.shape, (obs.num_nodes, 1))
+                    self.assertTrue(float(reward) == float(reward))
+                    self.assertIn("terminated", info)
+                    self.assertIn("truncated", info)
+                finally:
+                    env.close()
+
     def test_graph_multitask_octahedron_and_tetrahedron_step(self):
         cfg = graph_test_cfg(
             multitask=True,
@@ -157,6 +186,69 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             self.assertEqual([result[3]["task_idx"] for result in results], [0, 1])
         finally:
             env.close()
+
+    def test_graph_topology_list_builds_multitask_envs(self):
+        cfg = graph_test_cfg(
+            task="truss-graph",
+            truss_topologies=["octahedron", "tetrahedron"],
+            multitask=False,
+            num_envs=1,
+            max_steps=2,
+            nsubsteps=1,
+            domain_randomization=False,
+        )
+        env = make_env(cfg)
+        try:
+            self.assertEqual(env.num_envs, 2)
+            self.assertEqual(cfg.tasks, ["truss-graph:octahedron", "truss-graph:tetrahedron"])
+
+            observations = env.reset_many(env_indices=[0, 1])
+            self.assertEqual([obs.num_nodes for obs in observations], [6, 4])
+
+            actions = [env.rand_act(env_idx=0), env.rand_act(env_idx=1)]
+            self.assertEqual([tuple(action.shape) for action in actions], [(6, 1), (4, 1)])
+
+            results = env.step_many(actions, env_indices=[0, 1])
+            self.assertEqual([result[0].num_nodes for result in results], [6, 4])
+            self.assertEqual([result[3]["task"] for result in results], cfg.tasks)
+        finally:
+            env.close()
+
+    def test_unified_mlp_env_single_topology_reset_and_step(self):
+        cfg = flat_test_cfg(
+            task="truss-mlp",
+            truss_topology="octahedron",
+            max_steps=2,
+            nsubsteps=1,
+            domain_randomization=False,
+        )
+        env = make_env(cfg)
+        try:
+            obs = env.reset()
+            action = env.rand_act()
+            next_obs, reward, done, info = env.step(action)
+
+            self.assertEqual(obs.shape, next_obs.shape)
+            self.assertEqual(action.shape, (cfg.action_dim,))
+            self.assertTrue(float(reward) == float(reward))
+            self.assertIn("terminated", info)
+            self.assertIn("truncated", info)
+        finally:
+            env.close()
+
+    def test_unified_mlp_env_rejects_mismatched_topology_list(self):
+        cfg = flat_test_cfg(
+            task="truss-mlp",
+            truss_topologies=["octahedron", "tetrahedron"],
+            multitask=False,
+            num_envs=1,
+            max_steps=2,
+            nsubsteps=1,
+            domain_randomization=False,
+        )
+
+        with self.assertRaisesRegex(ValueError, "observation space|action space"):
+            make_env(cfg)
 
     def test_multitask_eval_records_each_task_video_key(self):
         class DummyEnv:
