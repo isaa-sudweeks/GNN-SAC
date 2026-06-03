@@ -135,6 +135,36 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_graph_rigidity_reward_uses_raw_wcrm_metric(self):
+        cfg = graph_test_cfg(
+            rigidity_weight=2.5,
+            forward_weight=0.0,
+            energy_weight=0.0,
+            alive_bonus=0.0,
+            slip_weight=0.0,
+            critical_eig_threshold=0.0,
+        )
+        env = make_env(cfg)
+        try:
+            unwrapped = env.unwrapped
+            self.assertTrue(getattr(unwrapped.mj_model, "wcrm", False))
+
+            unwrapped.mj_model._critical_eig = lambda: 0.25
+            unwrapped.mj_model.collapse_check = lambda: 99.0
+            unwrapped.mj_model.get_forward_velocity = lambda: 0.0
+            unwrapped.mj_model.get_slip_penalty = lambda height: 0.0
+
+            action = np.zeros(unwrapped.mj_model.model.nu, dtype=np.float32)
+            reward, info, terminated = unwrapped._compute_reward(action)
+
+            self.assertFalse(terminated)
+            self.assertEqual(info["critical_eig"], 0.25)
+            self.assertEqual(info["critical_eig_raw"], 0.25)
+            self.assertAlmostEqual(info["rigidity"], 2.5 * 0.25)
+            self.assertAlmostEqual(reward, 2.5 * 0.25)
+        finally:
+            env.close()
+
     def test_graph_multitask_octahedron_and_tetrahedron_step(self):
         cfg = graph_test_cfg(
             multitask=True,

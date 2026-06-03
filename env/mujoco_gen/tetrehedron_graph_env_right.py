@@ -9,13 +9,15 @@ from mujoco_truss_gen import (
     DomainRandomizationConfig,
 )
 
+from env.mujoco_gen.rigidity_reward import WorstCaseRigidityRewardMixin
+
 register(
     id="MujocoTetrahedronGraphEnvRight-v0",
     entry_point="env.mujoco_gen.tetrehedron_graph_env_right:MujocoTetrahedronGraphEnvRight",
 )
 
 
-class MujocoTetrahedronGraphEnvRight(MujocoRelativeObsEnv):
+class MujocoTetrahedronGraphEnvRight(WorstCaseRigidityRewardMixin, MujocoRelativeObsEnv):
     """
     Generated octahedron truss environment that emits graph dict observations.
 
