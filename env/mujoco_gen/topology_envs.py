@@ -40,19 +40,47 @@ def available_truss_topologies():
     return tuple(sorted(PRESETS))
 
 
-def resolve_truss_topology(config):
-    topology = str(_cfg_get(config, "truss_topology", _cfg_get(config, "topology_id", "octahedron")))
+def parse_truss_topology_spec(topology_spec):
+    topology = str(topology_spec)
+    realistic = None
     if topology.endswith("-generated"):
         topology = topology.removesuffix("-generated")
+    if ":" in topology:
+        topology, variant = topology.split(":", 1)
+        if variant == "realistic":
+            realistic = True
+        elif variant in {"simple", "default", "physical"}:
+            realistic = False
+        else:
+            raise ValueError(
+                f"Unknown truss topology variant '{variant}' in '{topology_spec}'. "
+                "Supported variants: realistic, simple."
+            )
     aliases = {
         "octehedron": "octahedron",
         "tetrehedron": "tetrahedron",
     }
     topology = aliases.get(topology, topology)
+    return topology, realistic
+
+
+def resolve_truss_topology(config):
+    topology, _ = parse_truss_topology_spec(
+        _cfg_get(config, "truss_topology", _cfg_get(config, "topology_id", "octahedron"))
+    )
     if topology not in PRESETS:
         known = ", ".join(available_truss_topologies())
         raise ValueError(f"Unknown truss topology '{topology}'. Known mujoco-truss-gen presets: {known}")
     return topology
+
+
+def resolve_truss_realistic(config):
+    _, topology_realistic = parse_truss_topology_spec(
+        _cfg_get(config, "truss_topology", _cfg_get(config, "topology_id", "octahedron"))
+    )
+    if topology_realistic is not None:
+        return topology_realistic
+    return bool(_cfg_get(config, "truss_realistic", False))
 
 
 def _domain_randomization(config, topology, realistic):
@@ -71,7 +99,7 @@ def _domain_randomization(config, topology, realistic):
 
 def make_truss_env_config(config):
     topology = resolve_truss_topology(config)
-    realistic = bool(_cfg_get(config, "truss_realistic", False))
+    realistic = resolve_truss_realistic(config)
     model_source = get_mujoco_spec(topology, realistic=realistic)
     return TrussEnvConfig(
         model_source=model_source,
@@ -113,7 +141,7 @@ class MujocoPresetGraphEnv(WorstCaseRigidityRewardMixin, MujocoRelativeObsEnv):
     def _graph_view(self):
         configured = str(_cfg_get(self.source_config, "truss_graph_view", "auto"))
         if configured == "auto":
-            return "logical" if bool(_cfg_get(self.source_config, "truss_realistic", False)) else "physical"
+            return "logical" if resolve_truss_realistic(self.source_config) else "physical"
         if configured not in {"physical", "logical"}:
             raise ValueError("truss_graph_view must be 'auto', 'physical', or 'logical'.")
         return configured

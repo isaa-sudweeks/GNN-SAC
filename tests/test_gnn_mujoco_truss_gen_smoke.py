@@ -214,6 +214,36 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_graph_topology_list_accepts_realistic_variant_suffix(self):
+        cfg = graph_test_cfg(
+            task="truss-graph",
+            truss_topologies=["octahedron", "octahedron:realistic", "solar_array"],
+            multitask=False,
+            num_envs=1,
+            max_steps=2,
+            nsubsteps=1,
+            domain_randomization=False,
+        )
+        env = make_env(cfg)
+        try:
+            self.assertEqual(
+                cfg.tasks,
+                [
+                    "truss-graph:octahedron",
+                    "truss-graph:octahedron:realistic",
+                    "truss-graph:solar_array",
+                ],
+            )
+            observations = env.reset_many(env_indices=[0, 1, 2])
+            self.assertEqual([obs.x.shape[1] for obs in observations], [6, 6, 6])
+
+            actions = [env.rand_act(env_idx=idx) for idx in range(3)]
+            results = env.step_many(actions, env_indices=[0, 1, 2])
+            self.assertEqual([result[3]["task"] for result in results], cfg.tasks)
+            self.assertTrue(all(float(result[1]) == float(result[1]) for result in results))
+        finally:
+            env.close()
+
     def test_unified_mlp_env_single_topology_reset_and_step(self):
         cfg = flat_test_cfg(
             task="truss-mlp",

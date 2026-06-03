@@ -29,7 +29,7 @@ alive_bonus: 0.1 # Reward added each step while the structure remains valid.
 rigidity_weight: 0.1 # Reward multiplier for the normalized rigidity/collapse eigenvalue.
 slip_weight: 0.1215063801500649 # Penalty multiplier for horizontal velocity at low-contact nodes.
 slip_height: 0.1879452990963082 # Height threshold used to decide which nodes count as ground contacts.
-critical_eig_threshold: 0.03 # Terminate when normalized rigidity falls below this value.
+critical_eig_threshold: 0.003 # Terminate when normalized rigidity falls below this value.
 
 # Flat observation/action dimensions. make_env overwrites action_dim from the Gym space.
 obs_dim: 44 # Flat default octahedron observation size (overwritten at runtime).

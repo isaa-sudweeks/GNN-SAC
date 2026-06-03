@@ -115,6 +115,22 @@ truss_topologies:
   - tetrahedron
 ```
 
+- Add `:realistic` to one topology entry to use the realistic generated variant for only that entry.
+
+```yaml
+task: truss-graph
+truss_topologies:
+  - octahedron
+  - octahedron:realistic
+  - solar_array
+```
+
+When overriding a topology list from zsh, quote the Hydra list so the shell does not treat square brackets as a filename pattern. Omitting spaces inside the list is the least fragile form:
+
+```bash
+uv run python sac/gnn_train.py exp_name=env_test_multi_task 'truss_topologies=[octahedron,octahedron:realistic,solar_array]'
+```
+
 - Use `eval_task` for a different evaluation topology. The `task:topology` form sets the base environment task and the generated topology in one string.
 
 ```yaml

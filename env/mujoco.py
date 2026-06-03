@@ -8,6 +8,7 @@ import env.truss.velocity_command_env_left
 import env.truss.velocity_command_env_up
 import env.truss.velocity_command_env_down
 import env.mujoco_gen.topology_envs
+from env.mujoco_gen.topology_envs import parse_truss_topology_spec
 
 # How to add my own custom task
 # Step 1: Add the class task definition to the tasks folder 
@@ -71,12 +72,17 @@ def _base_task_and_topology(task):
 def _config_with_topology(cfg, topology):
     if topology is None:
         return cfg
+    topology_name, realistic = parse_truss_topology_spec(topology)
     try:
         from omegaconf import open_dict
         with open_dict(cfg):
-            cfg.truss_topology = topology
+            cfg.truss_topology = topology_name
+            if realistic is not None:
+                cfg.truss_realistic = realistic
     except Exception:
-        setattr(cfg, "truss_topology", topology)
+        setattr(cfg, "truss_topology", topology_name)
+        if realistic is not None:
+            setattr(cfg, "truss_realistic", realistic)
     return cfg
 
 class MuJoCoWrapper(gym.Wrapper):
