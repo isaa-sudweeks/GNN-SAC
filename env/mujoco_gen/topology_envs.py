@@ -1,0 +1,375 @@
+import copy
+import xml.etree.ElementTree as ET
+
+import numpy as np
+from gymnasium import spaces
+from gymnasium.envs.registration import register, registry
+
+from mujoco_truss_gen import (
+    DomainRandomizationConfig,
+    MujocoRelativeObsEnv,
+    PRESETS,
+    TrussEnvConfig,
+    get_edge_index,
+    get_mujoco_spec,
+    get_node_features,
+)
+
+from env.mujoco_gen.rigidity_reward import WorstCaseRigidityRewardMixin
+
+
+def _safe_register(env_id, entry_point):
+    if env_id not in registry:
+        register(id=env_id, entry_point=entry_point)
+
+
+def _cfg_get(config, name, default=None):
+    if hasattr(config, "get"):
+        return config.get(name, default)
+    return getattr(config, name, default)
+
+
+def _copy_config_with(config, **updates):
+    copied = copy.copy(config)
+    for key, value in updates.items():
+        setattr(copied, key, value)
+    return copied
+
+
+def available_truss_topologies():
+    return tuple(sorted(PRESETS))
+
+
+def parse_truss_topology_spec(topology_spec):
+    topology = str(topology_spec)
+    realistic = None
+    if topology.endswith("-generated"):
+        topology = topology.removesuffix("-generated")
+    if ":" in topology:
+        topology, variant = topology.split(":", 1)
+        if variant == "realistic":
+            realistic = True
+        elif variant in {"simple", "default", "physical"}:
+            realistic = False
+        else:
+            raise ValueError(
+                f"Unknown truss topology variant '{variant}' in '{topology_spec}'. "
+                "Supported variants: realistic, simple."
+            )
+    aliases = {
+        "octehedron": "octahedron",
+        "tetrehedron": "tetrahedron",
+    }
+    topology = aliases.get(topology, topology)
+    return topology, realistic
+
+
+def resolve_truss_topology(config):
+    topology, _ = parse_truss_topology_spec(
+        _cfg_get(config, "truss_topology", _cfg_get(config, "topology_id", "octahedron"))
+    )
+    if topology not in PRESETS:
+        known = ", ".join(available_truss_topologies())
+        raise ValueError(f"Unknown truss topology '{topology}'. Known mujoco-truss-gen presets: {known}")
+    return topology
+
+
+def resolve_truss_realistic(config):
+    _, topology_realistic = parse_truss_topology_spec(
+        _cfg_get(config, "truss_topology", _cfg_get(config, "topology_id", "octahedron"))
+    )
+    if topology_realistic is not None:
+        return topology_realistic
+    return bool(_cfg_get(config, "truss_realistic", False))
+
+
+def _domain_randomization(config, topology, realistic):
+    if not bool(_cfg_get(config, "domain_randomization", False)):
+        return None
+
+    def randomized_model(rng):
+        scale = rng.uniform(
+            float(_cfg_get(config, "length_scale_min", 1.0)),
+            float(_cfg_get(config, "length_scale_max", 1.0)),
+        )
+        return get_mujoco_spec(topology, realistic=realistic, scale=scale)
+
+    return DomainRandomizationConfig(model_factory=randomized_model)
+
+
+def make_truss_env_config(config):
+    topology = resolve_truss_topology(config)
+    realistic = resolve_truss_realistic(config)
+    model_source = get_mujoco_spec(topology, realistic=realistic)
+    return TrussEnvConfig(
+        model_source=model_source,
+        max_steps=int(_cfg_get(config, "max_steps", 10000)),
+        nsubsteps=int(_cfg_get(config, "nsubsteps", 1)),
+        speed=float(_cfg_get(config, "speed", 0.01)),
+        forward_weight=float(_cfg_get(config, "forward_weight", 5.0)),
+        energy_weight=float(_cfg_get(config, "energy_weight", 0.005)),
+        alive_bonus=float(_cfg_get(config, "alive_bonus", 0.1)),
+        rigidity_weight=float(_cfg_get(config, "rigidity_weight", 0.5)),
+        slip_weight=float(_cfg_get(config, "slip_weight", 0.1)),
+        critical_eig_threshold=float(_cfg_get(config, "critical_eig_threshold", 0.03)),
+        slip_height=float(_cfg_get(config, "slip_height", 0.2)),
+        domain_randomization=_domain_randomization(config, topology, realistic),
+        normalize_observations=bool(
+            _cfg_get(config, "normalize_observations", _cfg_get(config, "obs_norm", False))
+        ),
+    )
+
+
+class MujocoPresetMLPEnv(MujocoRelativeObsEnv):
+    """Flat observation/action environment for any mujoco-truss-gen preset."""
+
+    def __init__(self, config, render_mode=None, rank=0):
+        self.topology = resolve_truss_topology(config)
+        super().__init__(make_truss_env_config(config), render_mode=render_mode, rank=rank)
+
+
+class MujocoPresetGraphEnv(WorstCaseRigidityRewardMixin, MujocoRelativeObsEnv):
+    """Graph observation environment for any mujoco-truss-gen preset."""
+
+    def __init__(self, config, render_mode=None, rank=0):
+        self.source_config = config
+        self.topology = resolve_truss_topology(config)
+        self.node_action_dim = int(_cfg_get(config, "node_action_dim", 1))
+        self.node_feature_dim = 6
+        super().__init__(make_truss_env_config(config), render_mode=render_mode, rank=rank)
+
+    def _graph_view(self):
+        configured = str(_cfg_get(self.source_config, "truss_graph_view", "auto"))
+        if configured == "auto":
+            return "logical" if resolve_truss_realistic(self.source_config) else "physical"
+        if configured not in {"physical", "logical"}:
+            raise ValueError("truss_graph_view must be 'auto', 'physical', or 'logical'.")
+        return configured
+
+    def _node_names(self):
+        if self._graph_view() == "logical":
+            return self._logical_node_names()
+        return list(self.mj_model.node_names)
+
+    def _define_action_space(self):
+        self.action_space = spaces.Box(
+            low=-1.0,
+            high=1.0,
+            shape=(len(self._node_names()), self.node_action_dim),
+            dtype=np.float32,
+        )
+
+    def _on_model_changed(self):
+        super()._on_model_changed()
+        self.logical_node_names = self._logical_node_names()
+        self.graph_node_names = self._node_names()
+        self.node_feature_dim = 6
+        self._node_to_idx = {name: idx for idx, name in enumerate(self.graph_node_names)}
+        self._actuator_edges = self._build_actuator_edges()
+        self._define_action_space()
+        self._define_observation_space()
+
+    def _define_observation_space(self):
+        edge_index = get_edge_index(self.mj_model, graph_view=self._graph_view())
+        self.observation_space = spaces.Dict(
+            {
+                "x": spaces.Box(
+                    low=-np.inf,
+                    high=np.inf,
+                    shape=(len(self._node_names()), self.node_feature_dim),
+                    dtype=np.float32,
+                ),
+                "edge_index": spaces.Box(
+                    low=0,
+                    high=max(len(self._node_names()) - 1, 0),
+                    shape=edge_index.shape,
+                    dtype=np.int64,
+                ),
+            }
+        )
+
+    def _get_obs(self):
+        graph_view = self._graph_view()
+        edge_index = get_edge_index(self.mj_model, graph_view=graph_view)
+        features = get_node_features(
+            self.mj_model,
+            graph_view=graph_view,
+            aggregation="connector_ball",
+        )
+
+        normalize_observations = bool(self.config.normalize_observations)
+        bbox_dimensions = self.mj_model.initial_bounding_box_dimensions
+        com = np.mean(features[:, :3], axis=0) if features.size else np.zeros(3)
+        pos_rel = features[:, :3].copy()
+        if pos_rel.size:
+            pos_rel[:, 0] -= com[0]
+            pos_rel[:, 1] -= com[1]
+
+        if normalize_observations:
+            pos_rel = pos_rel / bbox_dimensions
+            vel_norm = features[:, 3:] / bbox_dimensions
+        else:
+            vel_norm = features[:, 3:]
+
+        return {
+            "x": np.concatenate([pos_rel, vel_norm], axis=1).astype(np.float32),
+            "edge_index": edge_index,
+        }
+
+    def step(self, action):
+        action = np.asarray(action, dtype=np.float32)
+        if action.shape == (self.num_external_actuators,) or action.size == self.num_external_actuators:
+            return self._step_actuator_action(action.reshape(self.num_external_actuators))
+        if action.shape == (self.mj_model.model.nu,) or action.size == self.mj_model.model.nu:
+            external_action = action.reshape(self.mj_model.model.nu)[self.mj_model.external_actuator_ids]
+            return self._step_actuator_action(external_action)
+        return self._step_actuator_action(self._node_action_to_actuator_action(action))
+
+    def _step_actuator_action(self, actuator_action):
+        actuator_action = np.asarray(actuator_action, dtype=np.float32)
+        if actuator_action.size != self.num_external_actuators:
+            raise ValueError(
+                "Actuator action must target external tendon controls only; "
+                f"got shape {actuator_action.shape} for {self.num_external_actuators} external actuators."
+            )
+        actuator_action = np.clip(actuator_action.reshape(self.num_external_actuators), -1.0, 1.0)
+        ctrl = self.mj_model.get_external_ctrl() + actuator_action * self.config.speed
+        ctrlrange = self.mj_model.get_external_ctrlrange()
+        ctrl = np.clip(ctrl, ctrlrange[:, 0], ctrlrange[:, 1])
+        previous_com = self._center_of_mass()
+        self._advance(ctrl)
+        reward, info, terminated = self._compute_reward(actuator_action, previous_com)
+        truncated = self.steps >= self.max_steps
+        return self._get_obs(), reward, terminated, truncated, info
+
+    @property
+    def num_external_actuators(self):
+        return int(len(getattr(self.mj_model, "external_actuator_ids", range(self.mj_model.model.nu))))
+
+    def _logical_node_names(self):
+        return sorted(
+            {self._logical_node_name(node_name) for node_name in self.mj_model.node_names},
+            key=self._node_sort_key,
+        )
+
+    @staticmethod
+    def _logical_node_name(node_name):
+        return node_name.split("_tri_", 1)[0]
+
+    @staticmethod
+    def _node_sort_key(node_name):
+        suffix = node_name.removeprefix("node_")
+        if suffix.isdigit():
+            return (0, int(suffix))
+        return (1, suffix)
+
+    def _build_actuator_edges(self):
+        tendon_edges = {}
+        for tendon_name, node_pair in self._tendon_node_pairs_from_xml().items():
+            tendon_id = self._tendon_id(tendon_name)
+            if tendon_id >= 0:
+                tendon_edges[tendon_id] = node_pair
+
+        actuator_edges = []
+        for actuator_id in getattr(self.mj_model, "external_actuator_ids", range(self.mj_model.model.nu)):
+            tendon_id = int(self.mj_model.model.actuator_trnid[actuator_id, 0])
+            actuator_edges.append(tendon_edges.get(tendon_id))
+        return actuator_edges
+
+    def _tendon_id(self, tendon_name):
+        for tendon_id in range(self.mj_model.model.ntendon):
+            if self.mj_model.model.tendon(tendon_id).name == tendon_name:
+                return tendon_id
+        return -1
+
+    def _tendon_node_pairs_from_xml(self):
+        tendon_edges = {}
+        xml = getattr(self.mj_model, "xml", None)
+        site_to_node = getattr(self.mj_model, "site_to_node", {})
+        if xml and site_to_node:
+            root = ET.fromstring(xml)
+            tendon_root = root.find("tendon")
+            if tendon_root is not None:
+                for spatial in tendon_root.findall("spatial"):
+                    tendon_name = spatial.get("name")
+                    sites = [site_ref.get("site") for site_ref in spatial.findall("site")]
+                    sites = [site for site in sites if site]
+                    if tendon_name is None or len(sites) != 2:
+                        continue
+                    node_pair = tuple(site_to_node.get(site) for site in sites)
+                    if None in node_pair or node_pair[0] == node_pair[1]:
+                        continue
+                    graph_pair = self._to_graph_node_pair(node_pair)
+                    if graph_pair is not None:
+                        tendon_edges[tendon_name] = graph_pair
+                return tendon_edges
+
+        for tendon_id in range(self.mj_model.model.ntendon):
+            tendon_name = self.mj_model.model.tendon(tendon_id).name
+            node_pair = self._node_pair_from_tendon_name(tendon_name)
+            if node_pair is not None:
+                tendon_edges[tendon_name] = node_pair
+        return tendon_edges
+
+    def _to_graph_node_pair(self, node_pair):
+        if self._graph_view() == "logical":
+            node_pair = tuple(self._logical_node_name(node) for node in node_pair)
+        if node_pair[0] == node_pair[1]:
+            return None
+        if node_pair[0] not in self._node_to_idx or node_pair[1] not in self._node_to_idx:
+            return None
+        return node_pair
+
+    def _node_pair_from_tendon_name(self, tendon_name):
+        if not tendon_name.startswith("tendon_"):
+            return None
+        node_suffixes = tendon_name.removeprefix("tendon_").split("_node_")
+        if len(node_suffixes) != 2:
+            return None
+        node_a = node_suffixes[0] if node_suffixes[0].startswith("node_") else f"node_{node_suffixes[0]}"
+        node_b = f"node_{node_suffixes[1]}"
+        return self._to_graph_node_pair((node_a, node_b))
+
+    def _node_action_to_actuator_action(self, action):
+        node_actions = np.asarray(action, dtype=np.float32)
+        expected_size = len(self.graph_node_names) * self.node_action_dim
+        if node_actions.size != expected_size:
+            raise ValueError(
+                "Graph node action must have one scalar action per graph node; "
+                f"got shape {node_actions.shape} for {len(self.graph_node_names)} nodes."
+            )
+        node_actions = node_actions.reshape(len(self.graph_node_names), self.node_action_dim)
+        actuator_action = np.zeros(self.num_external_actuators, dtype=np.float32)
+        for actuator_id, node_pair in enumerate(self._actuator_edges):
+            if node_pair is None:
+                continue
+            node_a, node_b = node_pair
+            actuator_action[actuator_id] = node_actions[self._node_to_idx[node_a], 0] + node_actions[
+                self._node_to_idx[node_b], 0
+            ]
+        return np.clip(actuator_action, -1.0, 1.0).astype(np.float32, copy=False)
+
+
+class MujocoOctahedronGraphEnvRight(MujocoPresetGraphEnv):
+    def __init__(self, config, render_mode=None, rank=0):
+        super().__init__(_copy_config_with(config, truss_topology="octahedron", truss_realistic=False), render_mode, rank)
+
+
+class MujocoOctahedronGraphEnvRightRealistic(MujocoPresetGraphEnv):
+    def __init__(self, config, render_mode=None, rank=0):
+        super().__init__(_copy_config_with(config, truss_topology="octahedron", truss_realistic=True), render_mode, rank)
+
+
+class MujocoTetrahedronGraphEnvRight(MujocoPresetGraphEnv):
+    def __init__(self, config, render_mode=None, rank=0):
+        super().__init__(_copy_config_with(config, truss_topology="tetrahedron", truss_realistic=False), render_mode, rank)
+
+
+_safe_register("MujocoPresetMLPEnv-v0", "env.mujoco_gen.topology_envs:MujocoPresetMLPEnv")
+_safe_register("MujocoPresetGraphEnv-v0", "env.mujoco_gen.topology_envs:MujocoPresetGraphEnv")
+_safe_register("MujocoOctahedronGraphEnvRight-v0", "env.mujoco_gen.topology_envs:MujocoOctahedronGraphEnvRight")
+_safe_register(
+    "MujocoOctahedronGraphEnvRightRealistic-v0",
+    "env.mujoco_gen.topology_envs:MujocoOctahedronGraphEnvRightRealistic",
+)
+_safe_register("MujocoTetrahedronGraphEnvRight-v0", "env.mujoco_gen.topology_envs:MujocoTetrahedronGraphEnvRight")

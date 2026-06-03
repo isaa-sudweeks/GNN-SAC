@@ -11,10 +11,11 @@ device: cpu
 work_dir: ???
 
 # Graph environment
-task: octahedron-graph-right
+task: truss-graph
 env_name: ${task}
 use_graph_observations: true
-topology_id: octahedron-generated
+truss_topology: octahedron
+topology_id: ${truss_topology}
 node_feature_dim: 6
 obs_dim: 6
 node_action_dim: 1 # Per-node stochastic action width used by the GNN actor/critic.

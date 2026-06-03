@@ -5,6 +5,10 @@ task: truss-velocity-command-right # Registered task key from env/mujoco.py.
 env_name: ${task} # Display/logging name for the selected environment.
 obs: state # Observation type expected by the MuJoCo environment factory.
 xml_path: env/truss/assets/Baseline/octahedron_velocity_integrated_ctr.xml # MuJoCo XML model used by the truss environment.
+truss_topology: octahedron # mujoco-truss-gen preset used by unified truss envs.
+truss_topologies: null # Optional list of mujoco-truss-gen presets for multi-topology runs.
+truss_realistic: false # Whether unified truss envs should request realistic generated models.
+truss_graph_view: auto # Graph view for unified graph envs: auto, physical, or logical.
 
 # Simulation timing
 mujoco_backend: mujoco # Simulation backend for custom truss envs: mjx for MuJoCo-JAX, mujoco for native MuJoCo.

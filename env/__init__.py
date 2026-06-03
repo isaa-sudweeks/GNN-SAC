@@ -61,11 +61,36 @@ def _obs_shapes(env, cfg):
 
 def _is_graph_env(cfg):
     tasks = list(getattr(cfg, "tasks", [getattr(cfg, "task", "")]))
-    return bool(getattr(cfg, "use_graph_observations", False)) or any("graph" in task for task in tasks)
+    return bool(getattr(cfg, "use_graph_observations", False)) or any("graph" in str(task) for task in tasks)
 
 def _num_policy_actuators(env):
     mj_model = env.unwrapped.mj_model
     return int(len(getattr(mj_model, "external_actuator_ids", range(mj_model.model.nu))))
+
+def _configured_truss_topologies(cfg):
+    topologies = getattr(cfg, "truss_topologies", None)
+    if topologies in (None, "null"):
+        return []
+    if isinstance(topologies, str):
+        return [topologies]
+    return list(topologies)
+
+def _apply_truss_topology_tasks(cfg):
+    topologies = _configured_truss_topologies(cfg)
+    if not topologies:
+        return
+    base_task = str(getattr(cfg, "task", "truss-graph")).split(":", 1)[0]
+    if len(topologies) == 1:
+        cfg.truss_topology = topologies[0]
+        cfg.task = base_task
+        cfg.tasks = [base_task]
+        return
+    if int(getattr(cfg, "num_envs", 1)) > 1 and not bool(getattr(cfg, "multitask", False)):
+        raise ValueError("Use either truss_topologies for topology multitask runs or num_envs>1 for repeated same-env runs, not both.")
+    cfg.multitask = True
+    cfg.num_envs = 1
+    cfg.task = base_task
+    cfg.tasks = [f"{base_task}:{topology}" for topology in topologies]
 
 def make_env(cfg):
     """
@@ -75,6 +100,7 @@ def make_env(cfg):
         gym.logger.set_level(40)
     else:
         gym.logger.min_level = 40
+    _apply_truss_topology_tasks(cfg)
     env = None
     num_envs = int(getattr(cfg, "num_envs", 1))
     multitask = bool(getattr(cfg, "multitask", False))
@@ -89,10 +115,14 @@ def make_env(cfg):
             env = RepeatedEnvWrapper(cfg, [make_dm_control_env, make_maniskill_env, make_metaworld_env, make_myosuite_env, make_mujoco_env])
         cfg.obs_shapes = []
         cfg.action_dims = []
+        cfg.policy_action_counts = []
+        cfg.policy_actuator_counts = []
         cfg.episode_lengths = []
         for e in env.envs:
             cfg.obs_shapes.append(_obs_shapes(e, cfg))
             cfg.action_dims.append(int(e.action_space.shape[0]))
+            cfg.policy_action_counts.append(int(np.prod(e.action_space.shape)))
+            cfg.policy_actuator_counts.append(_num_policy_actuators(e))
             cfg.episode_lengths.append(int(_max_episode_steps(e)))
         cfg.action_dim = int(max(cfg.action_dims))
         cfg.episode_length = int(max(cfg.episode_lengths))
@@ -113,8 +143,8 @@ def make_env(cfg):
             cfg.node_feature_dim = cfg.obs_dim
             cfg.node_action_dim = int(getattr(env.unwrapped, "node_action_dim", env.action_space.shape[-1]))
             cfg.action_dim = cfg.node_action_dim
-            cfg.num_policy_actions = int(np.prod(env.action_space.shape))
-            cfg.num_actuators = _num_policy_actuators(env)
+            cfg.num_policy_actions = int(max(cfg.policy_action_counts))
+            cfg.num_actuators = int(max(cfg.policy_actuator_counts))
         return env
     else:
         errors = []
