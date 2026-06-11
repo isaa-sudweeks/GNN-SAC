@@ -67,7 +67,7 @@
 
 # Resuming Preempted Training
 - Training writes resumable checkpoints to `${work_dir}/checkpoints` every `checkpoint_freq` environment steps. Each checkpoint contains the agent weights, optimizer states, replay buffer, trainer counters, logger state, RNG state, and resolved config metadata.
-- `latest.pt` is always updated alongside numbered `step_<N>.pt` checkpoints. `checkpoint_keep_last` controls how many numbered checkpoints are retained.
+- `latest.pt` is always updated alongside numbered `step_<N>.pt` checkpoints. Lightweight `*.agent.pt` companions contain only inference weights, and `checkpoint_keep_last` prunes both forms together.
 - Resume a run by using the same training config and setting `resume_from_checkpoint=latest` with the same `work_dir`, or by passing an explicit checkpoint path:
 
 ```bash

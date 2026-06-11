@@ -25,6 +25,10 @@ visualize_fps: 60
 visualize_speed: 1.0
 visualize_sleep: 0.0
 
+# Keep a single MuJoCo model across episodes. Training enables model-replacing
+# domain randomization, which is incompatible with reusing the macOS passive viewer.
+domain_randomization: false
+
 # Keep training-side logging disabled during standalone inference.
 enable_wandb: false
 save_agent: false

@@ -4,11 +4,13 @@ from pathlib import Path
 import argparse
 import csv
 import os
+import pickle
 import platform
 import re
 import sys
 import time
 import types
+import warnings
 from urllib.parse import parse_qs, unquote, urlparse
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -165,13 +167,109 @@ def resolve_checkpoint(model_ref: str, cfg) -> Path:
     )
 
 
+def _agent_checkpoint_path(checkpoint: Path) -> Path:
+    return checkpoint.with_name(f"{checkpoint.stem}.agent{checkpoint.suffix}")
+
+
+class _AgentStateFound(Exception):
+    def __init__(self, state_dict):
+        super().__init__("agent state loaded before replay buffer")
+        self.state_dict = state_dict
+
+
+class _AgentOnlyUnpickler(pickle._Unpickler):
+    dispatch = pickle._Unpickler.dispatch.copy()
+
+    def _stop_before_replay_buffer(self) -> None:
+        if not self.stack or self.stack[-1] != "buffer":
+            return
+        for index in range(len(self.stack) - 2, -1, -1):
+            if self.stack[index] != "agent" or index + 1 >= len(self.stack):
+                continue
+            agent_state = self.stack[index + 1]
+            if isinstance(agent_state, dict) and "model" in agent_state:
+                raise _AgentStateFound(agent_state)
+
+    def load_binunicode(self) -> None:
+        pickle._Unpickler.load_binunicode(self)
+        self._stop_before_replay_buffer()
+
+    def load_short_binunicode(self) -> None:
+        pickle._Unpickler.load_short_binunicode(self)
+        self._stop_before_replay_buffer()
+
+    def load_binunicode8(self) -> None:
+        pickle._Unpickler.load_binunicode8(self)
+        self._stop_before_replay_buffer()
+
+    def load_binget(self) -> None:
+        pickle._Unpickler.load_binget(self)
+        self._stop_before_replay_buffer()
+
+    def load_long_binget(self) -> None:
+        pickle._Unpickler.load_long_binget(self)
+        self._stop_before_replay_buffer()
+
+    dispatch[pickle.BINUNICODE[0]] = load_binunicode
+    dispatch[pickle.SHORT_BINUNICODE[0]] = load_short_binunicode
+    dispatch[pickle.BINUNICODE8[0]] = load_binunicode8
+    dispatch[pickle.BINGET[0]] = load_binget
+    dispatch[pickle.LONG_BINGET[0]] = load_long_binget
+
+
+class _AgentOnlyPickleModule:
+    __name__ = pickle.__name__
+    Unpickler = _AgentOnlyUnpickler
+    load = pickle.load
+
+
+def _torch_load(checkpoint: Path, *, pickle_module=None):
+    kwargs = {
+        "map_location": "cpu",
+        "weights_only": False,
+        "mmap": True,
+    }
+    if pickle_module is not None:
+        kwargs["pickle_module"] = pickle_module
+    try:
+        return torch.load(checkpoint, **kwargs)
+    except RuntimeError as exc:
+        if "mmap" not in str(exc).lower():
+            raise
+        kwargs["mmap"] = False
+        return torch.load(checkpoint, **kwargs)
+
+
+def _load_checkpoint_file(checkpoint: Path, *, agent_only: bool = False):
+    if agent_only:
+        try:
+            return _torch_load(checkpoint, pickle_module=_AgentOnlyPickleModule), False
+        except _AgentStateFound as found:
+            return found.state_dict, True
+    return _torch_load(checkpoint), False
+
+
 def load_agent_checkpoint(agent: GNNSAC, checkpoint: Path) -> dict:
-    state_dict = torch.load(checkpoint, map_location=agent.device, weights_only=False)
+    agent_checkpoint = _agent_checkpoint_path(checkpoint)
+    load_path = checkpoint
+    if agent_checkpoint.exists() and agent_checkpoint.stat().st_mtime_ns >= checkpoint.stat().st_mtime_ns:
+        load_path = agent_checkpoint
+
+    state_dict, skipped_replay = _load_checkpoint_file(load_path, agent_only=load_path == checkpoint)
     if isinstance(state_dict, dict) and "agent" in state_dict:
-        agent.load(state_dict["agent"])
-        return state_dict
-    agent.load(state_dict)
-    return state_dict if isinstance(state_dict, dict) else {}
+        agent_state = state_dict["agent"]
+    else:
+        agent_state = state_dict
+    agent.load(agent_state)
+
+    if load_path == checkpoint and (skipped_replay or isinstance(state_dict, dict) and "buffer" in state_dict):
+        try:
+            agent.save(agent_checkpoint)
+            print(colored("Cached agent-only checkpoint:", "green", attrs=["bold"]), agent_checkpoint)
+        except (OSError, RuntimeError) as exc:
+            warnings.warn(f"Could not cache agent-only checkpoint at {agent_checkpoint}: {exc}")
+
+    return agent_state if isinstance(agent_state, dict) else {}
 
 
 def _to_float(value) -> float:

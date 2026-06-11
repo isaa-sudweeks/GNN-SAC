@@ -40,6 +40,9 @@ class DummyAgent:
         self.model.load_state_dict(state_dict["model"])
         self.optim.load_state_dict(state_dict["optim"])
 
+    def save(self, path):
+        torch.save({"model": self.model.state_dict()}, path)
+
 
 class DummyBuffer:
     def __init__(self):
@@ -115,9 +118,13 @@ class CheckpointingTest(unittest.TestCase):
 
             checkpoint_dir = Path(tmp_dir) / "checkpoints"
             self.assertTrue((checkpoint_dir / "latest.pt").exists())
+            self.assertTrue((checkpoint_dir / "latest.agent.pt").exists())
             self.assertFalse((checkpoint_dir / "step_10.pt").exists())
+            self.assertFalse((checkpoint_dir / "step_10.agent.pt").exists())
             self.assertTrue((checkpoint_dir / "step_20.pt").exists())
+            self.assertTrue((checkpoint_dir / "step_20.agent.pt").exists())
             self.assertTrue((checkpoint_dir / "step_30.pt").exists())
+            self.assertTrue((checkpoint_dir / "step_30.agent.pt").exists())
 
     def test_resume_latest_resolves_checkpoint_dir(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

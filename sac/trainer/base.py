@@ -115,6 +115,17 @@ class Trainer:
         latest_path = checkpoint_dir / "latest.pt"
         torch.save(state_dict, latest_tmp)
         latest_tmp.replace(latest_path)
+
+        if hasattr(self.agent, "save"):
+            agent_tmp = checkpoint_dir / f".{identifier}.agent.tmp"
+            agent_path = checkpoint_dir / f"{identifier}.agent.pt"
+            self.agent.save(agent_tmp)
+            agent_tmp.replace(agent_path)
+
+            latest_agent_tmp = checkpoint_dir / ".latest.agent.tmp"
+            latest_agent_path = checkpoint_dir / "latest.agent.pt"
+            self.agent.save(latest_agent_tmp)
+            latest_agent_tmp.replace(latest_agent_path)
         self._prune_old_checkpoints()
         return path
 
@@ -152,12 +163,17 @@ class Trainer:
             return
         checkpoint_dir = self.checkpoint_dir()
         checkpoints = sorted(
-            checkpoint_dir.glob("step_*.pt"),
+            (
+                path
+                for path in checkpoint_dir.glob("step_*.pt")
+                if not path.name.endswith(".agent.pt")
+            ),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
         for old_checkpoint in checkpoints[keep_last:]:
             old_checkpoint.unlink(missing_ok=True)
+            old_checkpoint.with_name(f"{old_checkpoint.stem}.agent.pt").unlink(missing_ok=True)
 
     def report_eval_metrics(self, metrics, step):
         if self.trial is not None:
