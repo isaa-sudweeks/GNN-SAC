@@ -1,4 +1,5 @@
 import copy
+from dataclasses import fields
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -10,6 +11,7 @@ from mujoco_truss_gen import (
     MujocoRelativeObsEnv,
     NodeVelocityController,
     PRESETS,
+    TrussPhysicalParameters,
     TrussEnvConfig,
     get_edge_index,
     get_mujoco_spec,
@@ -28,6 +30,115 @@ def _cfg_get(config, name, default=None):
     if hasattr(config, "get"):
         return config.get(name, default)
     return getattr(config, name, default)
+
+
+_MISSING = object()
+
+
+def _is_mapping_like(value):
+    return hasattr(value, "items") or hasattr(value, "keys")
+
+
+def _physical_parameter_field_names():
+    return {field.name for field in fields(TrussPhysicalParameters)}
+
+
+def _normalize_physical_parameter_value(name, value):
+    default_value = getattr(TrussPhysicalParameters(), name)
+    if value in (None, "null"):
+        return None
+    if isinstance(default_value, list):
+        if isinstance(value, str):
+            raise ValueError(f"physical_parameters.{name} must be a list of numbers, got {value!r}")
+        try:
+            normalized = [float(item) for item in value]
+        except TypeError as exc:
+            raise ValueError(f"physical_parameters.{name} must be a list of numbers") from exc
+        if len(normalized) != len(default_value):
+            raise ValueError(
+                f"physical_parameters.{name} must have {len(default_value)} values; got {len(normalized)}"
+            )
+        return normalized
+    return float(value)
+
+
+def _physical_parameters_from_config(config, overrides=None):
+    if not bool(_cfg_get(config, "physical_parameters_enabled", True)):
+        return None
+    params_cfg = _cfg_get(config, "physical_parameters", {})
+    field_names = _physical_parameter_field_names()
+    values = {}
+    unknown_fields = []
+    if _is_mapping_like(params_cfg):
+        for name in params_cfg.keys():
+            if name not in field_names:
+                unknown_fields.append(str(name))
+    if unknown_fields:
+        unknown = ", ".join(sorted(unknown_fields))
+        raise ValueError(f"Unknown physical_parameters field(s): {unknown}")
+
+    for name in field_names:
+        value = _cfg_get(params_cfg, name, _MISSING)
+        if value is not _MISSING:
+            values[name] = _normalize_physical_parameter_value(name, value)
+    for name, value in (overrides or {}).items():
+        if name not in field_names:
+            raise ValueError(f"Unknown physical parameter override: {name}")
+        values[name] = _normalize_physical_parameter_value(name, value)
+    return TrussPhysicalParameters(**values)
+
+
+def _sample_uniform_range(rng, name, spec, base_value):
+    low = _cfg_get(spec, "min", _cfg_get(spec, "low", _MISSING))
+    high = _cfg_get(spec, "max", _cfg_get(spec, "high", _MISSING))
+    if low is _MISSING or high is _MISSING:
+        raise ValueError(
+            f"domain_randomization_params.physical_parameters.{name} requires min and max values."
+        )
+    if base_value is None or not isinstance(base_value, list):
+        return float(rng.uniform(float(low), float(high)))
+
+    low = np.asarray(low, dtype=np.float64)
+    high = np.asarray(high, dtype=np.float64)
+    if low.ndim == 0:
+        low = np.full(len(base_value), float(low))
+    if high.ndim == 0:
+        high = np.full(len(base_value), float(high))
+    if low.shape != (len(base_value),) or high.shape != (len(base_value),):
+        raise ValueError(
+            f"domain_randomization_params.physical_parameters.{name} min/max must be scalars "
+            f"or lists with {len(base_value)} values."
+        )
+    return rng.uniform(low, high).astype(float).tolist()
+
+
+def _randomized_physical_parameter_overrides(config, rng):
+    if not bool(_cfg_get(config, "physical_parameters_enabled", True)):
+        return {}
+    if not bool(_cfg_get(config, "domain_randomization", False)):
+        return {}
+    params = _cfg_get(config, "domain_randomization_params", {})
+    physical_randomization = _cfg_get(params, "physical_parameters", {})
+    if physical_randomization in (None, "null"):
+        return {}
+
+    base_params = _physical_parameters_from_config(config)
+    if base_params is None:
+        return {}
+    overrides = {}
+    field_names = _physical_parameter_field_names()
+    if _is_mapping_like(physical_randomization):
+        for name in physical_randomization.keys():
+            if name not in field_names:
+                raise ValueError(f"Unknown domain-randomized physical parameter: {name}")
+
+    for name in field_names:
+        spec = _cfg_get(physical_randomization, name, None)
+        if spec in (None, "null") or not bool(_cfg_get(spec, "enabled", False)):
+            continue
+        base_value = getattr(base_params, name)
+        overrides[name] = _sample_uniform_range(rng, name, spec, base_value)
+    return overrides
 
 
 def _copy_config_with(config, **updates):
@@ -88,13 +199,34 @@ def _domain_randomization(config, topology, realistic):
     if not bool(_cfg_get(config, "domain_randomization", False)):
         return None
     params = _cfg_get(config, "domain_randomization_params", {})
+    length_scale = _cfg_get(params, "length_scale", {})
+    scale_enabled = bool(_cfg_get(length_scale, "enabled", True))
 
     def randomized_model(rng):
-        scale = rng.uniform(
-            float(_cfg_get(params, "length_scale_min", _cfg_get(config, "length_scale_min", 1.0))),
-            float(_cfg_get(params, "length_scale_max", _cfg_get(config, "length_scale_max", 1.0))),
+        if scale_enabled:
+            scale = rng.uniform(
+                float(
+                    _cfg_get(
+                        length_scale,
+                        "min",
+                        _cfg_get(params, "length_scale_min", _cfg_get(config, "length_scale_min", 1.0)),
+                    )
+                ),
+                float(
+                    _cfg_get(
+                        length_scale,
+                        "max",
+                        _cfg_get(params, "length_scale_max", _cfg_get(config, "length_scale_max", 1.0)),
+                    )
+                ),
+            )
+        else:
+            scale = _fixed_model_scale(config)
+        physical_params = _physical_parameters_from_config(
+            config,
+            overrides=_randomized_physical_parameter_overrides(config, rng),
         )
-        return get_mujoco_spec(topology, realistic=realistic, scale=scale)
+        return get_mujoco_spec(topology, realistic=realistic, scale=scale, physical_params=physical_params)
 
     return DomainRandomizationConfig(model_factory=randomized_model)
 
@@ -112,7 +244,12 @@ def _fixed_model_scale(config):
 def make_truss_env_config(config):
     topology = resolve_truss_topology(config)
     realistic = resolve_truss_realistic(config)
-    model_source = get_mujoco_spec(topology, realistic=realistic, scale=_fixed_model_scale(config))
+    model_source = get_mujoco_spec(
+        topology,
+        realistic=realistic,
+        scale=_fixed_model_scale(config),
+        physical_params=_physical_parameters_from_config(config),
+    )
     return TrussEnvConfig(
         model_source=model_source,
         max_steps=int(_cfg_get(config, "max_steps", 10000)),

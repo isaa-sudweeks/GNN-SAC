@@ -14,11 +14,15 @@ for path in (ROOT, SAC_ROOT):
 
 from omegaconf import OmegaConf
 from torch_geometric.data import Data
-from mujoco_truss_gen import PRESETS
+from mujoco_truss_gen import PRESETS, TrussPhysicalParameters
 
 from common.gnn_buffer import GNNBuffer
 from common.parser import parse_cfg
 from env import make_env
+from env.mujoco_gen.topology_envs import (
+    _physical_parameters_from_config,
+    _randomized_physical_parameter_overrides,
+)
 from gnn_sac import GNNSAC
 from trainer.online_trainer import OnlineTrainer
 
@@ -100,6 +104,76 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
 
         trainer.cfg.domain_randomization_params["action_noise"]["apply_to_seed_actions"] = False
         self.assertTrue(torch.equal(trainer._apply_action_noise(action, seed_action=True), action))
+
+    def test_physical_parameters_are_loaded_from_config(self):
+        cfg = graph_test_cfg(
+            physical_parameters={
+                "node_radius": 0.2,
+                "box_size": [0.1, 0.2, 0.3],
+                "connector_rod_length": None,
+            }
+        )
+
+        params = _physical_parameters_from_config(cfg)
+
+        self.assertIsInstance(params, TrussPhysicalParameters)
+        self.assertEqual(params.node_radius, 0.2)
+        self.assertEqual(params.box_size, [0.1, 0.2, 0.3])
+        self.assertIsNone(params.connector_rod_length)
+
+    def test_physical_parameters_can_be_disabled_for_mujoco_truss_gen_defaults(self):
+        cfg = graph_test_cfg(
+            physical_parameters_enabled=False,
+            physical_parameters={
+                "node_radius": 0.2,
+            },
+            domain_randomization=True,
+            domain_randomization_params={
+                "physical_parameters": {
+                    "node_radius": {
+                        "enabled": True,
+                        "min": 0.3,
+                        "max": 0.3,
+                    },
+                }
+            },
+        )
+
+        self.assertIsNone(_physical_parameters_from_config(cfg))
+        self.assertEqual(_randomized_physical_parameter_overrides(cfg, np.random.default_rng(1)), {})
+
+    def test_physical_parameter_domain_randomization_can_be_toggled_per_field(self):
+        cfg = graph_test_cfg(
+            domain_randomization=True,
+            physical_parameters={
+                "node_radius": 0.1,
+                "box_size": [0.05, 0.05, 0.1],
+            },
+            domain_randomization_params={
+                "physical_parameters": {
+                    "node_radius": {
+                        "enabled": True,
+                        "min": 0.2,
+                        "max": 0.2,
+                    },
+                    "box_size": {
+                        "enabled": False,
+                        "min": [0.2, 0.2, 0.2],
+                        "max": [0.2, 0.2, 0.2],
+                    },
+                }
+            },
+        )
+
+        overrides = _randomized_physical_parameter_overrides(cfg, np.random.default_rng(1))
+        params = _physical_parameters_from_config(cfg, overrides=overrides)
+
+        self.assertEqual(overrides, {"node_radius": 0.2})
+        self.assertEqual(params.node_radius, 0.2)
+        self.assertEqual(params.box_size, [0.05, 0.05, 0.1])
+
+        cfg.domain_randomization = False
+        self.assertEqual(_randomized_physical_parameter_overrides(cfg, np.random.default_rng(1)), {})
 
     def test_eval_interval_crossing_with_batched_steps(self):
         self.assertFalse(OnlineTrainer._crossed_eval_interval(0, 3, 5))

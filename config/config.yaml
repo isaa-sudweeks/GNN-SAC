@@ -1,6 +1,7 @@
 defaults:
   - algorithm
   - environment
+  - physical_parameters
   - domain_randomization
   - _self_
 

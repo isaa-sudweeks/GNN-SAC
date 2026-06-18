@@ -7,8 +7,178 @@ domain_randomization: false
 # sensing, latency, terrain, and actuator effects can be added in one place.
 domain_randomization_params:
   # Randomly scale generated truss geometry at reset time.
+  length_scale:
+    enabled: true
+    min: 0.75
+    max: 2.0
+
+  # Backward-compatible aliases for older command-line overrides.
   length_scale_min: 0.75
   length_scale_max: 2.0
+
+  # Randomize mujoco-truss-gen TrussPhysicalParameters at reset time. Enable
+  # the master switch above, then enable individual parameters here.
+  physical_parameters:
+    node_radius:
+      enabled: false
+      min: 0.08
+      max: 0.12
+    box_size:
+      enabled: false
+      min: [0.04, 0.04, 0.08]
+      max: [0.06, 0.06, 0.12]
+    min_node_center_z:
+      enabled: false
+      min: 0.12
+      max: 0.18
+    active_node_mass:
+      enabled: false
+      min: 0.08
+      max: 0.12
+    passive_node_mass:
+      enabled: false
+      min: 0.08
+      max: 0.12
+    node_mass:
+      enabled: false
+      min: 0.08
+      max: 0.12
+    connector_radius:
+      enabled: false
+      min: 0.04
+      max: 0.06
+    connector_mass:
+      enabled: false
+      min: 0.04
+      max: 0.06
+    rod_radius:
+      enabled: false
+      min: 0.02
+      max: 0.03
+    rod_mass:
+      enabled: false
+      min: 0.04
+      max: 0.06
+    triangle_body_mass:
+      enabled: false
+      min: 0.008
+      max: 0.012
+    triangle_body_gravcomp:
+      enabled: false
+      min: 0.8
+      max: 1.2
+    hinge_position_kp:
+      enabled: false
+      min: 8.0
+      max: 12.0
+    hinge_damping:
+      enabled: false
+      min: 0.8
+      max: 1.2
+    hinge_force_range:
+      enabled: false
+      min: [-120.0, 80.0]
+      max: [-80.0, 120.0]
+    hinge_ctrl_range:
+      enabled: false
+      min: [-3.455751918948773, 2.827433388230814]
+      max: [-2.827433388230814, 3.455751918948773]
+    connect_constraint_solref:
+      enabled: false
+      min: [0.008, 0.8]
+      max: [0.012, 1.2]
+    connect_constraint_solimp:
+      enabled: false
+      min: [0.76, 0.792, 0.0008, 0.4, 1.6]
+      max: [1.0, 1.0, 0.0012, 0.6, 2.4]
+    default_edge_tendon_range:
+      enabled: false
+      min: [0.4, 1.6]
+      max: [0.6, 2.4]
+    default_route_tendon_range:
+      enabled: false
+      min: [0.4, 8.0]
+      max: [0.6, 12.0]
+    edge_tendon_width:
+      enabled: false
+      min: 0.04
+      max: 0.06
+    route_tendon_width:
+      enabled: false
+      min: 0.016
+      max: 0.024
+    perimeter_constraint_tendon_width:
+      enabled: false
+      min: 0.00008
+      max: 0.00012
+    actuator_ctrl_range:
+      enabled: false
+      min: [-0.12, 0.08]
+      max: [-0.08, 0.12]
+    default_actuator_range:
+      enabled: false
+      min: [0.0, 2.4]
+      max: [0.0, 3.6]
+    abstract_actuator_kp:
+      enabled: false
+      min: 4000.0
+      max: 6000.0
+    realistic_actuator_kp:
+      enabled: false
+      min: 800.0
+      max: 1200.0
+    actuator_dampratio:
+      enabled: false
+      min: 0.8
+      max: 1.2
+    realistic_actuator_nominal_mass:
+      enabled: false
+      min: 0.08
+      max: 0.12
+    tendon_range_min_factor:
+      enabled: false
+      min: 0.4
+      max: 0.6
+    tendon_range_max_factor:
+      enabled: false
+      min: 1.6
+      max: 2.4
+    actuator_range_min_factor:
+      enabled: false
+      min: 0.0
+      max: 0.0
+    actuator_range_max_factor:
+      enabled: false
+      min: 2.4
+      max: 3.6
+    realistic_node_clone_offset:
+      enabled: false
+      min: 0.4
+      max: 0.6
+    connector_rod_length:
+      enabled: false
+      min: 0.23094010767585033
+      max: 0.34641016151377546
+    orientation_weld_solref:
+      enabled: false
+      min: [0.16, 4.0]
+      max: [0.24, 6.0]
+    orientation_weld_solimp:
+      enabled: false
+      min: [0.16, 0.24, 0.0008, 0.4, 1.6]
+      max: [0.24, 0.36, 0.0012, 0.6, 2.4]
+    orientation_weld_torquescale:
+      enabled: false
+      min: 4800.0
+      max: 7200.0
+    tendon_constraint_solref:
+      enabled: false
+      min: [0.016, 0.8]
+      max: [0.024, 1.2]
+    tendon_constraint_solimp:
+      enabled: false
+      min: [0.72, 0.76, 0.0008]
+      max: [1.0, 1.0, 0.0012]
 
   # Add Gaussian noise to normalized policy actions during training rollouts.
   # The executed action is clipped back to [clip_low, clip_high] and stored in replay.

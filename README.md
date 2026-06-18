@@ -150,5 +150,22 @@ eval_task: truss-mlp:tetrahedron
 ```
 
 - `truss_realistic` requests realistic generated models. `truss_graph_view: auto` uses physical graph nodes by default and logical graph nodes for realistic models; set it explicitly to `physical` or `logical` only when needed.
+- Generated model physical values live in `config/physical_parameters.yaml` under `physical_parameters` and apply to both training and `gnn_inference`. Set `physical_parameters_enabled: false` to skip this config and use the `mujoco-truss-gen` package defaults. Domain randomization lives in `config/domain_randomization.yaml`; use `domain_randomization` as the master switch, then enable individual entries under `domain_randomization_params.physical_parameters`.
+
+```yaml
+physical_parameters_enabled: true
+physical_parameters:
+  node_radius: 0.1
+
+domain_randomization: true
+domain_randomization_params:
+  length_scale:
+    enabled: false
+  physical_parameters:
+    node_radius:
+      enabled: true
+      min: 0.08
+      max: 0.12
+```
 
 # Current TODOs 
