@@ -164,6 +164,33 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_graph_env_scale_changes_generated_robot_size(self):
+        base_env = make_env(
+            graph_test_cfg(
+                task="truss-graph",
+                scale=1.0,
+                max_steps=2,
+                nsubsteps=1,
+                domain_randomization=False,
+            )
+        )
+        scaled_env = make_env(
+            graph_test_cfg(
+                task="truss-graph",
+                scale=2.0,
+                max_steps=2,
+                nsubsteps=1,
+                domain_randomization=False,
+            )
+        )
+        try:
+            base_dims = np.asarray(base_env.unwrapped.mj_model.initial_bounding_box_dimensions)
+            scaled_dims = np.asarray(scaled_env.unwrapped.mj_model.initial_bounding_box_dimensions)
+            np.testing.assert_allclose(scaled_dims, base_dims * 2.0, rtol=1e-5, atol=1e-6)
+        finally:
+            base_env.close()
+            scaled_env.close()
+
     def test_control_graph_mode_uses_same_graph_for_simple_and_realistic(self):
         env_stats = []
         for topology in ["octahedron", "octahedron:realistic"]:

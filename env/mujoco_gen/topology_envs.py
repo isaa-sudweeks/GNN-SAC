@@ -99,10 +99,20 @@ def _domain_randomization(config, topology, realistic):
     return DomainRandomizationConfig(model_factory=randomized_model)
 
 
+def _fixed_model_scale(config):
+    scale = _cfg_get(config, "scale", _cfg_get(config, "truss_scale", 1.0))
+    if scale in (None, "null"):
+        return 1.0
+    scale = float(scale)
+    if not np.isfinite(scale) or scale <= 0.0:
+        raise ValueError(f"scale must be a positive finite value; got {scale!r}")
+    return scale
+
+
 def make_truss_env_config(config):
     topology = resolve_truss_topology(config)
     realistic = resolve_truss_realistic(config)
-    model_source = get_mujoco_spec(topology, realistic=realistic)
+    model_source = get_mujoco_spec(topology, realistic=realistic, scale=_fixed_model_scale(config))
     return TrussEnvConfig(
         model_source=model_source,
         max_steps=int(_cfg_get(config, "max_steps", 10000)),

@@ -16,6 +16,7 @@ model_file: null
 # Inference behavior
 episodes: 5
 deterministic: true
+scale: 1.0 # Fixed mujoco-truss-gen robot geometry scale for generated truss tasks.
 inference_max_steps: null
 output_csv: null
 print_position_command: true
