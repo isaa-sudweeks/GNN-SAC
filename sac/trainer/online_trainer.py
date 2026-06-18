@@ -151,6 +151,41 @@ class OnlineTrainer(Trainer):
 
     def _metric_key(self, value):
         return re.sub(r"[^0-9a-zA-Z_.-]+", "_", str(value)).strip("_") or "env"
+
+    def _cfg_get(self, obj, key, default=None):
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        return getattr(obj, key, default)
+
+    def _action_noise_cfg(self):
+        params = self._cfg_get(self.cfg, "domain_randomization_params", {})
+        return self._cfg_get(params, "action_noise", {})
+
+    def _should_apply_action_noise(self, seed_action=False):
+        if not bool(self._cfg_get(self.cfg, "domain_randomization", False)):
+            return False
+        noise_cfg = self._action_noise_cfg()
+        if not bool(self._cfg_get(noise_cfg, "enabled", False)):
+            return False
+        if seed_action and not bool(self._cfg_get(noise_cfg, "apply_to_seed_actions", False)):
+            return False
+        return float(self._cfg_get(noise_cfg, "std", 0.0)) > 0.0
+
+    def _apply_action_noise(self, action, seed_action=False):
+        if not self._should_apply_action_noise(seed_action=seed_action):
+            return action
+        noise_cfg = self._action_noise_cfg()
+        std = float(self._cfg_get(noise_cfg, "std", 0.0))
+        low = float(self._cfg_get(noise_cfg, "clip_low", self._cfg_get(self.cfg, "action_low", -1.0)))
+        high = float(self._cfg_get(noise_cfg, "clip_high", self._cfg_get(self.cfg, "action_high", 1.0)))
+        if isinstance(action, torch.Tensor):
+            return torch.clamp(action + torch.randn_like(action) * std, low, high)
+        return np.clip(action + np.random.normal(0.0, std, size=np.asarray(action).shape), low, high).astype(
+            np.float32,
+            copy=False,
+        )
     
     def to_td(self, obs, action=None, reward=None, terminated=None):
         """
@@ -234,6 +269,7 @@ class OnlineTrainer(Trainer):
                 action = self.agent.act(obs, t0=len(self._tds)==1)
             else:
                 action = self.env.rand_act()
+            action = self._apply_action_noise(action, seed_action=self._step <= self.cfg.seed_steps)
             obs, reward, done, info = self.env.step(action)
             self._accumulate_reward_components(info)
             terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
@@ -336,6 +372,7 @@ class OnlineTrainer(Trainer):
                     action = self.agent.act(observations[env_idx], t0=len(episode_tds[env_idx]) == 1)
                 else:
                     action = self.env.rand_act(env_idx=env_idx)
+                action = self._apply_action_noise(action, seed_action=self._step <= self.cfg.seed_steps)
                 actions.append(action)
 
             results = self.env.step_many(actions, env_indices=env_indices)

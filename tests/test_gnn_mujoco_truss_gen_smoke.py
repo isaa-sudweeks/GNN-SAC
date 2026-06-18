@@ -73,6 +73,34 @@ def graph_test_cfg(**overrides):
 
 
 class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
+    def test_action_noise_is_domain_randomization_gated(self):
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        action = torch.zeros(8)
+
+        trainer.cfg = SimpleNamespace(
+            domain_randomization=False,
+            domain_randomization_params={
+                "action_noise": {
+                    "enabled": True,
+                    "std": 10.0,
+                    "clip_low": -0.1,
+                    "clip_high": 0.1,
+                    "apply_to_seed_actions": True,
+                }
+            },
+        )
+        self.assertTrue(torch.equal(trainer._apply_action_noise(action), action))
+
+        trainer.cfg.domain_randomization = True
+        torch.manual_seed(1)
+        noisy_action = trainer._apply_action_noise(action)
+        self.assertFalse(torch.equal(noisy_action, action))
+        self.assertTrue(torch.all(noisy_action <= 0.1))
+        self.assertTrue(torch.all(noisy_action >= -0.1))
+
+        trainer.cfg.domain_randomization_params["action_noise"]["apply_to_seed_actions"] = False
+        self.assertTrue(torch.equal(trainer._apply_action_noise(action, seed_action=True), action))
+
     def test_eval_interval_crossing_with_batched_steps(self):
         self.assertFalse(OnlineTrainer._crossed_eval_interval(0, 3, 5))
         self.assertTrue(OnlineTrainer._crossed_eval_interval(3, 6, 5))

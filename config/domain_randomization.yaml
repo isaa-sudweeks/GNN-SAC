@@ -1,0 +1,20 @@
+# @package _global_
+
+# Master domain-randomization switch. Keep false for deterministic/default training.
+domain_randomization: false
+
+# Domain-randomization parameters live here so future randomized dynamics,
+# sensing, latency, terrain, and actuator effects can be added in one place.
+domain_randomization_params:
+  # Randomly scale generated truss geometry at reset time.
+  length_scale_min: 0.75
+  length_scale_max: 2.0
+
+  # Add Gaussian noise to normalized policy actions during training rollouts.
+  # The executed action is clipped back to [clip_low, clip_high] and stored in replay.
+  action_noise:
+    enabled: true
+    std: 0.05
+    clip_low: -1.0
+    clip_high: 1.0
+    apply_to_seed_actions: false

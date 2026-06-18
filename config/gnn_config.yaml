@@ -1,6 +1,7 @@
 defaults:
   - algorithm
   - environment
+  - domain_randomization
   - _self_
 
 # Run identity

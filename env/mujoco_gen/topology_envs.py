@@ -87,11 +87,12 @@ def resolve_truss_realistic(config):
 def _domain_randomization(config, topology, realistic):
     if not bool(_cfg_get(config, "domain_randomization", False)):
         return None
+    params = _cfg_get(config, "domain_randomization_params", {})
 
     def randomized_model(rng):
         scale = rng.uniform(
-            float(_cfg_get(config, "length_scale_min", 1.0)),
-            float(_cfg_get(config, "length_scale_max", 1.0)),
+            float(_cfg_get(params, "length_scale_min", _cfg_get(config, "length_scale_min", 1.0))),
+            float(_cfg_get(params, "length_scale_max", _cfg_get(config, "length_scale_max", 1.0))),
         )
         return get_mujoco_spec(topology, realistic=realistic, scale=scale)
 
