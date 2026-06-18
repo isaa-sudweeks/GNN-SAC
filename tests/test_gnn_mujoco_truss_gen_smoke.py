@@ -136,6 +136,68 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_control_graph_mode_uses_same_graph_for_simple_and_realistic(self):
+        env_stats = []
+        for topology in ["octahedron", "octahedron:realistic"]:
+            cfg = graph_test_cfg(
+                task="truss-graph",
+                truss_topology=topology,
+                use_control_graph=True,
+                max_steps=2,
+                nsubsteps=1,
+                domain_randomization=False,
+            )
+            env = make_env(cfg)
+            try:
+                obs = env.reset()
+                self.assertIsInstance(obs, Data)
+                self.assertEqual(obs.edge_index.shape[0], 2)
+                self.assertEqual(obs.x.shape[0], env.action_space.shape[0])
+                self.assertEqual(env.action_space.shape[1], cfg.node_action_dim)
+                self.assertEqual(cfg.num_policy_actions, int(np.prod(env.action_space.shape)))
+
+                action = env.rand_act()
+                next_obs, reward, done, info = env.step(action)
+                self.assertIsInstance(next_obs, Data)
+                self.assertEqual(action.shape, env.action_space.shape)
+                self.assertTrue(float(reward) == float(reward))
+                self.assertIn("terminated", info)
+                self.assertIn("truncated", info)
+                env_stats.append((obs.x.shape[0], tuple(env.action_space.shape), tuple(obs.edge_index.shape)))
+            finally:
+                env.close()
+
+        self.assertEqual(env_stats[0], env_stats[1])
+
+    def test_control_graph_mode_uses_node_velocity_controller(self):
+        cfg = graph_test_cfg(
+            task="truss-graph",
+            truss_topology="octahedron",
+            use_control_graph=True,
+            max_steps=2,
+            nsubsteps=1,
+            domain_randomization=False,
+        )
+        env = make_env(cfg)
+        try:
+            env.reset()
+            action = env.rand_act()
+            normalized_node_action, ctrl = env.unwrapped._control_graph_node_action_to_actuator_ctrl(action.numpy())
+            self.assertEqual(normalized_node_action.shape[0], env.action_space.shape[0])
+            self.assertEqual(ctrl.shape[0], len(env.unwrapped.mj_model.external_actuator_ids))
+
+            def fail_legacy_node_sum(_action):
+                raise AssertionError("legacy node-action summation should not be used")
+
+            env.unwrapped._node_action_to_actuator_action = fail_legacy_node_sum
+            next_obs, reward, done, info = env.step(action)
+            self.assertIsInstance(next_obs, Data)
+            self.assertTrue(float(reward) == float(reward))
+            self.assertIn("terminated", info)
+            self.assertIn("truncated", info)
+        finally:
+            env.close()
+
     def test_graph_rigidity_reward_uses_raw_wcrm_metric(self):
         cfg = graph_test_cfg(
             rigidity_weight=2.5,

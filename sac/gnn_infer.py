@@ -310,6 +310,107 @@ def _simulation_step_seconds(env) -> float:
     return 1.0 / float(render_fps) if render_fps else 0.0
 
 
+def _action_to_numpy(action) -> np.ndarray:
+    if isinstance(action, torch.Tensor):
+        action = action.detach().cpu().numpy()
+    return np.asarray(action, dtype=np.float64)
+
+
+def _velocity_command_from_action(action, cfg) -> np.ndarray:
+    return _action_to_numpy(action) * float(getattr(cfg, "speed", 1.0))
+
+
+def _command_node_names(env, command: np.ndarray) -> list[str]:
+    for env_obj in _iter_wrapped_envs(env):
+        node_names = getattr(env_obj, "graph_node_names", None)
+        if node_names is None and hasattr(env_obj, "node_velocity_controller"):
+            node_names = getattr(env_obj.node_velocity_controller, "node_names", None)
+        if node_names is None:
+            mj_model = getattr(env_obj, "mj_model", None)
+            node_names = getattr(mj_model, "node_names", None)
+        if node_names is not None and len(node_names) == command.shape[0]:
+            return [str(name) for name in node_names]
+    return [f"node_{idx}" for idx in range(command.shape[0])]
+
+
+def _iterable_names(value) -> set[str]:
+    if value is None:
+        return set()
+    if isinstance(value, dict):
+        value = value.keys()
+    if isinstance(value, str):
+        return {value}
+    try:
+        return {str(name) for name in value}
+    except TypeError:
+        return set()
+
+
+def _active_command_nodes(env, node_names: list[str]) -> set[str] | None:
+    node_name_set = set(node_names)
+    active_attrs = (
+        "active_node_names",
+        "actuated_node_names",
+        "controllable_node_names",
+        "controlled_node_names",
+        "command_node_names",
+    )
+    passive_attrs = ("passive_node_names", "inactive_node_names", "uncontrolled_node_names")
+
+    for env_obj in _iter_wrapped_envs(env):
+        for owner in (env_obj, getattr(env_obj, "node_velocity_controller", None), getattr(env_obj, "mj_model", None)):
+            if owner is None:
+                continue
+            for attr in active_attrs:
+                names = _iterable_names(getattr(owner, attr, None)) & node_name_set
+                if names:
+                    return names
+            for attr in passive_attrs:
+                passive = _iterable_names(getattr(owner, attr, None)) & node_name_set
+                if passive:
+                    return node_name_set - passive
+
+        actuator_edges = getattr(env_obj, "_actuator_edges", None)
+        if actuator_edges:
+            active = set()
+            for node_pair in actuator_edges:
+                if node_pair is not None:
+                    active.update(str(name) for name in node_pair)
+            active &= node_name_set
+            if active:
+                return active
+
+    return None
+
+
+def _zero_passive_commands(command: np.ndarray, env) -> tuple[np.ndarray, list[str]]:
+    command = np.asarray(command, dtype=np.float64)
+    if command.ndim == 1:
+        command = command[:, None]
+    node_names = _command_node_names(env, command)
+    active_nodes = _active_command_nodes(env, node_names)
+    if active_nodes is None:
+        return command, node_names
+
+    command = command.copy()
+    for idx, node_name in enumerate(node_names):
+        if node_name not in active_nodes:
+            command[idx] = 0.0
+    return command, node_names
+
+
+def _command_dict(command: np.ndarray, env) -> dict[str, float | list[float]]:
+    command, node_names = _zero_passive_commands(command, env)
+    command_by_node = {}
+    for node_name, node_command in zip(node_names, command):
+        flattened = np.asarray(node_command, dtype=np.float64).reshape(-1)
+        if flattened.size == 1:
+            command_by_node[node_name] = float(flattened[0])
+        else:
+            command_by_node[node_name] = [float(value) for value in flattened]
+    return command_by_node
+
+
 def _update_viewer_camera(env_obj) -> None:
     viewer = getattr(env_obj, "viewer", None)
     if viewer is None:
@@ -432,16 +533,45 @@ def run_inference(cfg):
             info = {}
             step = 0
             max_steps = getattr(cfg, "inference_max_steps", None)
+            print_position_command = bool(getattr(cfg, "print_position_command", True))
+            position_command_step = getattr(cfg, "position_command_step", None)
+            position_command_dt = getattr(cfg, "position_command_dt", None)
+            if position_command_dt is None:
+                position_command_dt = _simulation_step_seconds(env)
+            position_command_dt = float(position_command_dt or 1.0)
+            position_command = None
+            printed_position_command = False
             while not done:
                 step_started_at = time.perf_counter()
                 action = agent.act(obs, t0=step == 0, eval_mode=bool(cfg.deterministic))
+                velocity_command = _velocity_command_from_action(action, cfg)
+                velocity_command, _ = _zero_passive_commands(velocity_command, env)
+                if position_command is None:
+                    position_command = np.zeros_like(velocity_command, dtype=np.float64)
+                position_command += velocity_command * position_command_dt
+                next_step = step + 1
+                if (
+                    print_position_command
+                    and position_command_step is not None
+                    and next_step == int(position_command_step)
+                ):
+                    print(
+                        f"episode={episode} step={next_step} "
+                        f"position_command={_command_dict(position_command, env)}"
+                    )
+                    printed_position_command = True
                 obs, reward, done, info = env.step(action)
                 _render_if_enabled(env, cfg, step_started_at, realtime_pacing=not smooth_rendering)
                 ep_reward += _to_float(reward)
                 ep_success = float(info.get("success", ep_success))
-                step += 1
+                step = next_step
                 if max_steps is not None and step >= int(max_steps):
                     break
+            if print_position_command and position_command is not None and not printed_position_command:
+                print(
+                    f"episode={episode} step={step} "
+                    f"position_command={_command_dict(position_command, env)}"
+                )
             row = {
                 "episode": episode,
                 "episode_reward": ep_reward,

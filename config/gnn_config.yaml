@@ -14,6 +14,7 @@ work_dir: ???
 task: truss-graph
 env_name: ${task}
 use_graph_observations: true
+use_control_graph: false # Opt-in mujoco-truss-gen control graph and incidence-based node command mapping.
 truss_topology: octahedron
 topology_id: ${truss_topology}
 node_feature_dim: 6

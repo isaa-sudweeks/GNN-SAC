@@ -8,6 +8,7 @@ from gymnasium.envs.registration import register, registry
 from mujoco_truss_gen import (
     DomainRandomizationConfig,
     MujocoRelativeObsEnv,
+    NodeVelocityController,
     PRESETS,
     TrussEnvConfig,
     get_edge_index,
@@ -138,7 +139,12 @@ class MujocoPresetGraphEnv(WorstCaseRigidityRewardMixin, MujocoRelativeObsEnv):
         self.node_feature_dim = 6
         super().__init__(make_truss_env_config(config), render_mode=render_mode, rank=rank)
 
+    def _use_control_graph(self):
+        return bool(_cfg_get(self.source_config, "use_control_graph", False))
+
     def _graph_view(self):
+        if self._use_control_graph():
+            return "control"
         configured = str(_cfg_get(self.source_config, "truss_graph_view", "auto"))
         if configured == "auto":
             return "logical" if resolve_truss_realistic(self.source_config) else "physical"
@@ -147,6 +153,10 @@ class MujocoPresetGraphEnv(WorstCaseRigidityRewardMixin, MujocoRelativeObsEnv):
         return configured
 
     def _node_names(self):
+        if self._use_control_graph():
+            if hasattr(self, "node_velocity_controller"):
+                return list(self.node_velocity_controller.node_names)
+            return list(getattr(self.mj_model, "control_node_names", []))
         if self._graph_view() == "logical":
             return self._logical_node_names()
         return list(self.mj_model.node_names)
@@ -160,14 +170,44 @@ class MujocoPresetGraphEnv(WorstCaseRigidityRewardMixin, MujocoRelativeObsEnv):
         )
 
     def _on_model_changed(self):
+        if self._use_control_graph():
+            self._initialize_node_velocity_controller()
         super()._on_model_changed()
         self.logical_node_names = self._logical_node_names()
         self.graph_node_names = self._node_names()
         self.node_feature_dim = 6
         self._node_to_idx = {name: idx for idx, name in enumerate(self.graph_node_names)}
-        self._actuator_edges = self._build_actuator_edges()
+        self._actuator_edges = [] if self._use_control_graph() else self._build_actuator_edges()
         self._define_action_space()
         self._define_observation_space()
+
+    def _initialize_node_velocity_controller(self):
+        if self.node_action_dim != 1:
+            raise ValueError("use_control_graph requires node_action_dim == 1.")
+
+        self.node_velocity_controller = NodeVelocityController(
+            self.mj_model.model,
+            getattr(self.mj_model, "xml", None),
+            self.mj_model.node_names,
+            getattr(self.mj_model, "site_to_node", {}),
+            getattr(self.mj_model, "external_actuator_ids", range(self.mj_model.model.nu)),
+        )
+        if not self.node_velocity_controller.enabled:
+            raise ValueError(
+                "use_control_graph requires mujoco-truss-gen control graph metadata "
+                "or routed node velocity control support."
+            )
+
+        actuator_ids = np.asarray(self.node_velocity_controller.actuator_ids, dtype=int)
+        external_ids = np.asarray(
+            getattr(self.mj_model, "external_actuator_ids", range(self.mj_model.model.nu)),
+            dtype=int,
+        )
+        if actuator_ids.shape != external_ids.shape or not np.array_equal(actuator_ids, external_ids):
+            raise ValueError(
+                "use_control_graph requires NodeVelocityController actuator ids to match "
+                "the environment external actuator ordering."
+            )
 
     def _define_observation_space(self):
         edge_index = get_edge_index(self.mj_model, graph_view=self._graph_view())
@@ -218,12 +258,48 @@ class MujocoPresetGraphEnv(WorstCaseRigidityRewardMixin, MujocoRelativeObsEnv):
 
     def step(self, action):
         action = np.asarray(action, dtype=np.float32)
+        if self._use_control_graph():
+            return self._step_control_graph_node_action(action)
         if action.shape == (self.num_external_actuators,) or action.size == self.num_external_actuators:
             return self._step_actuator_action(action.reshape(self.num_external_actuators))
         if action.shape == (self.mj_model.model.nu,) or action.size == self.mj_model.model.nu:
             external_action = action.reshape(self.mj_model.model.nu)[self.mj_model.external_actuator_ids]
             return self._step_actuator_action(external_action)
         return self._step_actuator_action(self._node_action_to_actuator_action(action))
+
+    def _step_control_graph_node_action(self, action):
+        normalized_node_action, ctrl = self._control_graph_node_action_to_actuator_ctrl(action)
+        previous_com = self._center_of_mass()
+        self._advance(ctrl)
+        reward, info, terminated = self._compute_reward(normalized_node_action, previous_com)
+        truncated = self.steps >= self.max_steps
+        return self._get_obs(), reward, terminated, truncated, info
+
+    def _control_graph_node_action_to_actuator_ctrl(self, action):
+        node_actions = np.asarray(action, dtype=np.float32)
+        expected_size = len(self.graph_node_names) * self.node_action_dim
+        if node_actions.size != expected_size:
+            raise ValueError(
+                "Control graph node action must have one scalar action per control node; "
+                f"got shape {node_actions.shape} for {len(self.graph_node_names)} nodes."
+            )
+
+        normalized_node_action = np.clip(
+            node_actions.reshape(len(self.graph_node_names), self.node_action_dim)[:, 0],
+            -1.0,
+            1.0,
+        ).astype(np.float32, copy=False)
+        node_commands = normalized_node_action * float(self.config.speed)
+        ctrl = self.node_velocity_controller.clipped_edge_commands(
+            self.mj_model.model,
+            node_commands,
+        ).astype(np.float32, copy=False)
+        if ctrl.size != self.num_external_actuators:
+            raise ValueError(
+                "NodeVelocityController produced an actuator command vector with "
+                f"{ctrl.size} entries for {self.num_external_actuators} external actuators."
+            )
+        return normalized_node_action, ctrl
 
     def _step_actuator_action(self, actuator_action):
         actuator_action = np.asarray(actuator_action, dtype=np.float32)
