@@ -37,8 +37,8 @@ head_hidden_dims:
 steps: 1_000_000
 seed_steps: 5_000
 pretrain_steps: 1_000
-eval_freq: 10_000
-eval_episodes: 10
+eval_freq: 100_000
+eval_episodes: 3
 
 # Experiment behavior
 episodic: true

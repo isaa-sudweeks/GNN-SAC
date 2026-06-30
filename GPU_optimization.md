@@ -12,11 +12,11 @@ The following issues are ranked by expected wall-clock impact.
 
 ### 1. Evaluation can perform five times more simulation than training
 
-The default configuration evaluates 10 episodes of up to 5,000 steps every 10,000 training steps. This can execute 50,000 evaluation steps per 10,000 training steps, in addition to an evaluation at step zero. If episodes regularly reach the time limit, total simulator work can be approximately six times the requested training workload.
+The previous default configuration evaluated 10 episodes of up to 5,000 steps every 10,000 training steps. This could execute 50,000 evaluation steps per 10,000 training steps, in addition to an evaluation at step zero. If episodes regularly reached the time limit, total simulator work could be approximately six times the requested training workload.
 
 Relevant code and configuration:
 
-- `config/gnn_config.yaml`: `eval_freq: 10_000` and `eval_episodes: 10`
+- `config/gnn_config.yaml`: optimized defaults are `eval_freq: 100_000` and `eval_episodes: 3`
 - `config/environment.yaml`: `max_steps: 5_000`
 - `sac/trainer/online_trainer.py`: synchronous evaluation loop
 

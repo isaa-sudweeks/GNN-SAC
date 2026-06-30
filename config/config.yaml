@@ -16,8 +16,8 @@ work_dir: ??? # Output directory; Hydra fills this when left unresolved.
 steps: 1_000_000 # Total environment steps to collect before ending training.
 seed_steps: 5_000 # Random-action steps collected before policy updates begin; may be raised by env setup.
 pretrain_steps: 1_000 # Number of updates to run once when seed data first becomes available.
-eval_freq: 10_000 # Environment-step interval between evaluation passes.
-eval_episodes: 10 # Number of episodes averaged for each evaluation pass.
+eval_freq: 100_000 # Environment-step interval between evaluation passes.
+eval_episodes: 3 # Number of episodes averaged for each evaluation pass.
 
 # Experiment behavior
 episodic: true # Whether true environment terminations should stop bootstrap targets.
