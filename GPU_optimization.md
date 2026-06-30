@@ -4,9 +4,9 @@
 
 This audit targets multi-million-timestep GNN-SAC training runs on research-cluster hardware with one to eight NVIDIA A100 or H200 GPUs. It separates bottlenecks in this repository from bottlenecks in `mujoco-truss-gen` so library changes can be handled independently.
 
-The current system is primarily CPU/environment-bound rather than GPU-bound. Adding GPUs will provide limited benefit until environment collection, policy batching, replay storage, and checkpointing are redesigned.
+The current GNN-SAC training path is primarily CPU/environment-bound rather than GPU-bound. The `mujoco-truss-gen` `codex/GPU_optimization` branch now provides a batched MJX environment for fixed abstract models, but this repository does not yet use it. Adding GPUs to the current entry points will therefore provide limited benefit until that integration, replay storage, and checkpointing are addressed.
 
-Checklist items are marked complete only when the current branch contains an implementation. A checked item does not imply that the broader numbered bottleneck is fully resolved.
+Checklist items are marked complete only when the relevant repository branch contains an implementation. A checked item does not imply that the broader numbered bottleneck is fully resolved.
 
 ## Repository Bottlenecks
 
@@ -74,12 +74,15 @@ Recommended changes:
 
 These measurements are from local CPU hardware and should not be treated as cluster throughput predictions. They do establish that the current threading design does not scale consistently.
 
+For fixed abstract models, the new upstream `MjxNodeVelocityEnv` provides a better alternative to CPU workers: batch hundreds or thousands of environment states directly on the accelerator. Process-based actors remain the fallback for realistic models and the legacy Gymnasium path until those models are supported by MJX. Neither path is integrated into the current trainer yet.
+
 Recommended changes:
 
-- Use process-based actors instead of threads.
-- Assign CPU affinity to actor processes.
-- Use shared-memory queues or ring buffers rather than pickling graph objects between processes.
-- Separate environment collection from learner execution.
+- [ ] Integrate the batched MJX environment for compatible abstract-model training.
+- [ ] Use process-based actors instead of threads for the CPU/realistic fallback.
+- [ ] Assign CPU affinity to CPU actor processes.
+- [ ] Use shared-memory queues or ring buffers rather than pickling graph objects between processes.
+- [ ] Separate environment collection from learner execution.
 
 ### 5. Replay storage is object-heavy, duplicated, and rebuilt every sample
 
@@ -162,7 +165,7 @@ These optimizations should be addressed after environment throughput and replay 
 
 ## `mujoco-truss-gen` Bottlenecks
 
-These findings apply to installed `mujoco-truss-gen` version 0.9.0 and are ranked by expected impact.
+The original measurements apply to installed `mujoco-truss-gen` version 0.9.0. Implementation status was updated against [`codex/GPU_optimization` at commit `552455b`](https://github.com/isaa-sudweeks/mujoco-truss-gen/tree/codex/GPU_optimization), based on version 0.10.2. The branch adds canonical abstract-model conversion tests and `MjxNodeVelocityEnv`; it does not change the older CPU profile numbers below.
 
 ### 1. The realistic angle-bisector controller dominates environment execution
 
@@ -181,18 +184,38 @@ Recommended library changes, in preferred order:
 2. If native modeling is insufficient, move the controller to compiled or JAX code.
 3. At minimum, vectorize target calculations, cache constant arrays, preallocate outputs, and remove per-target NumPy calls and allocations.
 
-### 2. Generated truss environments have no MJX or batched step path
+### 2. A batched MJX path exists for fixed abstract models but is not integrated into GNN-SAC
 
-`MujocoTrussEnv._advance()` always loops over native `mujoco.mj_step`. The repository's `mujoco_backend: mjx` setting is not passed into the generated `truss-graph` environment configuration, so it has no effect on the primary graph-training path.
+The upstream branch adds a pure, batch-native `MjxNodeVelocityEnv`. Its explicit `MjxEnvState`, `reset()`, `step()`, and selective `reset_where()` methods operate on a leading environment batch dimension. Physics substeps, node-to-edge command conversion, observations, rewards, rigidity termination, and episode limits are implemented with JAX/MJX and can be wrapped in `jax.jit`; per-environment work is vectorized with `jax.vmap`.
 
-The repository's existing backend benchmark targets older local truss environments and does not demonstrate that generated `mujoco-truss-gen` graph environments use MJX.
+The branch also tests MJX model conversion for every canonical abstract preset, representative state conversion, batched reset and step semantics, CPU/MJX observation and reward agreement, selective reset, deterministic random-key handling, and unsupported configurations.
+
+Important limitations remain:
+
+- Only one fixed abstract model and topology is supported per compiled environment instance.
+- Realistic models with angle-bisector or other internal actuators are explicitly rejected.
+- `DomainRandomizationConfig`, rendering, and mixed model shapes within a batch are not supported.
+- A different batch size triggers a separate JAX compilation.
+- The MJX observation is a flat batched array, while GNN-SAC expects PyG graph observations and static `edge_index` metadata.
+- GNN-SAC does not construct `MjxNodeVelocityEnv`. Its `mujoco_backend: mjx` setting still does not activate this new path for generated graph environments.
+- The learner is PyTorch/PyG while the simulator is JAX/MJX, so integration must avoid CPU round trips, preferably through a validated device-interchange path or a single-framework rollout pipeline.
 
 Recommended library changes:
 
-- Provide an explicit batched environment-state API.
-- Implement MJX-compatible reset, controller, observation, reward, termination, and stepping functions.
-- Keep the state transformations pure and suitable for `jax.jit` and `jax.vmap`.
-- Document unsupported MuJoCo features for realistic models before treating MJX as the primary path.
+- [x] Provide an explicit batched environment-state API.
+- [x] Implement MJX-compatible reset, node-velocity command conversion, observation, reward, termination, and stepping for fixed abstract models.
+- [x] Keep state transformations pure and suitable for `jax.jit` and `jax.vmap`.
+- [x] Test all canonical abstract presets for MJX model conversion.
+- [x] Document and validate unsupported configurations.
+- [ ] Support realistic models and the angle-bisector/internal-actuator path.
+- [ ] Support device-native domain randomization without changing compiled model shapes.
+
+Required GNN-SAC integration work:
+
+- [ ] Add a graph-observation adapter that reshapes batched node features and supplies topology metadata once per model.
+- [ ] Select the MJX environment through Hydra configuration for compatible generated tasks.
+- [ ] Transfer observations and actions between JAX and PyTorch without staging through CPU memory.
+- [ ] Add end-to-end training smoke tests and A100/H200 throughput benchmarks.
 
 ### 3. Domain randomization recompiles the MuJoCo model on every reset
 
@@ -214,13 +237,17 @@ Recommended library changes:
 
 The matrix construction also performs repeated node-name lookup and new allocations.
 
+The MJX path now caches node IDs, rigidity edge indices, and axis indices at environment construction, then builds the matrix and computes the eigendecomposition as a batched JAX device operation. This removes repeated Python name lookup for that path, but it still constructs a dense matrix and performs a full eigendecomposition on every step. The legacy CPU path is unchanged.
+
 Recommended library changes:
 
-- Cache node and edge indices and the static matrix sparsity pattern.
-- Preallocate and update only coordinate-dependent matrix values.
-- Evaluate a direct singular-value or smallest-relevant-eigenvalue method.
-- Provide a configurable rigidity-evaluation interval.
-- Separate termination checks from reward calculation if they can safely use different cadences.
+- [x] Cache node, edge, and axis indices in the MJX environment.
+- [x] Implement rigidity calculation as a batched device operation for the MJX path.
+- [ ] Cache equivalent metadata in the legacy CPU path and precompute the static scatter pattern.
+- [ ] Preallocate and update only coordinate-dependent matrix values where the execution model permits it.
+- [ ] Evaluate a direct singular-value or smallest-relevant-eigenvalue method.
+- [ ] Provide a configurable rigidity-evaluation interval.
+- [ ] Separate termination checks from reward calculation if they can safely use different cadences.
 
 ### 5. Static graph topology is reconstructed for every observation
 
@@ -238,39 +265,45 @@ The repository can also cache `edge_index` in the environment as an immediate wo
 
 Physical graph features use Python list comprehensions over body IDs. Logical realistic graph features additionally build dictionaries, regroup cloned nodes, and perform repeated `mj_name2id` calls for connector balls.
 
+The MJX environment caches control-node and physical-node body-ID arrays and uses direct batched indexing into `xpos` and `cvel`. This resolves the repeated Python lookup for its flat abstract-model observation, but not for the legacy CPU graph observations or logical realistic graph views.
+
 Recommended library changes:
 
-- Cache body-ID arrays for each graph view.
-- Cache physical-to-logical aggregation indices.
-- Use direct NumPy indexing into `data.xpos` and `data.cvel`.
-- Expose a single vectorized graph-observation call that returns features with cached topology metadata.
+- [x] Cache body-ID arrays and use direct indexed observation extraction in the MJX abstract-model path.
+- [ ] Cache body-ID arrays for each legacy CPU graph view.
+- [ ] Cache physical-to-logical aggregation indices for realistic models.
+- [ ] Use direct NumPy indexing into `data.xpos` and `data.cvel` in the CPU path.
+- [ ] Expose a vectorized graph-observation call that returns node features with cached topology metadata.
 
 ### 7. Node command conversion performs avoidable copies and allocations
 
 `NodeVelocityController.transform()` copies node commands, edge commands, and diagnostic arrays on every action. This is smaller than the realistic angle controller but occurs every environment step.
 
+The MJX environment caches the incidence matrix, passive-node mask, actuator IDs, and control bounds, then performs node-to-edge command conversion with compiled JAX array operations. The existing CPU controller still has the allocation behavior described above.
+
 Recommended library changes:
 
-- Preallocate command buffers.
-- Make diagnostic snapshots optional.
-- Allow callers to provide output buffers.
+- [x] Replace Python command conversion with batched JAX matrix operations in the MJX path.
+- [ ] Preallocate command buffers in the CPU controller.
+- [ ] Make CPU diagnostic snapshots optional.
+- [ ] Allow CPU callers to provide output buffers.
 
 ## Recommended Training Architecture
 
 ### Initial optimized architecture: one learner GPU
 
-The first high-throughput version should use:
+For fixed abstract models, the preferred first high-throughput version should use:
 
-1. Multiple process-based CPU environment actors.
-2. CPU affinity and controlled MuJoCo threading per actor.
-3. Shared-memory observation and transition rings.
-4. One batched actor-inference call across ready environments.
+1. One compiled `MjxNodeVelocityEnv` batch containing many states for a fixed model/topology.
+2. A graph adapter that keeps node features, topology metadata, policy inference, and simulation on the accelerator.
+3. A validated JAX-to-PyTorch interchange path that does not copy through host memory, or a single-framework rollout implementation.
+4. One batched actor-inference call per environment batch.
 5. A tensorized replay buffer with topology metadata stored once.
 6. One asynchronous learner on one A100 or H200.
 7. BF16 where numerically validated, with critical loss and normalization operations retained in FP32 where needed.
 8. Lightweight periodic checkpoints and infrequent replay snapshots.
 
-This resembles a distributed off-policy actor/learner design. The environment actors should not block on every optimizer update, and the learner should not wait for a single environment step.
+For realistic models, retain the distributed CPU actor/learner plan until the angle-bisector/internal-actuator path works in MJX: multiple process-based actors, CPU affinity and controlled MuJoCo threading, and shared-memory observation and transition rings. The environment actors should not block on every optimizer update, and the learner should not wait for a single environment step.
 
 ### Use of additional GPUs
 
@@ -301,15 +334,18 @@ The current global batch size of 256 is too small for eight H200s.
 1. Reduce evaluation overhead and benchmark valid `nsubsteps` values.
    - [x] Reduce the default evaluation episode count and frequency.
    - [ ] Benchmark and validate lower `nsubsteps` values.
-2. Fix the realistic angle-bisector controller in `mujoco-truss-gen`.
-3. [x] Add batched actor inference in this repository.
-4. Replace threaded environments with process-based actors.
-5. Replace the graph-object replay buffer with contiguous tensor storage.
-6. Insert transitions online instead of at episode termination.
-7. Decouple actor collection from learner updates.
-8. Redesign checkpoint persistence.
-9. Profile one A100/H200 and add mixed precision, fused optimizers, compilation, or CUDA graphs where useful.
-10. Add multi-GPU learner support only if a single GPU is saturated.
+2. Integrate and benchmark `MjxNodeVelocityEnv` for fixed abstract-model training.
+   - [x] Implement the upstream batched MJX environment and abstract-preset conversion coverage.
+   - [ ] Add the GNN graph adapter, Hydra selection, and device-native JAX/PyTorch interchange.
+3. Fix or port the realistic angle-bisector controller in `mujoco-truss-gen`.
+4. [x] Add batched actor inference in this repository.
+5. Replace threaded environments with process-based actors for the CPU/realistic fallback.
+6. Replace the graph-object replay buffer with contiguous tensor storage.
+7. Insert transitions online instead of at episode termination.
+8. Decouple actor collection from learner updates.
+9. Redesign checkpoint persistence.
+10. Profile one A100/H200 and add mixed precision, fused optimizers, compilation, or CUDA graphs where useful.
+11. Add multi-GPU learner support only if a single GPU is saturated.
 
 ## Required Cluster Information
 
