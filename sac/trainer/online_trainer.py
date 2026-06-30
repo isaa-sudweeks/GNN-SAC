@@ -186,6 +186,23 @@ class OnlineTrainer(Trainer):
             np.float32,
             copy=False,
         )
+
+    def _select_multi_env_actions(self, observations, episode_tds, env_indices):
+        """Select actions for one vector step, batching compatible policy calls."""
+        using_seed_actions = self._step <= self.cfg.seed_steps
+        if using_seed_actions:
+            actions = [self.env.rand_act(env_idx=env_idx) for env_idx in env_indices]
+        elif hasattr(self.agent, "act_batch"):
+            actions = self.agent.act_batch([observations[env_idx] for env_idx in env_indices])
+        else:
+            actions = [
+                self.agent.act(observations[env_idx], t0=len(episode_tds[env_idx]) == 1)
+                for env_idx in env_indices
+            ]
+        return [
+            self._apply_action_noise(action, seed_action=using_seed_actions)
+            for action in actions
+        ]
     
     def to_td(self, obs, action=None, reward=None, terminated=None):
         """
@@ -366,14 +383,7 @@ class OnlineTrainer(Trainer):
             if not env_indices:
                 break
 
-            actions = []
-            for env_idx in env_indices:
-                if self._step > self.cfg.seed_steps:
-                    action = self.agent.act(observations[env_idx], t0=len(episode_tds[env_idx]) == 1)
-                else:
-                    action = self.env.rand_act(env_idx=env_idx)
-                action = self._apply_action_noise(action, seed_action=self._step <= self.cfg.seed_steps)
-                actions.append(action)
+            actions = self._select_multi_env_actions(observations, episode_tds, env_indices)
 
             results = self.env.step_many(actions, env_indices=env_indices)
             for env_idx, action, (obs, reward, is_done, info) in zip(env_indices, actions, results):
