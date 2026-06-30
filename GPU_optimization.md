@@ -6,6 +6,8 @@ This audit targets multi-million-timestep GNN-SAC training runs on research-clus
 
 The current system is primarily CPU/environment-bound rather than GPU-bound. Adding GPUs will provide limited benefit until environment collection, policy batching, replay storage, and checkpointing are redesigned.
 
+Checklist items are marked complete only when the current branch contains an implementation. A checked item does not imply that the broader numbered bottleneck is fully resolved.
+
 ## Repository Bottlenecks
 
 The following issues are ranked by expected wall-clock impact.
@@ -22,10 +24,10 @@ Relevant code and configuration:
 
 Recommended changes:
 
-- Use one to three evaluation episodes during training.
-- Evaluate every 100,000 to 250,000 training steps.
-- Run full evaluation asynchronously or after training.
-- Avoid the initial step-zero evaluation unless it is explicitly required as a baseline.
+- [x] Use one to three evaluation episodes during training. The default is now three.
+- [x] Evaluate every 100,000 to 250,000 training steps. The default is now 100,000.
+- [ ] Run full evaluation asynchronously or after training.
+- [ ] Avoid the initial step-zero evaluation unless it is explicitly required as a baseline.
 
 ### 2. `nsubsteps: 100` multiplies simulator and controller costs
 
@@ -53,11 +55,11 @@ This prevents effective GPU utilization as environment count increases. A local 
 
 Recommended changes:
 
-- Construct one PyG `Batch` from all active environment observations.
-- Perform one actor forward pass per vector step.
-- Split the resulting node actions by graph afterward.
-- Avoid unnecessary stochastic sampling and log-probability calculation during deterministic evaluation.
-- Transfer actions to CPU once per batch rather than once per environment.
+- [x] Construct one PyG `Batch` from all active environment observations.
+- [x] Perform one actor forward pass per vector step.
+- [x] Split the resulting node actions by graph afterward.
+- [x] Avoid unnecessary stochastic sampling and log-probability calculation during deterministic evaluation.
+- [x] Transfer actions to CPU once per batch rather than once per environment.
 
 ### 4. Environment vectorization uses Python threads
 
@@ -297,8 +299,10 @@ The current global batch size of 256 is too small for eight H200s.
 ## Recommended Implementation Order
 
 1. Reduce evaluation overhead and benchmark valid `nsubsteps` values.
+   - [x] Reduce the default evaluation episode count and frequency.
+   - [ ] Benchmark and validate lower `nsubsteps` values.
 2. Fix the realistic angle-bisector controller in `mujoco-truss-gen`.
-3. Add batched actor inference in this repository.
+3. [x] Add batched actor inference in this repository.
 4. Replace threaded environments with process-based actors.
 5. Replace the graph-object replay buffer with contiguous tensor storage.
 6. Insert transitions online instead of at episode termination.
