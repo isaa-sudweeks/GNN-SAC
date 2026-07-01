@@ -29,12 +29,21 @@ class OnlineTrainer(Trainer):
         self.eval_env = self.env
         eval_task = getattr(self.cfg, "eval_task", None)
         has_domain_randomization = getattr(self.cfg, "domain_randomization", False)
+        topology_bucket_metadata = self._topology_bucket_metadata(self.env)
         
-        if (eval_task is not None and eval_task != self.cfg.task) or has_domain_randomization:
+        if (
+            (eval_task is not None and eval_task != self.cfg.task)
+            or has_domain_randomization
+            or topology_bucket_metadata is not None
+        ):
             from copy import deepcopy
             from env import make_env
             eval_cfg = deepcopy(self.cfg)
             eval_cfg.domain_randomization = False
+            if topology_bucket_metadata is not None:
+                # Evaluation needs one isolated slot per topology. Reusing the
+                # training buckets would overwrite live rollout state.
+                eval_cfg.num_envs = 1
             if eval_task is not None:
                 eval_cfg.task = eval_task
                 eval_cfg.env_name = eval_task
@@ -89,6 +98,8 @@ class OnlineTrainer(Trainer):
         """
         Evaluate a SAC agent.
         """
+        if self._topology_bucket_metadata(self.eval_env) is not None:
+            return self._eval_topology_buckets()
         if bool(getattr(self.cfg, "multitask", False)) and int(getattr(self.eval_env, "num_envs", 1)) > 1:
             return self._eval_multitask()
         return self._eval_one()
@@ -142,6 +153,47 @@ class OnlineTrainer(Trainer):
             episode_length=np.nanmean(task_lengths),
         )
         return metrics
+
+    def _eval_topology_buckets(self):
+        topologies, representative_indices = self._topology_bucket_metadata(self.eval_env)
+        metrics = {}
+        topology_rewards, topology_successes, topology_lengths = [], [], []
+        for topology in topologies:
+            env_idx = representative_indices[topology]
+            topology_key = self._metric_key(topology)
+            topology_metrics = self._eval_one(
+                task_idx=env_idx,
+                video_key=f"videos/eval_video/{topology_key}",
+            )
+            metrics[f"{topology_key}_episode_reward"] = topology_metrics["episode_reward"]
+            metrics[f"{topology_key}_episode_success"] = topology_metrics["episode_success"]
+            metrics[f"{topology_key}_episode_length"] = topology_metrics["episode_length"]
+            topology_rewards.append(topology_metrics["episode_reward"])
+            topology_successes.append(topology_metrics["episode_success"])
+            topology_lengths.append(topology_metrics["episode_length"])
+        metrics.update(
+            episode_reward=np.nanmean(topology_rewards),
+            episode_success=np.nanmean(topology_successes),
+            episode_length=np.nanmean(topology_lengths),
+        )
+        return metrics
+
+    @staticmethod
+    def _topology_bucket_metadata(env):
+        current = env
+        while current is not None:
+            namespace = getattr(current, "__dict__", {})
+            is_topology_bucket = namespace.get(
+                "is_topology_bucket",
+                getattr(type(current), "is_topology_bucket", False),
+            )
+            if bool(is_topology_bucket):
+                return (
+                    list(current.topologies),
+                    dict(current.topology_representative_indices),
+                )
+            current = getattr(current, "env", None)
+        return None
 
     def _eval_task_name(self, task_idx):
         tasks = list(getattr(self.cfg, "tasks", []))
@@ -334,7 +386,10 @@ class OnlineTrainer(Trainer):
                 previous_components = self._episode_reward_components
                 for env_idx in done_indices:
                     if eval_next:
-                        if hasattr(self.eval_env, "set_active_env"):
+                        if (
+                            self._topology_bucket_metadata(self.eval_env) is None
+                            and hasattr(self.eval_env, "set_active_env")
+                        ):
                             self.eval_env.set_active_env(env_idx)
                         eval_metrics = self.eval()
                         eval_metrics.update(self.common_metrics())

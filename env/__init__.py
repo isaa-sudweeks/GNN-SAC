@@ -74,20 +74,42 @@ def _is_mjx_vector_graph_run(cfg):
 def _make_mjx_vector_graph_env(cfg):
     if bool(getattr(cfg, "multitask", False)):
         raise ValueError(
-            "The MJX vector backend supports one fixed topology per run; "
-            "use separate runs for truss_topologies or set mujoco_backend=mujoco."
+            "MJX topology bucketing uses num_envs and truss_topologies directly; "
+            "set multitask=false."
         )
-    from env.mujoco_gen.mjx_vector_env import MjxVectorGraphEnv
 
     cfg.use_control_graph = True
-    env = MjxVectorGraphEnv(cfg)
+    topologies = _configured_truss_topologies(cfg)
+    if len(topologies) > 1:
+        from env.mujoco_gen.mjx_topology_bucket_env import MjxTopologyBucketEnv
+
+        env = MjxTopologyBucketEnv(cfg, topologies)
+        component_envs = env.buckets
+        cfg.topology_allocations = env.topology_allocations
+        cfg.envs_per_topology = env.envs_per_topology
+        cfg.num_envs = env.num_envs
+        cfg.tasks = [f"truss-graph:{topology}" for topology in topologies]
+    else:
+        from env.mujoco_gen.mjx_vector_env import MjxVectorGraphEnv
+
+        if topologies:
+            cfg.truss_topology = topologies[0]
+        env = MjxVectorGraphEnv(cfg)
+        component_envs = [env]
+
     cfg.obs_shape = {key: value.shape for key, value in env.observation_space.spaces.items()}
     cfg.obs_dim = env.node_feature_dim
     cfg.node_feature_dim = env.node_feature_dim
     cfg.node_action_dim = env.node_action_dim
     cfg.action_dim = env.node_action_dim
-    cfg.num_policy_actions = int(np.prod(env.action_space.shape))
-    cfg.num_actuators = _num_policy_actuators(env)
+    cfg.policy_action_counts = [
+        int(np.prod(component.action_space.shape)) for component in component_envs
+    ]
+    cfg.policy_actuator_counts = [
+        _num_policy_actuators(component) for component in component_envs
+    ]
+    cfg.num_policy_actions = int(max(cfg.policy_action_counts))
+    cfg.num_actuators = int(max(cfg.policy_actuator_counts))
     cfg.episode_length = int(env.max_episode_steps)
     cfg.seed_steps = int(max(1000, 5 * cfg.episode_length))
     return TensorWrapper(env, graph_observations=True)
@@ -105,6 +127,15 @@ def _apply_truss_topology_tasks(cfg):
     if not topologies:
         return
     base_task = str(getattr(cfg, "task", "truss-graph")).split(":", 1)[0]
+    if (
+        str(getattr(cfg, "mujoco_backend", "mujoco")).lower() == "mjx"
+        and base_task == "truss-graph"
+    ):
+        cfg.task = base_task
+        cfg.tasks = [f"{base_task}:{topology}" for topology in topologies]
+        if len(topologies) == 1:
+            cfg.truss_topology = topologies[0]
+        return
     if len(topologies) == 1:
         cfg.truss_topology = topologies[0]
         cfg.task = base_task

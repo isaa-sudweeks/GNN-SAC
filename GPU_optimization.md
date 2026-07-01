@@ -192,7 +192,7 @@ The branch also tests MJX model conversion for every canonical abstract preset, 
 
 Important limitations remain:
 
-- Only one fixed abstract model and topology is supported per compiled environment instance.
+- Only one fixed abstract model and topology is supported per compiled environment instance. GNN-SAC now gives every requested topology its own `num_envs`-sized compiled MJX bucket and combines their graph observations for policy inference.
 - Realistic models with angle-bisector or other internal actuators are explicitly rejected.
 - `DomainRandomizationConfig`, rendering, and mixed model shapes within a batch are not supported.
 - A different batch size triggers a separate JAX compilation.
@@ -215,6 +215,7 @@ Required GNN-SAC integration work:
 - [x] Add a graph-observation adapter that reshapes batched node features and supplies topology metadata once per model.
 - [x] Select the MJX environment through Hydra configuration for compatible generated tasks.
 - [x] Transfer observations and actions between JAX and PyTorch without staging through CPU memory.
+- [x] Support mixed-topology collection through fixed-model MJX buckets and mixed-graph actor batches.
 - [ ] Add A100/H200 throughput benchmarks. Local end-to-end training and vectorized inference smoke tests are implemented.
 
 ### 3. Domain randomization recompiles the MuJoCo model on every reset

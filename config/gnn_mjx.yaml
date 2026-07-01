@@ -9,8 +9,7 @@ use_control_graph: true
 truss_realistic: false
 truss_topologies: null
 domain_randomization: false
-num_envs: 256
+num_envs: 256 # Environments per topology; total collection width multiplies by truss_topologies count.
 device: cuda
 save_video: false
 mjx_zero_copy: true
-

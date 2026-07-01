@@ -103,6 +103,20 @@ MJX backend, batched GNN inference, and DLPack exchange between JAX and PyTorch:
 python sac/gnn_train.py --config-name gnn_mjx steps=10000 num_envs=256
 ```
 
+For multiple topologies, `num_envs` is the size of every MJX bucket. For
+example, this creates 1,000 octahedron environments and 1,000 tetrahedron
+environments (2,000 total) while retaining a single mixed-graph policy
+inference call:
+
+```bash
+python sac/gnn_train.py --config-name gnn_mjx num_envs=1000 \
+  'truss_topologies=[octahedron,tetrahedron]'
+```
+
+Each topology has a separately compiled MJX step function and fixed-size state
+batch. The trainer derives its total environment count as
+`num_envs * len(truss_topologies)`.
+
 Run checkpoint evaluation in vectorized waves with the matching inference
 profile:
 
