@@ -1,0 +1,19 @@
+defaults:
+  - gnn_inference
+  - _self_
+
+# Batched, accelerator-native checkpoint evaluation. Select this profile with:
+# python sac/gnn_infer.py --config-name gnn_mjx_inference model=/path/to/model.pt
+mujoco_backend: mjx
+use_control_graph: true
+truss_realistic: false
+truss_topologies: null
+domain_randomization: false
+num_envs: 256
+episodes: 256
+device: cuda
+visualize: false
+save_video: false
+print_position_command: false
+mjx_zero_copy: true
+

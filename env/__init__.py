@@ -67,6 +67,31 @@ def _num_policy_actuators(env):
     mj_model = env.unwrapped.mj_model
     return int(len(getattr(mj_model, "external_actuator_ids", range(mj_model.model.nu))))
 
+def _is_mjx_vector_graph_run(cfg):
+    task = str(getattr(cfg, "task", "")).split(":", 1)[0]
+    return str(getattr(cfg, "mujoco_backend", "mujoco")).lower() == "mjx" and task == "truss-graph"
+
+def _make_mjx_vector_graph_env(cfg):
+    if bool(getattr(cfg, "multitask", False)):
+        raise ValueError(
+            "The MJX vector backend supports one fixed topology per run; "
+            "use separate runs for truss_topologies or set mujoco_backend=mujoco."
+        )
+    from env.mujoco_gen.mjx_vector_env import MjxVectorGraphEnv
+
+    cfg.use_control_graph = True
+    env = MjxVectorGraphEnv(cfg)
+    cfg.obs_shape = {key: value.shape for key, value in env.observation_space.spaces.items()}
+    cfg.obs_dim = env.node_feature_dim
+    cfg.node_feature_dim = env.node_feature_dim
+    cfg.node_action_dim = env.node_action_dim
+    cfg.action_dim = env.node_action_dim
+    cfg.num_policy_actions = int(np.prod(env.action_space.shape))
+    cfg.num_actuators = _num_policy_actuators(env)
+    cfg.episode_length = int(env.max_episode_steps)
+    cfg.seed_steps = int(max(1000, 5 * cfg.episode_length))
+    return TensorWrapper(env, graph_observations=True)
+
 def _configured_truss_topologies(cfg):
     topologies = getattr(cfg, "truss_topologies", None)
     if topologies in (None, "null"):
@@ -104,6 +129,8 @@ def make_env(cfg):
     env = None
     num_envs = int(getattr(cfg, "num_envs", 1))
     multitask = bool(getattr(cfg, "multitask", False))
+    if _is_mjx_vector_graph_run(cfg):
+        return _make_mjx_vector_graph_env(cfg)
     if multitask and num_envs > 1:
         raise ValueError("Use either multitask=true with cfg.tasks or num_envs>1 for repeated same-task envs, not both.")
     if multitask or num_envs > 1:

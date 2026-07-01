@@ -15,6 +15,7 @@ for path in (ROOT, SAC_ROOT):
         sys.path.insert(0, str(path))
 
 from gnn_sac import GNNSAC
+from gnn_infer import _run_vectorized_inference
 from trainer.online_trainer import OnlineTrainer
 
 
@@ -174,6 +175,58 @@ class MultiEnvActionSelectionTest(unittest.TestCase):
         self.assertEqual(trainer.env.rand_act.call_args_list, [mock.call(env_idx=2), mock.call(env_idx=0)])
         torch.testing.assert_close(actions[0], torch.tensor([2.0]))
         torch.testing.assert_close(actions[1], torch.tensor([0.0]))
+
+
+class VectorizedInferenceTest(unittest.TestCase):
+    def test_episodes_are_run_in_batched_waves(self):
+        class DummyVectorEnv:
+            num_envs = 2
+
+            def __init__(self):
+                self.step_batches = []
+
+            def reset_many(self, env_indices):
+                return [graph(3, offset=float(index)) for index in env_indices]
+
+            def step_many(self, actions, env_indices):
+                self.step_batches.append(list(env_indices))
+                return [
+                    (
+                        graph(3, offset=float(index)),
+                        torch.tensor(float(index + 1)),
+                        True,
+                        {
+                            "success": float(index == 0),
+                            "terminated": torch.tensor(0.0),
+                            "truncated": torch.tensor(1.0),
+                        },
+                    )
+                    for index in env_indices
+                ]
+
+        class DummyAgent:
+            def __init__(self):
+                self.batch_sizes = []
+
+            def act_batch(self, observations, eval_mode=False):
+                self.batch_sizes.append(len(observations))
+                return [torch.zeros(obs.num_nodes, 1) for obs in observations]
+
+        env = DummyVectorEnv()
+        agent = DummyAgent()
+        cfg = SimpleNamespace(
+            episodes=3,
+            inference_max_steps=None,
+            deterministic=True,
+            print_position_command=False,
+        )
+
+        results = _run_vectorized_inference(cfg, env, agent)
+
+        self.assertEqual(agent.batch_sizes, [2, 1])
+        self.assertEqual(env.step_batches, [[0, 1], [0]])
+        self.assertEqual([row["episode"] for row in results], [0, 1, 2])
+        self.assertEqual([row["episode_length"] for row in results], [1, 1, 1])
 
 
 if __name__ == "__main__":

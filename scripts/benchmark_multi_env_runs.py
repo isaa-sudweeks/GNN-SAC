@@ -46,18 +46,20 @@ def load_cfg(args: argparse.Namespace, num_envs: int, backend: str):
 
 
 def step_all_envs(env, num_envs: int):
+    if num_envs > 1:
+        actions = [env.rand_act(env_idx=env_idx) for env_idx in range(num_envs)]
+        env.step_many(actions, env_indices=range(num_envs))
+        return
     for env_idx in range(num_envs):
-        if num_envs > 1:
-            env.set_active_env(env_idx)
         env.step(env.rand_act())
 
 
 def reset_all_envs(env, num_envs: int):
+    if num_envs > 1:
+        env.reset_many(env_indices=range(num_envs))
+        return
     for env_idx in range(num_envs):
-        if num_envs > 1:
-            env.reset(task_idx=env_idx)
-        else:
-            env.reset()
+        env.reset()
 
 
 def run_case(args: argparse.Namespace, num_envs: int, backend: str):
@@ -87,9 +89,9 @@ def run_case(args: argparse.Namespace, num_envs: int, backend: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Benchmark the repo's current serial multi-environment training step pattern."
+        description="Benchmark native repeated environments against batch-native MJX."
     )
-    parser.add_argument("--task", default="truss-velocity-command-right")
+    parser.add_argument("--task", default="truss-graph")
     parser.add_argument("--num-envs", type=int, nargs="+", default=[1, 2, 4, 8])
     parser.add_argument("--backend", choices=("both", "mjx", "mujoco"), default="both")
     parser.add_argument("--steps-per-env", type=int, default=100)

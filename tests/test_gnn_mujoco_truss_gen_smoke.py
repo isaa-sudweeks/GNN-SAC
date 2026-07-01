@@ -357,8 +357,20 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
-    def test_unified_graph_env_supports_all_mujoco_truss_gen_presets(self):
-        for topology in sorted(PRESETS):
+    def test_unified_graph_env_supports_representative_mujoco_truss_gen_presets(self):
+        # PRESETS now contains hundreds of enumerated Henneberg variants. Their
+        # exhaustive generation belongs to mujoco-truss-gen's own test suite;
+        # cover every preset family at this integration boundary.
+        representative_presets = [
+            "octahedron",
+            "tetrahedron",
+            "icosahedron",
+            "solar_array",
+            "henneberg_n5_1tube",
+            "usevitch_1514879",
+        ]
+        self.assertTrue(set(representative_presets).issubset(PRESETS))
+        for topology in representative_presets:
             with self.subTest(topology=topology):
                 cfg = graph_test_cfg(
                     task="truss-graph",

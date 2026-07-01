@@ -94,7 +94,28 @@ python sac/gnn_train.py --config-name supercomputer --multirun \
 # Unified Truss Topology Environments
 - `truss-graph` is the reusable graph-observation environment for `mujoco_truss_gen` presets. It emits PyTorch Geometric graph observations through the wrapper layer and maps one scalar node action per graph node to tendon actuator commands.
 - `truss-mlp` is the reusable flat observation/action environment for standard MLP policies. It uses the same generated topology source, but keeps fixed-size vector observations and actions.
-- Select one generated topology with `truss_topology`. Valid names come from `mujoco_truss_gen.PRESETS`; currently this includes `octahedron`, `tetrahedron`, `icosahedron`, and `solar_array`.
+- Select one generated topology with `truss_topology`. Valid names come from `mujoco_truss_gen.PRESETS`; these include the canonical `octahedron`, `tetrahedron`, `icosahedron`, and `solar_array` models plus the enumerated Henneberg and Usevitch families.
+
+For fixed-topology graph training, `config/gnn_mjx.yaml` selects the batch-native
+MJX backend, batched GNN inference, and DLPack exchange between JAX and PyTorch:
+
+```bash
+python sac/gnn_train.py --config-name gnn_mjx steps=10000 num_envs=256
+```
+
+Run checkpoint evaluation in vectorized waves with the matching inference
+profile:
+
+```bash
+python sac/gnn_infer.py --config-name gnn_mjx_inference \
+  model=/path/to/final.pt episodes=256 num_envs=256
+```
+
+The MJX path currently requires `mujoco-truss-gen>=0.10.2`,
+`domain_randomization=false`, `truss_realistic=false`, and rendering disabled.
+It owns one compiled topology and one fixed environment batch per process. Use
+`mujoco_backend=mujoco` for realistic models, mixed-topology runs, rendering, or
+model-level domain randomization.
 
 ```yaml
 task: truss-graph

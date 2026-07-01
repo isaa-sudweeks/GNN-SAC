@@ -78,7 +78,7 @@ For fixed abstract models, the new upstream `MjxNodeVelocityEnv` provides a bett
 
 Recommended changes:
 
-- [ ] Integrate the batched MJX environment for compatible abstract-model training.
+- [x] Integrate the batched MJX environment for compatible abstract-model training.
 - [ ] Use process-based actors instead of threads for the CPU/realistic fallback.
 - [ ] Assign CPU affinity to CPU actor processes.
 - [ ] Use shared-memory queues or ring buffers rather than pickling graph objects between processes.
@@ -212,10 +212,10 @@ Recommended library changes:
 
 Required GNN-SAC integration work:
 
-- [ ] Add a graph-observation adapter that reshapes batched node features and supplies topology metadata once per model.
-- [ ] Select the MJX environment through Hydra configuration for compatible generated tasks.
-- [ ] Transfer observations and actions between JAX and PyTorch without staging through CPU memory.
-- [ ] Add end-to-end training smoke tests and A100/H200 throughput benchmarks.
+- [x] Add a graph-observation adapter that reshapes batched node features and supplies topology metadata once per model.
+- [x] Select the MJX environment through Hydra configuration for compatible generated tasks.
+- [x] Transfer observations and actions between JAX and PyTorch without staging through CPU memory.
+- [ ] Add A100/H200 throughput benchmarks. Local end-to-end training and vectorized inference smoke tests are implemented.
 
 ### 3. Domain randomization recompiles the MuJoCo model on every reset
 

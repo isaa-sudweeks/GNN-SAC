@@ -1,0 +1,16 @@
+defaults:
+  - gnn_config
+  - _self_
+
+# Accelerator-native fixed-topology collection. Select this profile with:
+# python sac/gnn_train.py --config-name gnn_mjx
+mujoco_backend: mjx
+use_control_graph: true
+truss_realistic: false
+truss_topologies: null
+domain_randomization: false
+num_envs: 256
+device: cuda
+save_video: false
+mjx_zero_copy: true
+

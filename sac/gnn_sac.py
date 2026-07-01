@@ -105,7 +105,13 @@ class GNNSAC(torch.nn.Module):
         else:
             action, _ = self.model.pi(obs_batch)
 
-        action = self._safe_action(action).cpu()
+        action = self._safe_action(action)
+        keep_on_device = (
+            str(getattr(self.cfg, "mujoco_backend", "mujoco")).lower() == "mjx"
+            and bool(getattr(self.cfg, "mjx_zero_copy", True))
+        )
+        if not keep_on_device:
+            action = action.cpu()
         if action.size(0) != sum(node_counts):
             raise RuntimeError(
                 f"Actor produced {action.size(0)} node actions for {sum(node_counts)} observation nodes"
