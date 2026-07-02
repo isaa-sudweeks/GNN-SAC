@@ -95,6 +95,8 @@ class CheckpointingTest(unittest.TestCase):
             trainer = make_trainer(Path(tmp_dir))
             trainer._step = 20
             trainer._ep_idx = 3
+            trainer._update_budget = 0.75
+            trainer._pretrain_complete = True
             trainer.agent.model.weight.data.fill_(5.0)
             trainer.buffer.value = torch.tensor([7.0])
             trainer.logger.rows = [{"step": 10, "episode_reward": 1.5}]
@@ -105,6 +107,8 @@ class CheckpointingTest(unittest.TestCase):
 
             self.assertEqual(resumed._step, 20)
             self.assertEqual(resumed._ep_idx, 3)
+            self.assertEqual(resumed._update_budget, 0.75)
+            self.assertTrue(resumed._pretrain_complete)
             self.assertEqual(float(resumed.agent.model.weight.item()), 5.0)
             self.assertEqual(float(resumed.buffer.value.item()), 7.0)
             self.assertEqual(resumed.logger.rows, [{"step": 10, "episode_reward": 1.5}])

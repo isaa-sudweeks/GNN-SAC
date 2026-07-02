@@ -26,6 +26,8 @@ class OnlineTrainer(Trainer):
         self._start_time = time() 
         self._episode_reward_components = {}
         self._eval_topology_indices = None
+        self._update_budget = 0.0
+        self._pretrain_complete = False
         
         self.eval_env = self.env
         eval_task = getattr(self.cfg, "eval_task", None)
@@ -221,6 +223,39 @@ class OnlineTrainer(Trainer):
         ):
             self.eval_env.set_active_env(env_idx)
 
+    def _scheduled_updates(self, collected_transitions):
+        """Convert collected transitions into optimizer steps with carry-over."""
+        collected_transitions = int(collected_transitions)
+        if collected_transitions < 0:
+            raise ValueError("collected_transitions must be non-negative")
+
+        legacy_iterations = getattr(self.cfg, "iterations", None)
+        if legacy_iterations is not None:
+            update_increment = float(legacy_iterations) * collected_transitions
+        else:
+            replay_ratio = float(getattr(self.cfg, "replay_ratio", 1.0))
+            batch_size = int(self.cfg.batch_size)
+            if batch_size <= 0:
+                raise ValueError("batch_size must be positive")
+            update_increment = replay_ratio * collected_transitions / batch_size
+
+        if not np.isfinite(update_increment) or update_increment < 0:
+            raise ValueError("The configured replay/update ratio must be finite and non-negative")
+
+        self._update_budget += update_increment
+        num_updates = int(np.floor(self._update_budget + 1e-12))
+        self._update_budget -= num_updates
+        return num_updates
+
+    def _updates_after_collection(self, collected_transitions, pretrain_steps):
+        """Run pretraining once replay is ready, then follow the ratio schedule."""
+        if not self._pretrain_complete:
+            self._pretrain_complete = True
+            self._update_budget = 0.0
+            print(f'Pretraining agent on seed data for {pretrain_steps} updates...')
+            return int(pretrain_steps)
+        return self._scheduled_updates(collected_transitions)
+
     @staticmethod
     def _scalar_value(value):
         if isinstance(value, torch.Tensor):
@@ -397,11 +432,7 @@ class OnlineTrainer(Trainer):
 
             # Update agent 
             if self._step >= self.cfg.seed_steps and self.buffer.size >= self.cfg.batch_size:
-                if self._step == self.cfg.seed_steps:
-                    num_updates = pretrain_steps
-                    print(f'Pretraining agent on seed data for {num_updates} updates...')
-                else:
-                    num_updates = self.cfg.iterations
+                num_updates = self._updates_after_collection(1, pretrain_steps)
                 if num_updates > 0:
                     for _ in range(num_updates):
                         _train_metrics = self.agent.update(self.buffer)
@@ -508,11 +539,7 @@ class OnlineTrainer(Trainer):
                 eval_next = True
 
             if self._step >= self.cfg.seed_steps and self.buffer.size >= self.cfg.batch_size:
-                if previous_step < self.cfg.seed_steps <= self._step:
-                    num_updates = pretrain_steps
-                    print(f'Pretraining agent on seed data for {num_updates} updates...')
-                else:
-                    num_updates = int(self.cfg.iterations) * len(env_indices)
+                num_updates = self._updates_after_collection(len(env_indices), pretrain_steps)
                 if num_updates > 0:
                     for _ in range(num_updates):
                         _train_metrics = self.agent.update(self.buffer)

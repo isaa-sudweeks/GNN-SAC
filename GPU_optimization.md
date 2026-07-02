@@ -104,16 +104,21 @@ Recommended changes:
 - Use pinned host memory or GPU-resident replay where capacity permits.
 - Represent next state through contiguous transition indexing when possible instead of duplicating every graph.
 
-### 6. Multi-environment collection creates one sequential update per transition
+### 6. Multi-environment update scheduling
 
-For `N` active environments, the trainer performs `iterations * N` sequential SAC updates after each vector step. Faster collection therefore causes the learner loop to become the next bottleneck without amortizing optimizer work.
+Implemented: `replay_ratio` explicitly controls the number of replay samples
+consumed per newly collected transition. Optimizer steps are scheduled as
+`replay_ratio * collected_transitions / batch_size`, with fractional work
+carried across vector steps and checkpoints. For example, 2,048 collected
+transitions, `batch_size=256`, and `replay_ratio=1` produce eight optimizer
+steps instead of 2,048. The deprecated `iterations` option remains available
+only for reproducing the legacy one-optimizer-step-per-transition schedule.
 
-Recommended changes:
+Further work:
 
-- Make update-to-data ratio an explicit experiment parameter.
 - Decouple actor collection and learner updates.
-- Benchmark larger replay batches and fewer updates per collected transition.
-- Preserve learning-quality comparisons because reducing update-to-data ratio changes the algorithm's sample efficiency.
+- Benchmark larger replay batches and different replay ratios.
+- Preserve learning-quality comparisons because reducing replay reuse changes sample efficiency.
 - Use CUDA graphs, compilation, and fused optimizers only after input shapes and replay delivery have been stabilized.
 
 ### 7. Transitions enter replay only when an episode ends

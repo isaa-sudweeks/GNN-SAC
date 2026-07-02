@@ -76,11 +76,13 @@ class Trainer:
 
     def checkpoint_state_dict(self):
         return {
-            "format_version": 1,
+            "format_version": 2,
             "trainer": {
                 "step": getattr(self, "_step", 0),
                 "episode": getattr(self, "_ep_idx", 0),
                 "best_eval_metrics": self._best_eval_metrics,
+                "update_budget": float(getattr(self, "_update_budget", 0.0)),
+                "pretrain_complete": bool(getattr(self, "_pretrain_complete", False)),
             },
             "agent": self.agent.training_state_dict(),
             "buffer": self.buffer.state_dict(),
@@ -96,6 +98,16 @@ class Trainer:
         self._best_eval_metrics = trainer_state.get("best_eval_metrics")
         self.agent.load_training_state_dict(state_dict["agent"])
         self.buffer.load_state_dict(state_dict["buffer"])
+        self._update_budget = float(trainer_state.get("update_budget", 0.0))
+        pretrain_complete = trainer_state.get("pretrain_complete")
+        if pretrain_complete is None:
+            # Older checkpoints did not record this flag. If replay already
+            # contains usable data after the seed phase, updates have started.
+            buffer_size = int(getattr(self.buffer, "size", 0))
+            batch_size = int(getattr(self.cfg, "batch_size", 1))
+            seed_steps = int(getattr(self.cfg, "seed_steps", 0))
+            pretrain_complete = self._step > seed_steps and buffer_size >= batch_size
+        self._pretrain_complete = bool(pretrain_complete)
         if "logger" in state_dict:
             self.logger.load_state_dict(state_dict["logger"])
         self._load_rng_state_dict(state_dict.get("rng"))

@@ -177,6 +177,52 @@ class MultiEnvActionSelectionTest(unittest.TestCase):
         torch.testing.assert_close(actions[1], torch.tensor([0.0]))
 
 
+class UpdateScheduleTest(unittest.TestCase):
+    def make_trainer(self, *, replay_ratio=1.0, batch_size=256, iterations=None):
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        trainer.cfg = SimpleNamespace(
+            replay_ratio=replay_ratio,
+            batch_size=batch_size,
+            iterations=iterations,
+        )
+        trainer._update_budget = 0.0
+        trainer._pretrain_complete = True
+        return trainer
+
+    def test_vector_batch_uses_replay_sample_ratio(self):
+        trainer = self.make_trainer()
+
+        self.assertEqual(trainer._scheduled_updates(2048), 8)
+        self.assertEqual(trainer._update_budget, 0.0)
+
+    def test_fractional_update_budget_carries_between_steps(self):
+        trainer = self.make_trainer()
+
+        updates = [trainer._scheduled_updates(64) for _ in range(4)]
+
+        self.assertEqual(updates, [0, 0, 0, 1])
+        self.assertEqual(trainer._update_budget, 0.0)
+
+    def test_pretraining_runs_once_when_replay_first_becomes_ready(self):
+        trainer = self.make_trainer()
+        trainer._pretrain_complete = False
+
+        self.assertEqual(trainer._updates_after_collection(2048, pretrain_steps=1000), 1000)
+        self.assertTrue(trainer._pretrain_complete)
+        self.assertEqual(trainer._updates_after_collection(2048, pretrain_steps=1000), 8)
+
+    def test_legacy_iterations_preserve_old_schedule(self):
+        trainer = self.make_trainer(iterations=1)
+
+        self.assertEqual(trainer._scheduled_updates(2048), 2048)
+
+    def test_negative_replay_ratio_is_rejected(self):
+        trainer = self.make_trainer(replay_ratio=-1.0)
+
+        with self.assertRaisesRegex(ValueError, "finite and non-negative"):
+            trainer._scheduled_updates(1)
+
+
 class VectorizedInferenceTest(unittest.TestCase):
     def test_episodes_are_run_in_batched_waves(self):
         class DummyVectorEnv:

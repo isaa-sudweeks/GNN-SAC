@@ -108,6 +108,13 @@ MJX training uses a separate native MuJoCo evaluation environment by default
 evaluation and permits evaluation video capture with `save_video=true` while
 the training environments remain accelerator-native.
 
+Learner work scales through `replay_ratio`, defined as replay samples consumed
+per newly collected transition. With the default `replay_ratio=1`, a vector
+step collecting 2,048 transitions and `batch_size=256` schedules eight optimizer
+updates. Fractional update work carries across vector steps and checkpoints.
+Set the deprecated `iterations` option only to reproduce the legacy schedule of
+one full optimizer update per collected transition.
+
 For multiple topologies, `num_envs` is the size of every MJX bucket. For
 example, this creates 1,000 octahedron environments and 1,000 tetrahedron
 environments (2,000 total) while retaining a single mixed-graph policy
