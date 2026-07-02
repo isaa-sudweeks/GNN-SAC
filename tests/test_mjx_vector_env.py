@@ -78,6 +78,17 @@ class MjxVectorEnvTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "domain_randomization=false"):
             make_env(mjx_cfg(domain_randomization=True))
 
+    def test_video_is_allowed_with_native_mujoco_evaluation(self):
+        env = make_env(mjx_cfg(save_video=True, eval_backend="mujoco"))
+        try:
+            self.assertEqual(env.env.cfg.eval_backend, "mujoco")
+        finally:
+            env.close()
+
+    def test_video_is_rejected_with_mjx_evaluation(self):
+        with self.assertRaisesRegex(ValueError, "eval_backend=mujoco"):
+            make_env(mjx_cfg(save_video=True, eval_backend="mjx"))
+
     def test_topology_buckets_allocate_num_envs_to_each_topology_and_step_mixed_graphs(self):
         cfg = mjx_cfg(
             num_envs=2,

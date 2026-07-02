@@ -12,6 +12,7 @@ truss_graph_view: auto # Graph view for unified graph envs: auto, physical, or l
 
 # Simulation timing
 mujoco_backend: mujoco # Backend: mjx selects batch-native fixed-topology graph simulation; mujoco uses Gym environments.
+eval_backend: mujoco # Evaluation backend. Native MuJoCo supports fast single-env evaluation and rendering during MJX training.
 mjx_zero_copy: true # Exchange MJX observations/actions with PyTorch through DLPack when both use the same device.
 max_steps: 5_000 # Maximum simulator steps before the Timeout wrapper truncates an episode.
 episode_length: ${max_steps} # Nominal episode length used before make_env overwrites it from the wrapper.

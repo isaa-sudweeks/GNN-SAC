@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -77,6 +78,127 @@ def graph_test_cfg(**overrides):
 
 
 class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
+    def test_fixed_topology_mjx_training_uses_distinct_native_eval_env(self):
+        cfg = SimpleNamespace(
+            task="truss-graph",
+            env_name="truss-graph",
+            mujoco_backend="mjx",
+            eval_backend="mujoco",
+            domain_randomization=False,
+            eval_task=None,
+            resume_from_checkpoint=None,
+            work_dir=str(ROOT / "logs" / "test-smoke"),
+        )
+        training_env = SimpleNamespace()
+        native_eval_env = SimpleNamespace()
+        agent = SimpleNamespace(model="dummy")
+
+        with patch("env.make_env", return_value=native_eval_env) as make_eval_env:
+            trainer = OnlineTrainer(
+                cfg=cfg,
+                env=training_env,
+                agent=agent,
+                buffer=None,
+                logger=SimpleNamespace(),
+            )
+
+        eval_cfg = make_eval_env.call_args.args[0]
+        self.assertIs(trainer.eval_env, native_eval_env)
+        self.assertEqual(eval_cfg.mujoco_backend, "mujoco")
+        self.assertEqual(cfg.mujoco_backend, "mjx")
+
+    def test_mjx_training_uses_native_mujoco_for_topology_evaluation(self):
+        class DummyTrainingBuckets:
+            is_topology_bucket = True
+            topologies = ["octahedron", "tetrahedron"]
+            topology_representative_indices = {"octahedron": 0, "tetrahedron": 1}
+
+        class DummyNativeEvalEnv:
+            num_envs = 2
+
+            def __init__(self):
+                self.active_env_idx = 0
+                self.reset_task_indices = []
+
+            def reset(self, task_idx=None):
+                self.active_env_idx = int(task_idx or 0)
+                self.reset_task_indices.append(task_idx)
+                return torch.tensor([float(self.active_env_idx)])
+
+            def step(self, action):
+                reward = torch.tensor(float(self.active_env_idx + 1))
+                info = {
+                    "success": torch.tensor(float(self.active_env_idx)),
+                    "terminated": torch.tensor(0.0),
+                    "truncated": torch.tensor(1.0),
+                }
+                return torch.tensor([float(self.active_env_idx)]), reward, True, info
+
+            def close(self):
+                return
+
+        class DummyAgent:
+            model = "dummy"
+
+            def act(self, obs, t0=False, eval_mode=False):
+                return torch.tensor([0.0])
+
+        class DummyLogger:
+            video = None
+
+        cfg = SimpleNamespace(
+            task="truss-graph",
+            env_name="truss-graph",
+            mujoco_backend="mjx",
+            eval_backend="mujoco",
+            domain_randomization=False,
+            eval_task=None,
+            eval_episodes=1,
+            save_video=False,
+            multitask=False,
+            truss_topologies=["octahedron", "tetrahedron"],
+            tasks=["truss-graph:octahedron", "truss-graph:tetrahedron"],
+            resume_from_checkpoint=None,
+            work_dir=str(ROOT / "logs" / "test-smoke"),
+        )
+        eval_env = DummyNativeEvalEnv()
+        captured_cfg = None
+
+        def make_eval_env(eval_cfg):
+            nonlocal captured_cfg
+            captured_cfg = eval_cfg
+            return eval_env
+
+        with patch("env.make_env", side_effect=make_eval_env):
+            trainer = OnlineTrainer(
+                cfg=cfg,
+                env=DummyTrainingBuckets(),
+                agent=DummyAgent(),
+                buffer=None,
+                logger=DummyLogger(),
+            )
+
+        self.assertEqual(captured_cfg.mujoco_backend, "mujoco")
+        self.assertTrue(captured_cfg.multitask)
+        self.assertEqual(captured_cfg.num_envs, 1)
+        self.assertEqual(
+            list(captured_cfg.tasks),
+            ["truss-graph:octahedron", "truss-graph:tetrahedron"],
+        )
+
+        metrics = trainer.eval()
+
+        self.assertEqual(eval_env.reset_task_indices, [0, 1])
+        self.assertEqual(metrics["octahedron_episode_reward"], 1.0)
+        self.assertEqual(metrics["tetrahedron_episode_reward"], 2.0)
+        self.assertEqual(metrics["episode_reward"], 1.5)
+
+    def test_eval_scalar_value_moves_tensor_to_host_scalar(self):
+        self.assertEqual(OnlineTrainer._scalar_value(torch.tensor(2.5)), 2.5)
+        self.assertEqual(OnlineTrainer._scalar_value(3), 3.0)
+        with self.assertRaisesRegex(ValueError, "Expected a scalar tensor"):
+            OnlineTrainer._scalar_value(torch.tensor([1.0, 2.0]))
+
     def test_action_noise_is_domain_randomization_gated(self):
         trainer = OnlineTrainer.__new__(OnlineTrainer)
         action = torch.zeros(8)

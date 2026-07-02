@@ -103,6 +103,11 @@ MJX backend, batched GNN inference, and DLPack exchange between JAX and PyTorch:
 python sac/gnn_train.py --config-name gnn_mjx steps=10000 num_envs=256
 ```
 
+MJX training uses a separate native MuJoCo evaluation environment by default
+(`eval_backend=mujoco`). This avoids inefficient single-environment MJX
+evaluation and permits evaluation video capture with `save_video=true` while
+the training environments remain accelerator-native.
+
 For multiple topologies, `num_envs` is the size of every MJX bucket. For
 example, this creates 1,000 octahedron environments and 1,000 tetrahedron
 environments (2,000 total) while retaining a single mixed-graph policy
@@ -125,11 +130,12 @@ python sac/gnn_infer.py --config-name gnn_mjx_inference \
   model=/path/to/final.pt episodes=256 num_envs=256
 ```
 
-The MJX path currently requires `mujoco-truss-gen>=0.10.2`,
-`domain_randomization=false`, `truss_realistic=false`, and rendering disabled.
-It owns one compiled topology and one fixed environment batch per process. Use
-`mujoco_backend=mujoco` for realistic models, mixed-topology runs, rendering, or
-model-level domain randomization.
+The MJX training path currently requires `mujoco-truss-gen>=0.10.2`,
+`domain_randomization=false`, `truss_realistic=false`, and training-environment
+rendering disabled. Native MuJoCo evaluation can render and record videos.
+It owns one compiled model and one fixed environment batch per topology. Use
+`mujoco_backend=mujoco` for realistic training models, training-time rendering,
+or model-level domain randomization.
 
 ```yaml
 task: truss-graph

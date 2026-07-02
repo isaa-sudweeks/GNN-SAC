@@ -34,8 +34,13 @@ class MjxVectorGraphEnv(gym.Env):
                 "The MJX vector backend requires domain_randomization=false because "
                 "mujoco-truss-gen currently supports one fixed compiled model per batch."
             )
-        if bool(getattr(cfg, "visualize", False)) or bool(getattr(cfg, "save_video", False)):
-            raise ValueError("The MJX vector backend does not support rendering or video capture.")
+        if bool(getattr(cfg, "visualize", False)):
+            raise ValueError("The MJX vector backend does not support interactive rendering.")
+        eval_backend = str(getattr(cfg, "eval_backend", "mujoco")).lower()
+        if bool(getattr(cfg, "save_video", False)) and eval_backend == "mjx":
+            raise ValueError(
+                "MJX evaluation does not support video capture; use eval_backend=mujoco."
+            )
 
         try:
             import jax

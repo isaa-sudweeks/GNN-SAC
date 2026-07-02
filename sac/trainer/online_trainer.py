@@ -25,31 +25,57 @@ class OnlineTrainer(Trainer):
         self._ep_idx = 0 
         self._start_time = time() 
         self._episode_reward_components = {}
+        self._eval_topology_indices = None
         
         self.eval_env = self.env
         eval_task = getattr(self.cfg, "eval_task", None)
         has_domain_randomization = getattr(self.cfg, "domain_randomization", False)
         topology_bucket_metadata = self._topology_bucket_metadata(self.env)
+        training_backend = str(getattr(self.cfg, "mujoco_backend", "mujoco")).lower()
+        eval_backend = str(
+            getattr(
+                self.cfg,
+                "eval_backend",
+                "mujoco" if training_backend == "mjx" else training_backend,
+            )
+        ).lower()
+        uses_distinct_eval_backend = eval_backend != training_backend
         
         if (
             (eval_task is not None and eval_task != self.cfg.task)
             or has_domain_randomization
             or topology_bucket_metadata is not None
+            or uses_distinct_eval_backend
         ):
             from copy import deepcopy
             from env import make_env
             eval_cfg = deepcopy(self.cfg)
             eval_cfg.domain_randomization = False
+            eval_cfg.mujoco_backend = eval_backend
             if topology_bucket_metadata is not None:
                 # Evaluation needs one isolated slot per topology. Reusing the
                 # training buckets would overwrite live rollout state.
+                topologies, _ = topology_bucket_metadata
                 eval_cfg.num_envs = 1
+                if eval_backend == "mujoco":
+                    eval_cfg.multitask = True
+                    eval_cfg.truss_topologies = list(topologies)
+                    eval_cfg.tasks = [f"truss-graph:{topology}" for topology in topologies]
             if eval_task is not None:
                 eval_cfg.task = eval_task
                 eval_cfg.env_name = eval_task
                 if hasattr(eval_cfg, "tasks"):
                     eval_cfg.tasks = [eval_task]
             self.eval_env = make_env(eval_cfg)
+            if topology_bucket_metadata is not None:
+                eval_topology_metadata = self._topology_bucket_metadata(self.eval_env)
+                if eval_topology_metadata is not None:
+                    _, representative_indices = eval_topology_metadata
+                    self._eval_topology_indices = dict(representative_indices)
+                else:
+                    self._eval_topology_indices = {
+                        topology: env_idx for env_idx, topology in enumerate(topologies)
+                    }
             
         self.maybe_load_checkpoint()
 
@@ -98,6 +124,8 @@ class OnlineTrainer(Trainer):
         """
         Evaluate a SAC agent.
         """
+        if self._eval_topology_indices is not None:
+            return self._eval_topologies(self._eval_topology_indices)
         if self._topology_bucket_metadata(self.eval_env) is not None:
             return self._eval_topology_buckets()
         if bool(getattr(self.cfg, "multitask", False)) and int(getattr(self.eval_env, "num_envs", 1)) > 1:
@@ -120,8 +148,8 @@ class OnlineTrainer(Trainer):
                 t += 1
                 if self.cfg.save_video:
                     self.logger.video.record(self.eval_env)
-            ep_rewards.append(ep_reward)
-            ep_successes.append(info['success'])
+            ep_rewards.append(self._scalar_value(ep_reward))
+            ep_successes.append(self._scalar_value(info['success']))
             ep_lengths.append(t)
             if self.cfg.save_video:
                 self.logger.video.save(self._step, key=video_key)
@@ -155,11 +183,13 @@ class OnlineTrainer(Trainer):
         return metrics
 
     def _eval_topology_buckets(self):
-        topologies, representative_indices = self._topology_bucket_metadata(self.eval_env)
+        _, representative_indices = self._topology_bucket_metadata(self.eval_env)
+        return self._eval_topologies(representative_indices)
+
+    def _eval_topologies(self, topology_indices):
         metrics = {}
         topology_rewards, topology_successes, topology_lengths = [], [], []
-        for topology in topologies:
-            env_idx = representative_indices[topology]
+        for topology, env_idx in topology_indices.items():
             topology_key = self._metric_key(topology)
             topology_metrics = self._eval_one(
                 task_idx=env_idx,
@@ -177,6 +207,14 @@ class OnlineTrainer(Trainer):
             episode_length=np.nanmean(topology_lengths),
         )
         return metrics
+
+    @staticmethod
+    def _scalar_value(value):
+        if isinstance(value, torch.Tensor):
+            if value.numel() != 1:
+                raise ValueError(f"Expected a scalar tensor, got shape {tuple(value.shape)}")
+            return value.detach().cpu().item()
+        return float(value)
 
     @staticmethod
     def _topology_bucket_metadata(env):

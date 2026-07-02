@@ -5,6 +5,7 @@ defaults:
 # Accelerator-native fixed-topology collection. Select this profile with:
 # python sac/gnn_train.py --config-name gnn_mjx
 mujoco_backend: mjx
+eval_backend: mujoco
 use_control_graph: true
 truss_realistic: false
 truss_topologies: null
