@@ -84,6 +84,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             env_name="truss-graph",
             mujoco_backend="mjx",
             eval_backend="mujoco",
+            num_envs=1024,
             domain_randomization=False,
             eval_task=None,
             resume_from_checkpoint=None,
@@ -105,6 +106,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         eval_cfg = make_eval_env.call_args.args[0]
         self.assertIs(trainer.eval_env, native_eval_env)
         self.assertEqual(eval_cfg.mujoco_backend, "mujoco")
+        self.assertEqual(eval_cfg.num_envs, 1)
         self.assertEqual(cfg.mujoco_backend, "mjx")
 
     def test_mjx_training_uses_native_mujoco_for_topology_evaluation(self):
@@ -119,6 +121,10 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             def __init__(self):
                 self.active_env_idx = 0
                 self.reset_task_indices = []
+                self.selected_env_indices = []
+
+            def set_active_env(self, env_idx):
+                self.selected_env_indices.append(env_idx)
 
             def reset(self, task_idx=None):
                 self.active_env_idx = int(task_idx or 0)
@@ -192,6 +198,9 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         self.assertEqual(metrics["octahedron_episode_reward"], 1.0)
         self.assertEqual(metrics["tetrahedron_episode_reward"], 2.0)
         self.assertEqual(metrics["episode_reward"], 1.5)
+
+        trainer._activate_shared_eval_env(1724)
+        self.assertEqual(eval_env.selected_env_indices, [])
 
     def test_eval_scalar_value_moves_tensor_to_host_scalar(self):
         self.assertEqual(OnlineTrainer._scalar_value(torch.tensor(2.5)), 2.5)

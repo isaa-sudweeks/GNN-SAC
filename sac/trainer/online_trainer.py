@@ -52,6 +52,10 @@ class OnlineTrainer(Trainer):
             eval_cfg = deepcopy(self.cfg)
             eval_cfg.domain_randomization = False
             eval_cfg.mujoco_backend = eval_backend
+            if training_backend == "mjx" and eval_backend == "mujoco":
+                # Native evaluation needs one independent environment per task,
+                # not the accelerator-sized training batch.
+                eval_cfg.num_envs = 1
             if topology_bucket_metadata is not None:
                 # Evaluation needs one isolated slot per topology. Reusing the
                 # training buckets would overwrite live rollout state.
@@ -207,6 +211,15 @@ class OnlineTrainer(Trainer):
             episode_length=np.nanmean(topology_lengths),
         )
         return metrics
+
+    def _activate_shared_eval_env(self, env_idx):
+        """Select a completed slot only when evaluation reuses the training env."""
+        if (
+            self.eval_env is self.env
+            and self._topology_bucket_metadata(self.eval_env) is None
+            and hasattr(self.eval_env, "set_active_env")
+        ):
+            self.eval_env.set_active_env(env_idx)
 
     @staticmethod
     def _scalar_value(value):
@@ -424,11 +437,7 @@ class OnlineTrainer(Trainer):
                 previous_components = self._episode_reward_components
                 for env_idx in done_indices:
                     if eval_next:
-                        if (
-                            self._topology_bucket_metadata(self.eval_env) is None
-                            and hasattr(self.eval_env, "set_active_env")
-                        ):
-                            self.eval_env.set_active_env(env_idx)
+                        self._activate_shared_eval_env(env_idx)
                         eval_metrics = self.eval()
                         eval_metrics.update(self.common_metrics())
                         self.logger.log(eval_metrics, 'eval')
