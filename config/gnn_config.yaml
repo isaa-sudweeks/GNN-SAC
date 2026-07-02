@@ -39,6 +39,8 @@ seed_steps: 5_000
 pretrain_steps: 1_000
 eval_freq: 100_000
 eval_episodes: 3
+eval_at_end: true
+progress_freq: 10_000
 
 # Experiment behavior
 episodic: true

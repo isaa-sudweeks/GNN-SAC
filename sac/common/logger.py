@@ -42,6 +42,8 @@ CONSOLE_FORMAT = [
     ("episode_reward", "R", "float"),
     ("episode_success", "Succ", "float"),
     ("episode_length", "Len", "float"),
+    ("buffer_size", "Buf", "int"),
+    ("optimizer_updates", "Upd", "int"),
     ("elapsed_time", "T", "time"),
     ("steps_per_sec", "SPS", "float"),
 ]

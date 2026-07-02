@@ -33,7 +33,7 @@ class GNNBuffer:
     def size(self):
         return self._size
 
-    def add(self, td):
+    def add(self, td, count_episode=True):
         if isinstance(td, list):
             obs_seq = [step["obs"] for step in td]
             actions = [step["action"].squeeze(0) for step in td][1:]
@@ -75,7 +75,7 @@ class GNNBuffer:
 
         self._idx = (self._idx + n) % self._capacity
         self._size = min(self._size + n, self._capacity)
-        self._num_eps += 1
+        self._num_eps += int(bool(count_episode))
         return self._num_eps
 
     def sample(self):

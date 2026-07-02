@@ -223,6 +223,134 @@ class UpdateScheduleTest(unittest.TestCase):
             trainer._scheduled_updates(1)
 
 
+class VectorTrainingAccountingTest(unittest.TestCase):
+    def test_exact_step_budget_flushes_partial_trajectories_and_logs_final_state(self):
+        class DummyVectorEnv:
+            num_envs = 2
+
+            def __init__(self):
+                self.lengths = [0, 0]
+
+            def reset_many(self, env_indices):
+                for env_idx in env_indices:
+                    self.lengths[env_idx] = 0
+                return [graph(3, offset=float(env_idx)) for env_idx in env_indices]
+
+            def rand_act(self, env_idx=None):
+                return torch.zeros(3, 1)
+
+            def step_many(self, actions, env_indices):
+                results = []
+                for env_idx in env_indices:
+                    self.lengths[env_idx] += 1
+                    done = self.lengths[env_idx] == 2
+                    results.append(
+                        (
+                            graph(3, offset=float(env_idx + self.lengths[env_idx])),
+                            torch.tensor(1.0),
+                            done,
+                            {
+                                "success": 0.0,
+                                "terminated": torch.tensor(0.0),
+                                "truncated": torch.tensor(float(done)),
+                            },
+                        )
+                    )
+                return results
+
+            def close(self):
+                return
+
+        class RecordingBuffer:
+            def __init__(self):
+                self.size = 0
+                self.num_eps = 0
+
+            def add(self, trajectory, count_episode=True):
+                self.size += len(trajectory) - 1
+                self.num_eps += int(bool(count_episode))
+                return self.num_eps
+
+        class RecordingLogger:
+            def __init__(self):
+                self.rows = []
+
+            def log(self, metrics, category):
+                self.rows.append((category, dict(metrics)))
+
+            def finish(self, agent):
+                return
+
+        class RecordingAgent:
+            def __init__(self):
+                self.update_buffer_sizes = []
+
+            def act_batch(self, observations):
+                return [torch.zeros(obs.num_nodes, 1) for obs in observations]
+
+            def update(self, buffer):
+                self.update_buffer_sizes.append(buffer.size)
+                return {"value_loss": torch.tensor(0.0)}
+
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        trainer.cfg = SimpleNamespace(
+            steps=5,
+            eval_freq=1000,
+            seed_steps=0,
+            pretrain_steps=0,
+            batch_size=2,
+            replay_ratio=2.0,
+            iterations=None,
+            episodic=True,
+            checkpoint_freq=0,
+            progress_freq=1000,
+            domain_randomization=False,
+        )
+        trainer.env = DummyVectorEnv()
+        trainer.eval_env = trainer.env
+        trainer.agent = RecordingAgent()
+        trainer.buffer = RecordingBuffer()
+        trainer.logger = RecordingLogger()
+        trainer._step = 0
+        trainer._ep_idx = 0
+        trainer._start_time = 0.0
+        trainer._episode_reward_components = {}
+        trainer._eval_topology_indices = None
+        trainer._update_budget = 0.0
+        trainer._pretrain_complete = False
+        trainer._optimizer_updates = 0
+        trainer._last_eval_step = None
+        trainer._best_eval_metrics = None
+        trainer.trial = None
+        trainer.eval = lambda: {
+            "episode_reward": 0.0,
+            "episode_success": 0.0,
+            "episode_length": 0.0,
+        }
+
+        trainer._train_multi_env(num_envs=2)
+
+        self.assertEqual(trainer._step, 5)
+        self.assertEqual(trainer.buffer.size, 5)
+        self.assertEqual(trainer.buffer.num_eps, 2)
+        self.assertEqual(trainer.agent.update_buffer_sizes, [5])
+        final_category, final_metrics = next(
+            (category, metrics)
+            for category, metrics in reversed(trainer.logger.rows)
+            if category == "train"
+        )
+        self.assertEqual(final_category, "train")
+        self.assertEqual(final_metrics["step"], 5)
+        self.assertEqual(final_metrics["buffer_size"], 5)
+        self.assertEqual(final_metrics["optimizer_updates"], 1)
+        eval_steps = [
+            metrics["step"]
+            for category, metrics in trainer.logger.rows
+            if category == "eval"
+        ]
+        self.assertEqual(eval_steps, [0, 5])
+
+
 class VectorizedInferenceTest(unittest.TestCase):
     def test_episodes_are_run_in_batched_waves(self):
         class DummyVectorEnv:

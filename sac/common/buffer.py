@@ -50,7 +50,7 @@ class Buffer:
         print(f"Storage required: {total_bytes / 1e9:.2f} GB")
         print(f"Using {self._storage_device} memory")
 
-    def add(self, td):
+    def add(self, td, count_episode=True):
         if isinstance(td["obs"], dict):
             raise NotImplementedError("Graph/dict observations need a graph replay buffer.")
 
@@ -80,7 +80,7 @@ class Buffer:
 
         self._idx = (self._idx + n) % self._capacity
         self._size = min(self._size + n, self._capacity)
-        self._num_eps += 1
+        self._num_eps += int(bool(count_episode))
         return self._num_eps
 
     def _write_slice(self, start, end, obs, next_obs, action, reward, terminated):

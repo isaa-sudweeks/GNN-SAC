@@ -18,6 +18,8 @@ seed_steps: 5_000 # Random-action steps collected before policy updates begin; m
 pretrain_steps: 1_000 # Number of updates to run once when seed data first becomes available.
 eval_freq: 100_000 # Environment-step interval between evaluation passes.
 eval_episodes: 3 # Number of episodes averaged for each evaluation pass.
+eval_at_end: true # Evaluate the final policy unless this exact global step was already evaluated.
+progress_freq: 10_000 # Environment-step interval for collection progress logs; the final step is always logged.
 
 # Experiment behavior
 episodic: true # Whether true environment terminations should stop bootstrap targets.

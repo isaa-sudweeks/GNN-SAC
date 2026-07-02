@@ -83,6 +83,8 @@ class Trainer:
                 "best_eval_metrics": self._best_eval_metrics,
                 "update_budget": float(getattr(self, "_update_budget", 0.0)),
                 "pretrain_complete": bool(getattr(self, "_pretrain_complete", False)),
+                "optimizer_updates": int(getattr(self, "_optimizer_updates", 0)),
+                "last_eval_step": getattr(self, "_last_eval_step", None),
             },
             "agent": self.agent.training_state_dict(),
             "buffer": self.buffer.state_dict(),
@@ -108,6 +110,9 @@ class Trainer:
             seed_steps = int(getattr(self.cfg, "seed_steps", 0))
             pretrain_complete = self._step > seed_steps and buffer_size >= batch_size
         self._pretrain_complete = bool(pretrain_complete)
+        self._optimizer_updates = int(trainer_state.get("optimizer_updates", 0))
+        last_eval_step = trainer_state.get("last_eval_step")
+        self._last_eval_step = None if last_eval_step is None else int(last_eval_step)
         if "logger" in state_dict:
             self.logger.load_state_dict(state_dict["logger"])
         self._load_rng_state_dict(state_dict.get("rng"))
