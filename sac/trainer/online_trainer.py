@@ -27,6 +27,8 @@ class OnlineTrainer(Trainer):
         self._episode_reward_components = {}
         self._eval_topology_indices = None
         self._update_budget = 0.0
+        self._pending_update_transitions = 0
+        self._vector_steps_since_update = 0
         self._pretrain_complete = False
         self._optimizer_updates = 0
         self._last_eval_step = None
@@ -283,8 +285,36 @@ class OnlineTrainer(Trainer):
         self._optimizer_updates += int(num_updates)
         return update_metrics
 
+    def _update_cadence(self):
+        cadence = int(getattr(self.cfg, "update_every_vector_steps", 8))
+        if cadence <= 0:
+            raise ValueError("update_every_vector_steps must be positive")
+        return cadence
+
+    def _queue_collected_transitions(self, collected_transitions):
+        """Accumulate learner work earned by one environment/vector step."""
+        collected_transitions = int(collected_transitions)
+        if collected_transitions < 0:
+            raise ValueError("collected_transitions must be non-negative")
+        self._pending_update_transitions += collected_transitions
+        self._vector_steps_since_update += 1
+
+    def _updates_due(self, pretrain_steps, *, force=False):
+        """Return accumulated optimizer work when the configured cadence is due."""
+        if self._pending_update_transitions <= 0:
+            return 0
+        if not force and self._vector_steps_since_update < self._update_cadence():
+            return 0
+        if self._step < self.cfg.seed_steps or self.buffer.size < self.cfg.batch_size:
+            return 0
+
+        collected_transitions = self._pending_update_transitions
+        self._pending_update_transitions = 0
+        self._vector_steps_since_update = 0
+        return self._updates_after_collection(collected_transitions, pretrain_steps)
+
     def _add_trajectory_to_buffer(self, trajectory, *, completed):
-        """Store every transition in a complete or final partial trajectory."""
+        """Store every transition in a trajectory payload."""
         if trajectory is None or len(trajectory) <= 1:
             return 0
         payload = (
@@ -295,14 +325,12 @@ class OnlineTrainer(Trainer):
         self._ep_idx = self.buffer.add(payload, count_episode=completed)
         return len(trajectory) - 1
 
-    def _flush_multi_env_trajectories(self, episode_tds, done):
-        stored_transitions = 0
-        for env_idx, trajectory in enumerate(episode_tds):
-            stored_transitions += self._add_trajectory_to_buffer(
-                trajectory,
-                completed=bool(done[env_idx]),
-            )
-        return stored_transitions
+    def _add_transition_to_buffer(self, previous_td, current_td, *, completed):
+        """Store one transition without waiting for its episode to finish."""
+        return self._add_trajectory_to_buffer(
+            [previous_td, current_td],
+            completed=completed,
+        )
 
     def _log_collection_progress(self, previous_step=None, *, force=False):
         progress_freq = int(getattr(self.cfg, "progress_freq", 10_000) or 0)
@@ -466,11 +494,6 @@ class OnlineTrainer(Trainer):
                         )
                         reward_metrics.update(self._episode_reward_components)
                         self.logger.log(reward_metrics, 'training_rewards')
-                    inserted_transitions += self._add_trajectory_to_buffer(
-                        self._tds,
-                        completed=True,
-                    )
-
                 obs = self.env.reset()
                 self._tds = [self.to_td(obs)]
                 self._episode_reward_components = {}
@@ -484,24 +507,28 @@ class OnlineTrainer(Trainer):
             obs, reward, done, info = self.env.step(action)
             self._accumulate_reward_components(info)
             terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
-            self._tds.append(self.to_td(obs, action, reward, terminated))
+            previous_td = self._tds[-1]
+            current_td = self.to_td(obs, action, reward, terminated)
+            self._tds.append(current_td)
+            inserted_transitions += self._add_transition_to_buffer(
+                previous_td,
+                current_td,
+                completed=bool(done),
+            )
+            self._queue_collected_transitions(inserted_transitions)
 
             # Update agent 
-            if self._step >= self.cfg.seed_steps and self.buffer.size >= self.cfg.batch_size:
-                num_updates = self._updates_after_collection(inserted_transitions, pretrain_steps)
-                if num_updates > 0:
-                    train_metrics.update(self._run_agent_updates(num_updates))
-
             previous_step = self._step
             self._step += 1
+            num_updates = self._updates_due(pretrain_steps)
+            if num_updates > 0:
+                train_metrics.update(self._run_agent_updates(num_updates))
             if self._step < self.cfg.steps:
                 self._log_collection_progress(previous_step)
             self.maybe_save_checkpoint(previous_step)
-        inserted_transitions = self._add_trajectory_to_buffer(self._tds, completed=bool(done))
-        if self._step >= self.cfg.seed_steps and self.buffer.size >= self.cfg.batch_size:
-            num_updates = self._updates_after_collection(inserted_transitions, pretrain_steps)
-            if num_updates > 0:
-                train_metrics.update(self._run_agent_updates(num_updates))
+        num_updates = self._updates_due(pretrain_steps, force=True)
+        if num_updates > 0:
+            train_metrics.update(self._run_agent_updates(num_updates))
         self._log_collection_progress(force=True)
         self._evaluate_final_policy()
         self.maybe_save_checkpoint(force=True)
@@ -557,10 +584,6 @@ class OnlineTrainer(Trainer):
                             )
                             reward_metrics.update(reward_components[env_idx])
                             self.logger.log(reward_metrics, 'training_rewards')
-                        inserted_transitions += self._add_trajectory_to_buffer(
-                            episode_tds[env_idx],
-                            completed=True,
-                        )
                 self._episode_reward_components = previous_components
 
                 reset_obs = self.env.reset_many(env_indices=done_indices)
@@ -590,26 +613,31 @@ class OnlineTrainer(Trainer):
                 self._episode_reward_components = previous_components
 
                 terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
-                episode_tds[env_idx].append(self.to_td(obs, action, reward, terminated))
+                previous_td = episode_tds[env_idx][-1]
+                current_td = self.to_td(obs, action, reward, terminated)
+                episode_tds[env_idx].append(current_td)
+                inserted_transitions += self._add_transition_to_buffer(
+                    previous_td,
+                    current_td,
+                    completed=bool(is_done),
+                )
 
             previous_step = self._step
             self._step += len(env_indices)
+            self._queue_collected_transitions(inserted_transitions)
             if self._crossed_eval_interval(previous_step, self._step, self.cfg.eval_freq):
                 eval_next = True
 
-            if self._step >= self.cfg.seed_steps and self.buffer.size >= self.cfg.batch_size:
-                num_updates = self._updates_after_collection(inserted_transitions, pretrain_steps)
-                if num_updates > 0:
-                    train_metrics.update(self._run_agent_updates(num_updates))
+            num_updates = self._updates_due(pretrain_steps)
+            if num_updates > 0:
+                train_metrics.update(self._run_agent_updates(num_updates))
             if self._step < self.cfg.steps:
                 self._log_collection_progress(previous_step)
             self.maybe_save_checkpoint(previous_step)
 
-        inserted_transitions = self._flush_multi_env_trajectories(episode_tds, done)
-        if self._step >= self.cfg.seed_steps and self.buffer.size >= self.cfg.batch_size:
-            num_updates = self._updates_after_collection(inserted_transitions, pretrain_steps)
-            if num_updates > 0:
-                train_metrics.update(self._run_agent_updates(num_updates))
+        num_updates = self._updates_due(pretrain_steps, force=True)
+        if num_updates > 0:
+            train_metrics.update(self._run_agent_updates(num_updates))
         self._log_collection_progress(force=True)
         self._evaluate_final_policy()
         self.maybe_save_checkpoint(force=True)

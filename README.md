@@ -111,7 +111,10 @@ the training environments remain accelerator-native.
 Learner work scales through `replay_ratio`, defined as replay samples consumed
 per newly collected transition. With the default `replay_ratio=1`, a vector
 step collecting 2,048 transitions and `batch_size=256` schedules eight optimizer
-updates. Fractional update work carries across vector steps and checkpoints.
+updates. Transitions enter replay after every vector step. By default the learner
+spends its accumulated update budget every eight vector steps; set
+`update_every_vector_steps=1` to update after every vector step. Pending learner
+work carries across vector steps and checkpoints.
 Set the deprecated `iterations` option only to reproduce the legacy schedule of
 one full optimizer update per collected transition.
 

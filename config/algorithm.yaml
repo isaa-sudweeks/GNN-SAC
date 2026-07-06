@@ -9,6 +9,7 @@ grad_clip_norm: 10.0 # Maximum global gradient norm before clipping optimizer st
 buffer_size: 1_000_000 # Maximum number of transitions stored in replay.
 horizon: 2 # Sequence length used by the slice sampler; 2 gives one current/next transition.
 replay_ratio: 1.0 # Replay samples consumed per new transition; updates are replay_ratio * collected / batch_size.
+update_every_vector_steps: 8 # Spend accumulated update budget after this many vector-environment steps; set to 1 for every step.
 iterations: null # Deprecated legacy optimizer updates per transition. Set only to reproduce the old update schedule.
 
 # SAC objective

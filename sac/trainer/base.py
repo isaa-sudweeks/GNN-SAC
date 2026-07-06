@@ -76,12 +76,14 @@ class Trainer:
 
     def checkpoint_state_dict(self):
         return {
-            "format_version": 2,
+            "format_version": 3,
             "trainer": {
                 "step": getattr(self, "_step", 0),
                 "episode": getattr(self, "_ep_idx", 0),
                 "best_eval_metrics": self._best_eval_metrics,
                 "update_budget": float(getattr(self, "_update_budget", 0.0)),
+                "pending_update_transitions": int(getattr(self, "_pending_update_transitions", 0)),
+                "vector_steps_since_update": int(getattr(self, "_vector_steps_since_update", 0)),
                 "pretrain_complete": bool(getattr(self, "_pretrain_complete", False)),
                 "optimizer_updates": int(getattr(self, "_optimizer_updates", 0)),
                 "last_eval_step": getattr(self, "_last_eval_step", None),
@@ -101,6 +103,8 @@ class Trainer:
         self.agent.load_training_state_dict(state_dict["agent"])
         self.buffer.load_state_dict(state_dict["buffer"])
         self._update_budget = float(trainer_state.get("update_budget", 0.0))
+        self._pending_update_transitions = int(trainer_state.get("pending_update_transitions", 0))
+        self._vector_steps_since_update = int(trainer_state.get("vector_steps_since_update", 0))
         pretrain_complete = trainer_state.get("pretrain_complete")
         if pretrain_complete is None:
             # Older checkpoints did not record this flag. If replay already

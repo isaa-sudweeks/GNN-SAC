@@ -96,6 +96,8 @@ class CheckpointingTest(unittest.TestCase):
             trainer._step = 20
             trainer._ep_idx = 3
             trainer._update_budget = 0.75
+            trainer._pending_update_transitions = 1536
+            trainer._vector_steps_since_update = 6
             trainer._pretrain_complete = True
             trainer._optimizer_updates = 17
             trainer._last_eval_step = 20
@@ -110,6 +112,8 @@ class CheckpointingTest(unittest.TestCase):
             self.assertEqual(resumed._step, 20)
             self.assertEqual(resumed._ep_idx, 3)
             self.assertEqual(resumed._update_budget, 0.75)
+            self.assertEqual(resumed._pending_update_transitions, 1536)
+            self.assertEqual(resumed._vector_steps_since_update, 6)
             self.assertTrue(resumed._pretrain_complete)
             self.assertEqual(resumed._optimizer_updates, 17)
             self.assertEqual(resumed._last_eval_step, 20)

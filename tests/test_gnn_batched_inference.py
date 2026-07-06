@@ -222,6 +222,40 @@ class UpdateScheduleTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "finite and non-negative"):
             trainer._scheduled_updates(1)
 
+    def test_update_cadence_batches_eight_vector_steps(self):
+        trainer = self.make_trainer()
+        trainer.cfg.update_every_vector_steps = 8
+        trainer.cfg.seed_steps = 0
+        trainer.buffer = SimpleNamespace(size=2048)
+        trainer._step = 0
+        trainer._pending_update_transitions = 0
+        trainer._vector_steps_since_update = 0
+
+        for _ in range(7):
+            trainer._queue_collected_transitions(256)
+            trainer._step += 256
+            self.assertEqual(trainer._updates_due(pretrain_steps=1000), 0)
+
+        trainer._queue_collected_transitions(256)
+        trainer._step += 256
+
+        self.assertEqual(trainer._updates_due(pretrain_steps=1000), 8)
+        self.assertEqual(trainer._pending_update_transitions, 0)
+        self.assertEqual(trainer._vector_steps_since_update, 0)
+
+    def test_update_cadence_one_spends_budget_each_vector_step(self):
+        trainer = self.make_trainer()
+        trainer.cfg.update_every_vector_steps = 1
+        trainer.cfg.seed_steps = 0
+        trainer.buffer = SimpleNamespace(size=256)
+        trainer._step = 256
+        trainer._pending_update_transitions = 0
+        trainer._vector_steps_since_update = 0
+
+        trainer._queue_collected_transitions(256)
+
+        self.assertEqual(trainer._updates_due(pretrain_steps=1000), 1)
+
 
 class VectorTrainingAccountingTest(unittest.TestCase):
     def test_exact_step_budget_flushes_partial_trajectories_and_logs_final_state(self):
@@ -265,9 +299,12 @@ class VectorTrainingAccountingTest(unittest.TestCase):
             def __init__(self):
                 self.size = 0
                 self.num_eps = 0
+                self.insert_sizes = []
 
             def add(self, trajectory, count_episode=True):
-                self.size += len(trajectory) - 1
+                insert_size = len(trajectory) - 1
+                self.insert_sizes.append(insert_size)
+                self.size += insert_size
                 self.num_eps += int(bool(count_episode))
                 return self.num_eps
 
@@ -300,6 +337,7 @@ class VectorTrainingAccountingTest(unittest.TestCase):
             pretrain_steps=0,
             batch_size=2,
             replay_ratio=2.0,
+            update_every_vector_steps=2,
             iterations=None,
             episodic=True,
             checkpoint_freq=0,
@@ -317,6 +355,8 @@ class VectorTrainingAccountingTest(unittest.TestCase):
         trainer._episode_reward_components = {}
         trainer._eval_topology_indices = None
         trainer._update_budget = 0.0
+        trainer._pending_update_transitions = 0
+        trainer._vector_steps_since_update = 0
         trainer._pretrain_complete = False
         trainer._optimizer_updates = 0
         trainer._last_eval_step = None
@@ -333,6 +373,7 @@ class VectorTrainingAccountingTest(unittest.TestCase):
         self.assertEqual(trainer._step, 5)
         self.assertEqual(trainer.buffer.size, 5)
         self.assertEqual(trainer.buffer.num_eps, 2)
+        self.assertEqual(trainer.buffer.insert_sizes, [1, 1, 1, 1, 1])
         self.assertEqual(trainer.agent.update_buffer_sizes, [5])
         final_category, final_metrics = next(
             (category, metrics)
