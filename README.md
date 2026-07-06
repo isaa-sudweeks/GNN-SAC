@@ -82,6 +82,12 @@ python sac/gnn_train.py resume_from_checkpoint=/path/to/run/checkpoints/step_500
 python sac/gnn_train.py --config-name supercomputer --multirun
 ```
 
+Each multirun job is isolated under
+`${run_root}/${task}/${exp_name}/seed_${seed}/job_<number>_<override-hash>`.
+The hash is derived from the Hydra job override set, while the job number
+also separates duplicate configurations within one sweep. Requeued jobs retain
+the same directory and therefore resume only their own checkpoint and W&B run.
+
 Set `GNN_SAC_RUN_ROOT` to put runs on shared persistent storage, and override cluster-specific values on the command line as needed:
 
 ```bash

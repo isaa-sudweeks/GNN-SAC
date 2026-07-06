@@ -205,22 +205,35 @@ class WandbInitTest(unittest.TestCase):
             torch.save({"logger": {"wandb": {"id": "resume-run"}}}, checkpoint_dir / "latest.pt")
 
             init_calls = []
+            artifact_names = []
 
             class FakeRun:
                 id = "resume-run"
 
+            class FakeArtifact:
+                def __init__(self, name, type):
+                    artifact_names.append(name)
+
+                def add_file(self, path):
+                    return
+
             class FakeWandb:
                 run = FakeRun()
+                Artifact = FakeArtifact
 
                 @staticmethod
                 def init(**kwargs):
                     init_calls.append(kwargs)
                     return FakeRun()
 
+                @staticmethod
+                def log_artifact(artifact):
+                    return
+
             cfg = SimpleNamespace(
                 work_dir=str(work_dir),
                 save_csv=False,
-                save_agent=False,
+                save_agent=True,
                 env_name="env",
                 exp_name="exp",
                 seed=1,
@@ -228,6 +241,7 @@ class WandbInitTest(unittest.TestCase):
                 wandb_project="project",
                 wandb_entity=None,
                 wandb_name="run-name",
+                multirun_id="job_0002_deadbeefcafe",
                 wandb_silent=True,
                 enable_wandb=True,
                 save_video=False,
@@ -238,10 +252,16 @@ class WandbInitTest(unittest.TestCase):
 
             with patch.dict(sys.modules, {"wandb": FakeWandb}), patch.dict("os.environ", {}, clear=True):
                 logger = Logger(cfg)
+                logger.save_agent(DummyAgent())
 
             self.assertEqual(init_calls[0]["id"], "resume-run")
             self.assertEqual(init_calls[0]["resume"], "allow")
             self.assertEqual(init_calls[0]["mode"], "offline")
+            self.assertEqual(init_calls[0]["name"], "run-name-job_0002_deadbeefcafe")
+            self.assertEqual(
+                artifact_names,
+                ["env-exp-1-job_0002_deadbeefcafe-final"],
+            )
             self.assertEqual(json.loads((work_dir / "wandb_run.json").read_text())["id"], "resume-run")
             self.assertEqual(logger.state_dict()["wandb"]["id"], "resume-run")
 

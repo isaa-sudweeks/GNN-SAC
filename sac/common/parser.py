@@ -1,10 +1,32 @@
 import dataclasses
+import hashlib
 import re
 from pathlib import Path
 from typing import Any
 
 import hydra
 from omegaconf import OmegaConf, open_dict
+
+
+def _hydra_multirun_id() -> str | None:
+	"""Return a stable, collision-resistant identity for one Hydra sweep job."""
+	from hydra.core.hydra_config import HydraConfig
+
+	try:
+		hydra_cfg = HydraConfig.get()
+	except ValueError:
+		return None
+
+	job_num = OmegaConf.select(hydra_cfg, "job.num", default=None)
+	if job_num is None:
+		return None
+	override_dirname = OmegaConf.select(
+		hydra_cfg,
+		"job.override_dirname",
+		default="",
+	)
+	digest = hashlib.sha256(str(override_dirname).encode("utf-8")).hexdigest()[:12]
+	return f"job_{int(job_num):04d}_{digest}"
 
 
 def cfg_to_dataclass(cfg, frozen=False):
@@ -64,6 +86,11 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 				cfg.work_dir = Path(HydraConfig.get().runtime.output_dir)
 			except Exception:
 				cfg.work_dir = Path(hydra.utils.get_original_cwd()) / 'logs' / cfg.task / str(cfg.seed) / cfg.exp_name
+		if bool(cfg.get("isolate_multirun_runs", False)):
+			multirun_id = _hydra_multirun_id()
+			if multirun_id is not None:
+				cfg.multirun_id = multirun_id
+				cfg.work_dir = Path(cfg.work_dir) / multirun_id
 		cfg.task_title = cfg.task.replace("-", " ").title()
 
 
