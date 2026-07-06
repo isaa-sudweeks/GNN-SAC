@@ -89,9 +89,9 @@ class MjxVectorEnvTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "eval_backend=mujoco"):
             make_env(mjx_cfg(save_video=True, eval_backend="mjx"))
 
-    def test_topology_buckets_allocate_num_envs_to_each_topology_and_step_mixed_graphs(self):
+    def test_topology_buckets_split_total_num_envs_across_topologies_and_step_mixed_graphs(self):
         cfg = mjx_cfg(
-            num_envs=2,
+            num_envs=4,
             truss_topologies=["octahedron", "tetrahedron"],
         )
         env = make_env(cfg)
@@ -176,6 +176,15 @@ class MjxVectorEnvTest(unittest.TestCase):
             make_env(
                 mjx_cfg(
                     num_envs=0,
+                    truss_topologies=["octahedron", "tetrahedron"],
+                )
+            )
+
+    def test_topology_buckets_require_even_total_environment_split(self):
+        with self.assertRaisesRegex(ValueError, "divisible"):
+            make_env(
+                mjx_cfg(
+                    num_envs=3,
                     truss_topologies=["octahedron", "tetrahedron"],
                 )
             )

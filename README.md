@@ -124,10 +124,10 @@ work carries across vector steps and checkpoints.
 Set the deprecated `iterations` option only to reproduce the legacy schedule of
 one full optimizer update per collected transition.
 
-For multiple topologies, `num_envs` is the size of every MJX bucket. For
-example, this creates 1,000 octahedron environments and 1,000 tetrahedron
-environments (2,000 total) while retaining a single mixed-graph policy
-inference call:
+For multiple topologies, `num_envs` is the total vector-environment count and
+must divide evenly across the requested robot configurations. For example, this
+creates 500 octahedron environments and 500 tetrahedron environments while
+retaining a single mixed-graph policy inference call:
 
 ```bash
 python sac/gnn_train.py --config-name gnn_mjx num_envs=1000 \
@@ -136,7 +136,7 @@ python sac/gnn_train.py --config-name gnn_mjx num_envs=1000 \
 
 Each topology has a separately compiled MJX step function and fixed-size state
 batch. The trainer derives its total environment count as
-`num_envs * len(truss_topologies)`.
+`num_envs`, with `num_envs / len(truss_topologies)` slots per topology.
 
 Run checkpoint evaluation in vectorized waves with the matching inference
 profile:

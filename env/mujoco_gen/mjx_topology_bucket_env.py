@@ -10,14 +10,14 @@ from env.mujoco_gen.mjx_vector_env import MjxVectorGraphEnv
 
 
 class MjxTopologyBucketEnv(gym.Env):
-    """Vectorize a fixed number of environments within each topology bucket.
+    """Split a total vector batch evenly across fixed-topology MJX buckets.
 
     MJX cannot place different compiled models in one array batch. This wrapper
     therefore owns one :class:`MjxVectorGraphEnv` per topology and presents the
     buckets as one global vector environment. ``cfg.num_envs`` is interpreted
-    as the batch size for every topology, so the exposed global environment
-    count is ``num_envs * len(topologies)``. Global indices are interleaved by
-    topology so any leading subset remains approximately topology-balanced.
+    as the total exposed environment count and must divide evenly across the
+    requested topologies. Global indices are interleaved by topology so any
+    leading subset remains approximately topology-balanced.
     """
 
     accepts_torch_actions = True
@@ -29,12 +29,12 @@ class MjxTopologyBucketEnv(gym.Env):
         self.cfg = cfg
         self.task = str(getattr(cfg, "task", "truss-graph")).split(":", 1)[0]
         self.topologies = [str(topology) for topology in topologies]
-        self.envs_per_topology = int(getattr(cfg, "num_envs", 1))
+        self.num_envs = int(getattr(cfg, "num_envs", 1))
         self._validate_configuration()
 
-        bucket_size = self.envs_per_topology
+        bucket_size = self.num_envs // len(self.topologies)
+        self.envs_per_topology = bucket_size
         self.bucket_sizes = [bucket_size] * len(self.topologies)
-        self.num_envs = bucket_size * len(self.topologies)
         self.buckets = []
         try:
             for bucket_idx, topology in enumerate(self.topologies):
@@ -168,8 +168,16 @@ class MjxTopologyBucketEnv(gym.Env):
             raise ValueError("MjxTopologyBucketEnv requires at least two topologies.")
         if len(set(self.topologies)) != len(self.topologies):
             raise ValueError("MJX topology buckets require unique topology names.")
-        if self.envs_per_topology < 1:
-            raise ValueError("num_envs must allocate at least one environment per topology.")
+        topology_count = len(self.topologies)
+        if self.num_envs < topology_count:
+            raise ValueError(
+                "num_envs must allocate at least one environment per topology."
+            )
+        if self.num_envs % topology_count != 0:
+            raise ValueError(
+                "num_envs must be divisible by the number of truss_topologies "
+                "for balanced MJX topology buckets."
+            )
 
     def _mapping(self, env_idx: int) -> tuple[int, int]:
         if env_idx < 0 or env_idx >= self.num_envs:

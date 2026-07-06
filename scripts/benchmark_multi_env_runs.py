@@ -113,7 +113,7 @@ def main():
 
     backends = ("mjx", "mujoco") if args.backend == "both" else (args.backend,)
     print(
-        "backend,envs_per_topology,total_envs,elapsed_s,total_env_steps_s,"
+        "backend,requested_num_envs,total_envs,elapsed_s,total_env_steps_s,"
         "per_env_steps_s,total_physics_steps_s"
     )
     for backend in backends:

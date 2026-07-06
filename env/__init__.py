@@ -74,7 +74,7 @@ def _is_mjx_vector_graph_run(cfg):
 def _make_mjx_vector_graph_env(cfg):
     if bool(getattr(cfg, "multitask", False)):
         raise ValueError(
-            "MJX topology bucketing uses num_envs and truss_topologies directly; "
+            "MJX topology bucketing splits num_envs across truss_topologies directly; "
             "set multitask=false."
         )
 

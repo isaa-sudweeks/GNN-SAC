@@ -9,7 +9,7 @@ use_control_graph: true
 truss_realistic: false
 truss_topologies: null
 domain_randomization: false
-num_envs: 256 # Environments per topology; total allocation multiplies by truss_topologies count.
+num_envs: 256 # Total environments; mixed-topology MJX inference splits this evenly across truss_topologies.
 episodes: 256
 device: cuda
 visualize: false
