@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 import random
@@ -24,6 +26,8 @@ class Trainer:
         self.logger = logger 
         self.trial = trial
         self._best_eval_metrics = None
+        self._checkpoint_executor = None
+        self._checkpoint_future = None
         print('Architecture:' , self.agent.model)
 
     def checkpoint_dir(self):
@@ -95,6 +99,39 @@ class Trainer:
             "config": self._config_state_dict(),
         }
 
+    def _snapshot_checkpoint_value(self, value):
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().clone()
+        if isinstance(value, Mapping):
+            return {key: self._snapshot_checkpoint_value(item) for key, item in value.items()}
+        if isinstance(value, tuple):
+            return tuple(self._snapshot_checkpoint_value(item) for item in value)
+        if isinstance(value, list):
+            return [self._snapshot_checkpoint_value(item) for item in value]
+        return deepcopy(value)
+
+    def _snapshot_buffer_state_dict(self, state_dict):
+        """Copy replay metadata while avoiding a full clone of immutable stored samples."""
+        snapshot = {}
+        for key, value in state_dict.items():
+            if isinstance(value, list):
+                snapshot[key] = list(value)
+            else:
+                snapshot[key] = self._snapshot_checkpoint_value(value)
+        return snapshot
+
+    def _checkpoint_state_snapshot(self):
+        state_dict = self.checkpoint_state_dict()
+        return {
+            "format_version": state_dict["format_version"],
+            "trainer": self._snapshot_checkpoint_value(state_dict["trainer"]),
+            "agent": self._snapshot_checkpoint_value(state_dict["agent"]),
+            "buffer": self._snapshot_buffer_state_dict(state_dict["buffer"]),
+            "logger": self._snapshot_checkpoint_value(state_dict["logger"]),
+            "rng": self._snapshot_checkpoint_value(state_dict["rng"]),
+            "config": self._snapshot_checkpoint_value(state_dict["config"]),
+        }
+
     def load_checkpoint_state_dict(self, state_dict):
         trainer_state = state_dict.get("trainer", {})
         self._step = int(trainer_state.get("step", 0))
@@ -121,14 +158,20 @@ class Trainer:
             self.logger.load_state_dict(state_dict["logger"])
         self._load_rng_state_dict(state_dict.get("rng"))
 
-    def save_checkpoint(self, identifier=None):
-        checkpoint_dir = self.checkpoint_dir()
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        step = getattr(self, "_step", 0)
-        identifier = f"step_{step}" if identifier is None else str(identifier)
+    @staticmethod
+    def _agent_checkpoint_state_dict(state_dict):
+        agent_state = state_dict["agent"]
+        if isinstance(agent_state, Mapping) and "model" in agent_state:
+            checkpoint = {"model": agent_state["model"]}
+            if "log_alpha" in agent_state:
+                checkpoint["log_alpha"] = agent_state["log_alpha"]
+            return checkpoint
+        return agent_state
+
+    @classmethod
+    def _write_checkpoint_files(cls, checkpoint_dir, identifier, state_dict, keep_last, write_agent):
         path = checkpoint_dir / f"{identifier}.pt"
         tmp_path = checkpoint_dir / f".{identifier}.tmp"
-        state_dict = self.checkpoint_state_dict()
         torch.save(state_dict, tmp_path)
         tmp_path.replace(path)
 
@@ -137,17 +180,72 @@ class Trainer:
         torch.save(state_dict, latest_tmp)
         latest_tmp.replace(latest_path)
 
-        if hasattr(self.agent, "save"):
+        if write_agent:
+            agent_state = cls._agent_checkpoint_state_dict(state_dict)
             agent_tmp = checkpoint_dir / f".{identifier}.agent.tmp"
             agent_path = checkpoint_dir / f"{identifier}.agent.pt"
-            self.agent.save(agent_tmp)
+            torch.save(agent_state, agent_tmp)
             agent_tmp.replace(agent_path)
 
             latest_agent_tmp = checkpoint_dir / ".latest.agent.tmp"
             latest_agent_path = checkpoint_dir / "latest.agent.pt"
-            self.agent.save(latest_agent_tmp)
+            torch.save(agent_state, latest_agent_tmp)
             latest_agent_tmp.replace(latest_agent_path)
-        self._prune_old_checkpoints()
+
+        cls._prune_old_checkpoints_in_dir(checkpoint_dir, keep_last)
+        return path
+
+    @staticmethod
+    def _prune_old_checkpoints_in_dir(checkpoint_dir, keep_last):
+        keep_last = int(keep_last or 0)
+        if keep_last <= 0:
+            return
+        checkpoints = sorted(
+            (
+                path
+                for path in checkpoint_dir.glob("step_*.pt")
+                if not path.name.endswith(".agent.pt")
+            ),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for old_checkpoint in checkpoints[keep_last:]:
+            old_checkpoint.unlink(missing_ok=True)
+            old_checkpoint.with_name(f"{old_checkpoint.stem}.agent.pt").unlink(missing_ok=True)
+
+    def wait_for_async_checkpoint(self):
+        if self._checkpoint_future is None:
+            return None
+        try:
+            return self._checkpoint_future.result()
+        finally:
+            self._checkpoint_future = None
+            if self._checkpoint_executor is not None:
+                self._checkpoint_executor.shutdown(wait=True)
+                self._checkpoint_executor = None
+
+    def save_checkpoint(self, identifier=None, *, async_write=False):
+        if self._checkpoint_future is not None:
+            self.wait_for_async_checkpoint()
+        checkpoint_dir = self.checkpoint_dir()
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        step = getattr(self, "_step", 0)
+        identifier = f"step_{step}" if identifier is None else str(identifier)
+        state_dict = self._checkpoint_state_snapshot() if async_write else self.checkpoint_state_dict()
+        keep_last = int(getattr(self.cfg, "checkpoint_keep_last", 0) or 0)
+        write_agent = hasattr(self.agent, "save")
+        if async_write:
+            self._checkpoint_executor = ThreadPoolExecutor(max_workers=1)
+            self._checkpoint_future = self._checkpoint_executor.submit(
+                self._write_checkpoint_files,
+                checkpoint_dir,
+                identifier,
+                state_dict,
+                keep_last,
+                write_agent,
+            )
+            return checkpoint_dir / f"{identifier}.pt"
+        path = self._write_checkpoint_files(checkpoint_dir, identifier, state_dict, keep_last, write_agent)
         return path
 
     def maybe_save_checkpoint(self, previous_step=None, force=False):
@@ -160,7 +258,8 @@ class Trainer:
             crossed = previous_step // checkpoint_freq < current_step // checkpoint_freq
             if not crossed:
                 return None
-        path = self.save_checkpoint()
+        async_write = bool(getattr(self.cfg, "checkpoint_async", False)) and not force
+        path = self.save_checkpoint(async_write=async_write)
         print(f"Saved checkpoint: {path}")
         return path
 

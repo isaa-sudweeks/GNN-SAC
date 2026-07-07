@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+from threading import Event
 import json
 import sys
 import tempfile
@@ -71,6 +72,7 @@ def make_trainer(work_dir, **overrides):
         **{
             "work_dir": str(work_dir),
             "checkpoint_dir": "checkpoints",
+            "checkpoint_async": False,
             "checkpoint_freq": 10,
             "checkpoint_keep_last": 2,
             "resume_from_checkpoint": None,
@@ -137,6 +139,71 @@ class CheckpointingTest(unittest.TestCase):
             self.assertTrue((checkpoint_dir / "step_20.agent.pt").exists())
             self.assertTrue((checkpoint_dir / "step_30.pt").exists())
             self.assertTrue((checkpoint_dir / "step_30.agent.pt").exists())
+
+    def test_async_checkpoint_writes_snapshot_after_training_continues(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = make_trainer(Path(tmp_dir), checkpoint_async=True)
+            trainer._step = 10
+            trainer.agent.model.weight.data.fill_(3.0)
+            trainer.buffer.value = torch.tensor([4.0])
+
+            entered_writer = Event()
+            release_writer = Event()
+            original_writer = Trainer._write_checkpoint_files.__func__
+
+            def delayed_writer(cls, *args, **kwargs):
+                entered_writer.set()
+                release_writer.wait(timeout=5)
+                return original_writer(cls, *args, **kwargs)
+
+            with patch.object(Trainer, "_write_checkpoint_files", classmethod(delayed_writer)):
+                checkpoint = trainer.maybe_save_checkpoint(previous_step=9)
+                self.assertTrue(entered_writer.wait(timeout=5))
+                trainer._step = 20
+                trainer.agent.model.weight.data.fill_(8.0)
+                trainer.buffer.value = torch.tensor([9.0])
+                release_writer.set()
+                trainer.wait_for_async_checkpoint()
+
+            saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+            self.assertEqual(saved["trainer"]["step"], 10)
+            self.assertEqual(float(saved["agent"]["model"]["weight"].item()), 3.0)
+            self.assertEqual(float(saved["buffer"]["value"].item()), 4.0)
+            agent_sidecar = torch.load(
+                Path(tmp_dir) / "checkpoints" / "latest.agent.pt",
+                map_location="cpu",
+                weights_only=False,
+            )
+            self.assertEqual(float(agent_sidecar["model"]["weight"].item()), 3.0)
+
+    def test_forced_checkpoint_waits_for_pending_async_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = make_trainer(Path(tmp_dir), checkpoint_async=True)
+            trainer._step = 10
+
+            entered_writer = Event()
+            release_writer = Event()
+            original_writer = Trainer._write_checkpoint_files.__func__
+            delayed_identifiers = []
+
+            def delayed_first_writer(cls, checkpoint_dir, identifier, *args):
+                if identifier == "step_10":
+                    delayed_identifiers.append(identifier)
+                    entered_writer.set()
+                    release_writer.wait(timeout=5)
+                return original_writer(cls, checkpoint_dir, identifier, *args)
+
+            with patch.object(Trainer, "_write_checkpoint_files", classmethod(delayed_first_writer)):
+                trainer.maybe_save_checkpoint(previous_step=9)
+                self.assertTrue(entered_writer.wait(timeout=5))
+                trainer._step = 15
+                release_writer.set()
+                forced_checkpoint = trainer.maybe_save_checkpoint(force=True)
+
+            self.assertEqual(delayed_identifiers, ["step_10"])
+            self.assertTrue((Path(tmp_dir) / "checkpoints" / "step_10.pt").exists())
+            self.assertTrue(forced_checkpoint.exists())
+            self.assertIsNone(trainer._checkpoint_future)
 
     def test_resume_latest_resolves_checkpoint_dir(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

@@ -53,6 +53,7 @@ tasks:
 save_csv: true
 save_agent: true
 checkpoint_freq: 50_000
+checkpoint_async: false
 checkpoint_dir: checkpoints
 checkpoint_keep_last: 3
 resume_from_checkpoint: null
