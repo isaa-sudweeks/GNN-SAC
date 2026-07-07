@@ -146,12 +146,14 @@ python sac/gnn_infer.py --config-name gnn_mjx_inference \
   model=/path/to/final.pt episodes=256 num_envs=256
 ```
 
-The MJX training path currently requires `mujoco-truss-gen>=0.10.2`,
-`domain_randomization=false`, `truss_realistic=false`, and training-environment
-rendering disabled. Native MuJoCo evaluation can render and record videos.
-It owns one compiled model and one fixed environment batch per topology. Use
-`mujoco_backend=mujoco` for realistic training models, training-time rendering,
-or model-level domain randomization.
+The MJX training path requires `mujoco-truss-gen>=0.11.0b0` and
+training-environment rendering disabled. Native MuJoCo evaluation can render
+and record videos. MJX owns one compiled model and one fixed environment batch
+per topology, so realistic models and fixed-shape runtime domain randomization
+are supported, but model-changing randomization is not. Use
+`mujoco_backend=mujoco` for training-time rendering, length-scale
+randomization, or physical-parameter randomization that rebuilds the generated
+model.
 
 ```yaml
 task: truss-graph
@@ -207,7 +209,7 @@ eval_task: truss-mlp:tetrahedron
 ```
 
 - `truss_realistic` requests realistic generated models. `truss_graph_view: auto` uses physical graph nodes by default and logical graph nodes for realistic models; set it explicitly to `physical` or `logical` only when needed.
-- Generated model physical values live in `config/physical_parameters.yaml` under `physical_parameters` and apply to both training and `gnn_inference`. Set `physical_parameters_enabled: false` to skip this config and use the `mujoco-truss-gen` package defaults. Domain randomization lives in `config/domain_randomization.yaml`; use `domain_randomization` as the master switch, then enable individual entries under `domain_randomization_params.physical_parameters`.
+- Generated model physical values live in `config/physical_parameters.yaml` under `physical_parameters` and apply to both training and `gnn_inference`. Set `physical_parameters_enabled: false` to skip this config and use the `mujoco-truss-gen` package defaults. Domain randomization lives in `config/domain_randomization.yaml`; use `domain_randomization` as the master switch. MJX supports the fixed-shape runtime ranges such as `body_mass_multiplier`, `dof_damping_multiplier`, `actuator_gain_multiplier`, `geom_friction_slide`, and `gravity_z`; native MuJoCo also supports model-level `length_scale` and `physical_parameters` randomization.
 
 ```yaml
 physical_parameters_enabled: true
@@ -218,9 +220,14 @@ domain_randomization: true
 domain_randomization_params:
   length_scale:
     enabled: false
+  body_mass_multiplier:
+    enabled: true
+    min: 0.8
+    max: 1.2
+  # Native MuJoCo/model-level randomization only; set true only for mujoco_backend=mujoco.
   physical_parameters:
     node_radius:
-      enabled: true
+      enabled: false
       min: 0.08
       max: 0.12
 ```

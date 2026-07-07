@@ -75,8 +75,56 @@ class MjxVectorEnvTest(unittest.TestCase):
             env.close()
 
     def test_rejects_model_domain_randomization(self):
-        with self.assertRaisesRegex(ValueError, "domain_randomization=false"):
+        with self.assertRaisesRegex(ValueError, "fixed-shape domain randomization"):
             make_env(mjx_cfg(domain_randomization=True))
+
+    def test_accepts_fixed_shape_runtime_domain_randomization(self):
+        cfg = mjx_cfg(
+            domain_randomization=True,
+            domain_randomization_params={
+                "length_scale": {"enabled": False},
+                "body_mass_multiplier": {
+                    "enabled": True,
+                    "min": 0.5,
+                    "max": 0.5,
+                },
+                "gravity_z": {
+                    "enabled": True,
+                    "min": -9.5,
+                    "max": -9.5,
+                },
+            },
+        )
+        env = make_env(cfg)
+        try:
+            observations = env.reset_many()
+            self.assertEqual(len(observations), 2)
+            self.assertTrue(all(obs.x.shape[1] == 6 for obs in observations))
+            state = env.env._state.domain_randomization
+            body_mass_multiplier = env.env._jax.device_get(state.body_mass_multiplier)
+            gravity_z = env.env._jax.device_get(state.gravity_z)
+            self.assertEqual(body_mass_multiplier.tolist(), [0.5, 0.5])
+            self.assertEqual(gravity_z.tolist(), [-9.5, -9.5])
+        finally:
+            env.close()
+
+    def test_realistic_mjx_reset_and_step(self):
+        cfg = mjx_cfg(
+            num_envs=1,
+            truss_realistic=True,
+            max_steps=1,
+            nsubsteps=1,
+        )
+        env = make_env(cfg)
+        try:
+            observations = env.reset_many()
+            self.assertEqual(len(observations), 1)
+            self.assertEqual(cfg.num_policy_actions, observations[0].num_nodes)
+            result = env.step_many([env.rand_act(env_idx=0)], env_indices=[0])[0]
+            self.assertEqual(result[0].num_nodes, observations[0].num_nodes)
+            self.assertTrue(torch.isfinite(result[1]))
+        finally:
+            env.close()
 
     def test_video_is_allowed_with_native_mujoco_evaluation(self):
         env = make_env(mjx_cfg(save_video=True, eval_backend="mujoco"))

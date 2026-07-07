@@ -9,7 +9,6 @@ from gymnasium import spaces
 
 from env.mujoco_gen.topology_envs import (
     make_truss_env_config,
-    resolve_truss_realistic,
     resolve_truss_topology,
 )
 
@@ -27,13 +26,6 @@ class MjxVectorGraphEnv(gym.Env):
     node_feature_dim = 6
 
     def __init__(self, cfg):
-        if bool(getattr(cfg, "truss_realistic", False)) or resolve_truss_realistic(cfg):
-            raise ValueError("The MJX vector backend does not support realistic truss models yet.")
-        if bool(getattr(cfg, "domain_randomization", False)):
-            raise ValueError(
-                "The MJX vector backend requires domain_randomization=false because "
-                "mujoco-truss-gen currently supports one fixed compiled model per batch."
-            )
         if bool(getattr(cfg, "visualize", False)):
             raise ValueError("The MJX vector backend does not support interactive rendering.")
         eval_backend = str(getattr(cfg, "eval_backend", "mujoco")).lower()
@@ -48,7 +40,7 @@ class MjxVectorGraphEnv(gym.Env):
             from mujoco_truss_gen import MjxNodeVelocityEnv, get_edge_index
         except (ImportError, AttributeError) as exc:
             raise ImportError(
-                "mujoco_backend=mjx requires mujoco-truss-gen>=0.10.2 with "
+                "mujoco_backend=mjx requires mujoco-truss-gen>=0.11.0b0 with "
                 "MjxNodeVelocityEnv and a working JAX/MJX installation."
             ) from exc
 
@@ -61,7 +53,18 @@ class MjxVectorGraphEnv(gym.Env):
 
         self._jax = jax
         self._jnp = jnp
-        self._core = MjxNodeVelocityEnv(make_truss_env_config(cfg))
+        truss_config = make_truss_env_config(cfg)
+        if (
+            truss_config.domain_randomization is not None
+            and truss_config.domain_randomization.model_factory is not None
+        ):
+            raise ValueError(
+                "The MJX vector backend requires fixed-shape domain randomization. "
+                "Disable domain_randomization_params.length_scale and "
+                "domain_randomization_params.physical_parameters for MJX runs, or use "
+                "mujoco_backend=mujoco for model-level randomization."
+            )
+        self._core = MjxNodeVelocityEnv(truss_config)
         self.mj_model = self._core.mujoco_model
         self.max_episode_steps = int(self._core.config.max_steps)
         self.nsubsteps = int(self._core.config.nsubsteps)
