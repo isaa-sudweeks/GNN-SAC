@@ -236,6 +236,58 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         trainer.cfg.domain_randomization_params["action_noise"]["apply_to_seed_actions"] = False
         self.assertTrue(torch.equal(trainer._apply_action_noise(action, seed_action=True), action))
 
+    def test_observation_noise_is_domain_randomization_gated(self):
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        obs = torch.zeros(8)
+
+        trainer.cfg = SimpleNamespace(
+            domain_randomization=False,
+            domain_randomization_params={
+                "observation_noise": {
+                    "enabled": True,
+                    "std": 10.0,
+                    "clip_low": -0.1,
+                    "clip_high": 0.1,
+                }
+            },
+        )
+        self.assertTrue(torch.equal(trainer._apply_observation_noise(obs), obs))
+
+        trainer.cfg.domain_randomization = True
+        torch.manual_seed(1)
+        noisy_obs = trainer._apply_observation_noise(obs)
+        self.assertFalse(torch.equal(noisy_obs, obs))
+        self.assertTrue(torch.all(noisy_obs <= 0.1))
+        self.assertTrue(torch.all(noisy_obs >= -0.1))
+
+    def test_observation_noise_only_changes_graph_node_features(self):
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        trainer.cfg = SimpleNamespace(
+            domain_randomization=True,
+            domain_randomization_params={
+                "observation_noise": {
+                    "enabled": True,
+                    "std": 10.0,
+                    "clip_low": -0.1,
+                    "clip_high": 0.1,
+                }
+            },
+        )
+        obs = Data(
+            x=torch.zeros(3, 2),
+            edge_index=torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        )
+
+        torch.manual_seed(1)
+        noisy_obs = trainer._apply_observation_noise(obs)
+
+        self.assertIsNot(noisy_obs, obs)
+        self.assertFalse(torch.equal(noisy_obs.x, obs.x))
+        self.assertTrue(torch.equal(noisy_obs.edge_index, obs.edge_index))
+        self.assertTrue(torch.equal(obs.x, torch.zeros(3, 2)))
+        self.assertTrue(torch.all(noisy_obs.x <= 0.1))
+        self.assertTrue(torch.all(noisy_obs.x >= -0.1))
+
     def test_physical_parameters_are_loaded_from_config(self):
         cfg = graph_test_cfg(
             physical_parameters={

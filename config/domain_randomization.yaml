@@ -219,3 +219,11 @@ domain_randomization_params:
     clip_low: -1.0
     clip_high: 1.0
     apply_to_seed_actions: false
+
+  # Add Gaussian noise to policy observations during training rollouts.
+  # For graph observations, noise is applied to node features (`x`) only.
+  observation_noise:
+    enabled: false
+    std: 0.0
+    clip_low: null
+    clip_high: null

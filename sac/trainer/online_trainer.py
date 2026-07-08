@@ -385,6 +385,10 @@ class OnlineTrainer(Trainer):
         params = self._cfg_get(self.cfg, "domain_randomization_params", {})
         return self._cfg_get(params, "action_noise", {})
 
+    def _observation_noise_cfg(self):
+        params = self._cfg_get(self.cfg, "domain_randomization_params", {})
+        return self._cfg_get(params, "observation_noise", {})
+
     def _should_apply_action_noise(self, seed_action=False):
         if not bool(self._cfg_get(self.cfg, "domain_randomization", False)):
             return False
@@ -408,6 +412,58 @@ class OnlineTrainer(Trainer):
             np.float32,
             copy=False,
         )
+
+    def _should_apply_observation_noise(self):
+        if not bool(self._cfg_get(self.cfg, "domain_randomization", False)):
+            return False
+        noise_cfg = self._observation_noise_cfg()
+        if not bool(self._cfg_get(noise_cfg, "enabled", False)):
+            return False
+        return float(self._cfg_get(noise_cfg, "std", 0.0)) > 0.0
+
+    def _apply_observation_noise(self, obs):
+        if not self._should_apply_observation_noise():
+            return obs
+        noise_cfg = self._observation_noise_cfg()
+        std = float(self._cfg_get(noise_cfg, "std", 0.0))
+        low = self._cfg_get(noise_cfg, "clip_low", None)
+        high = self._cfg_get(noise_cfg, "clip_high", None)
+        low = None if low in (None, "null") else low
+        high = None if high in (None, "null") else high
+        return self._apply_observation_noise_to_value(obs, std, low, high)
+
+    def _apply_observation_noise_to_value(self, value, std, low, high):
+        if isinstance(value, Data):
+            noisy = value.clone()
+            noisy.x = self._apply_observation_noise_to_value(noisy.x, std, low, high)
+            return noisy
+        if isinstance(value, TensorDict):
+            noisy = value.clone()
+            for key in noisy.keys():
+                noisy[key] = self._apply_observation_noise_to_value(noisy[key], std, low, high)
+            return noisy
+        if isinstance(value, dict):
+            return {
+                key: self._apply_observation_noise_to_value(item, std, low, high)
+                for key, item in value.items()
+            }
+        if isinstance(value, torch.Tensor):
+            if not torch.is_floating_point(value):
+                return value
+            noisy = value + torch.randn_like(value) * std
+            if low is not None:
+                noisy = torch.clamp(noisy, min=float(low))
+            if high is not None:
+                noisy = torch.clamp(noisy, max=float(high))
+            return noisy
+        if isinstance(value, np.ndarray):
+            if not np.issubdtype(value.dtype, np.floating):
+                return value
+            noisy = value + np.random.normal(0.0, std, size=value.shape)
+            if low is not None or high is not None:
+                noisy = np.clip(noisy, low, high)
+            return noisy.astype(value.dtype, copy=False)
+        return value
 
     def _select_multi_env_actions(self, observations, episode_tds, env_indices):
         """Select actions for one vector step, batching compatible policy calls."""
@@ -494,7 +550,7 @@ class OnlineTrainer(Trainer):
                         )
                         reward_metrics.update(self._episode_reward_components)
                         self.logger.log(reward_metrics, 'training_rewards')
-                obs = self.env.reset()
+                obs = self._apply_observation_noise(self.env.reset())
                 self._tds = [self.to_td(obs)]
                 self._episode_reward_components = {}
             
@@ -505,6 +561,7 @@ class OnlineTrainer(Trainer):
                 action = self.env.rand_act()
             action = self._apply_action_noise(action, seed_action=self._step <= self.cfg.seed_steps)
             obs, reward, done, info = self.env.step(action)
+            obs = self._apply_observation_noise(obs)
             self._accumulate_reward_components(info)
             terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
             previous_td = self._tds[-1]
@@ -586,7 +643,10 @@ class OnlineTrainer(Trainer):
                             self.logger.log(reward_metrics, 'training_rewards')
                 self._episode_reward_components = previous_components
 
-                reset_obs = self.env.reset_many(env_indices=done_indices)
+                reset_obs = [
+                    self._apply_observation_noise(obs)
+                    for obs in self.env.reset_many(env_indices=done_indices)
+                ]
                 for env_idx, obs in zip(done_indices, reset_obs):
                     observations[env_idx] = obs
                     episode_tds[env_idx] = [self.to_td(obs)]
@@ -602,6 +662,7 @@ class OnlineTrainer(Trainer):
 
             results = self.env.step_many(actions, env_indices=env_indices)
             for env_idx, action, (obs, reward, is_done, info) in zip(env_indices, actions, results):
+                obs = self._apply_observation_noise(obs)
                 observations[env_idx] = obs
                 done[env_idx] = is_done
                 infos[env_idx] = info
