@@ -709,7 +709,7 @@ def run_inference(cfg):
         env.close()
 
 
-@hydra.main(config_name="gnn_inference", config_path="../config", version_base=None)
+@hydra.main(config_name="inference/gnn", config_path="../config", version_base=None)
 def infer(cfg):
     """
     Run a trained GNN SAC checkpoint on any configured graph environment.

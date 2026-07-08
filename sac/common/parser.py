@@ -78,6 +78,12 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 
 	# Convenience
 	with open_dict(cfg):
+		topologies = cfg.get("topologies", None)
+		truss_topologies = cfg.get("truss_topologies", None)
+		if topologies is not None:
+			if truss_topologies is not None and list(topologies) != list(truss_topologies):
+				raise ValueError("Use either topologies or truss_topologies, not both with different values.")
+			cfg.truss_topologies = topologies
 		if cfg.get("work_dir", None) not in {None, "???"}:
 			cfg.work_dir = Path(cfg.work_dir)
 		else:

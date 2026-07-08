@@ -7,6 +7,7 @@ obs: state # Observation type expected by the MuJoCo environment factory.
 xml_path: env/truss/assets/Baseline/octahedron_velocity_integrated_ctr.xml # MuJoCo XML model used by the truss environment.
 truss_topology: octahedron # mujoco-truss-gen preset used by unified truss envs.
 truss_topologies: null # Optional list of mujoco-truss-gen presets for multi-topology runs.
+topologies: null # Alias for truss_topologies; useful for CLI sweeps.
 truss_realistic: false # Whether unified truss envs should request realistic generated models.
 truss_graph_view: auto # Graph view for unified graph envs: auto, physical, or logical.
 

@@ -18,7 +18,7 @@ The previous default configuration evaluated 10 episodes of up to 5,000 steps ev
 
 Relevant code and configuration:
 
-- `config/gnn_config.yaml`: optimized defaults are `eval_freq: 100_000` and `eval_episodes: 3`
+- `config/sac_backend/gnn.yaml` plus `config/training.yaml`: optimized defaults are `eval_freq: 100_000` and `eval_episodes: 3`
 - `config/environment.yaml`: `max_steps: 5_000`
 - `sac/trainer/online_trainer.py`: synchronous evaluation loop
 

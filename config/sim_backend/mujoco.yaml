@@ -1,0 +1,5 @@
+# @package _global_
+
+sim_backend: mujoco
+mujoco_backend: mujoco
+eval_backend: mujoco

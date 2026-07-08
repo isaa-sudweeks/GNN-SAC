@@ -1,45 +1,10 @@
 defaults:
   - algorithm
   - environment
-  - physical_parameters
-  - domain_randomization
+  - physics/physical_parameters
+  - physics/domain_randomization
+  - training
+  - sac_backend: mlp
+  - sim_backend: mujoco
+  - platform: local
   - _self_
-
-# Run identity
-project: gnn-sac # Experiment tracking project name.
-exp_name: truss-velocity-command # Human-readable experiment/run name.
-seed: 1 # Random seed for Python, NumPy, PyTorch, and environment sampling.
-device: cpu # Torch device used for model training; use cpu when CUDA is unavailable.
-work_dir: ??? # Output directory; Hydra fills this when left unresolved.
-
-# Training schedule
-steps: 1_000_000 # Total environment steps to collect before ending training.
-seed_steps: 5_000 # Random-action steps collected before policy updates begin; may be raised by env setup.
-pretrain_steps: 1_000 # Number of updates to run once when seed data first becomes available.
-eval_freq: 100_000 # Environment-step interval between evaluation passes.
-eval_episodes: 3 # Number of episodes averaged for each evaluation pass.
-eval_at_end: true # Evaluate the final policy unless this exact global step was already evaluated.
-progress_freq: 10_000 # Environment-step interval for collection progress logs; the final step is always logged.
-
-# Experiment behavior
-episodic: true # Whether true environment terminations should stop bootstrap targets.
-multitask: false # Whether to build a multitask wrapper over several environments.
-num_envs: 1 # Number of independent copies of the selected task to use in one run.
-tasks: # Task list used by multitask code paths and logging.
-  - ${task}
-
-# Outputs and logging
-save_csv: true # Whether to write evaluation metrics to eval.csv.
-save_agent: true # Whether to save final model weights at the end of training.
-checkpoint_freq: 50_000 # Save resumable training checkpoints every N environment steps; 0 disables.
-checkpoint_async: false # Write periodic checkpoints in a background thread; final forced checkpoint remains synchronous.
-checkpoint_dir: checkpoints # Directory for resumable checkpoints, relative to work_dir unless absolute.
-checkpoint_keep_last: 3 # Number of numbered step checkpoints to keep; latest.pt is always retained.
-resume_from_checkpoint: null # Path to a checkpoint, or "latest" to load checkpoint_dir/latest.pt.
-save_video: false # Whether to render and log video for the first evaluation episode.
-enable_wandb: true # Whether to send metrics, config, video, and artifacts to Weights & Biases.
-wandb_project: ${project} # W&B project name.
-wandb_entity: null # Optional W&B entity/team; null uses the local default.
-wandb_name: ${exp_name}-${seed} # W&B run name.
-wandb_silent: true # Whether to silence W&B console output.
-set_wandb_offline: false # Whether to force W&B into offline mode for this run.

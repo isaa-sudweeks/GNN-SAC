@@ -10,7 +10,7 @@ Implement the simplest working graph-control path: keep the GNN actor, critic, a
 - Fix Gymnasium graph observation validation by returning raw dict observations from the Gym env.
 - Convert graph dict observations into PyG `Data` objects in the project wrapper layer.
 - Keep node actions and translate them inside the graph env with endpoint summation.
-- Separate flat SAC and graph SAC configs with a dedicated `config/gnn_config.yaml`.
+- Separate flat SAC and graph SAC config values behind the `sac_backend` config group.
 
 ## Implementation Notes
 
@@ -29,7 +29,7 @@ Implement the simplest working graph-control path: keep the GNN actor, critic, a
 
 ## Test Plan
 
-- Verify `make_env()` with `gnn_config` resets to a PyG `Data` observation.
+- Verify `make_env()` with `sac_backend=gnn` resets to a PyG `Data` observation.
 - Verify random node actions step the generated octahedron graph env.
 - Verify passive structural edges do not change the MuJoCo actuator vector size.
 - Verify `GNNSAC.act()`, `GNNBuffer.add()`, `GNNBuffer.sample()`, and one `agent.update()` complete on CPU.

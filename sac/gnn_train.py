@@ -94,7 +94,7 @@ def run_training(cfg, trial=None):
     finally:
         env.close()
 
-@hydra.main(config_name='gnn_config', config_path='../config')
+@hydra.main(config_name='archieved/gnn_config', config_path='../config')
 def train(cfg):
     """
     Script for training SAC agents.

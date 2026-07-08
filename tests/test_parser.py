@@ -37,6 +37,46 @@ def training_cfg(work_dir: Path):
     )
 
 
+def topology_cfg(**overrides):
+    cfg = OmegaConf.create(
+        {
+            "work_dir": "/tmp/test",
+            "task": "truss-graph",
+            "exp_name": "test",
+            "seed": 1,
+            "topologies": None,
+            "truss_topologies": None,
+        }
+    )
+    return OmegaConf.merge(cfg, OmegaConf.create(overrides))
+
+
+class TopologyAliasTest(unittest.TestCase):
+    def test_topologies_alias_populates_truss_topologies(self):
+        cfg = parse_cfg(topology_cfg(topologies=["octahedron", "tetrahedron"]))
+
+        self.assertEqual(cfg.truss_topologies, ["octahedron", "tetrahedron"])
+
+    def test_matching_topology_aliases_are_allowed(self):
+        cfg = parse_cfg(
+            topology_cfg(
+                topologies=["octahedron", "tetrahedron"],
+                truss_topologies=["octahedron", "tetrahedron"],
+            )
+        )
+
+        self.assertEqual(cfg.truss_topologies, ["octahedron", "tetrahedron"])
+
+    def test_conflicting_topology_aliases_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Use either topologies or truss_topologies"):
+            parse_cfg(
+                topology_cfg(
+                    topologies=["octahedron"],
+                    truss_topologies=["tetrahedron"],
+                )
+            )
+
+
 class MultirunWorkDirTest(unittest.TestCase):
     def test_different_overrides_use_different_work_dirs(self):
         with patch(

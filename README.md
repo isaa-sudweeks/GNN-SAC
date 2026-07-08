@@ -75,11 +75,11 @@ python sac/gnn_train.py work_dir=/path/to/run resume_from_checkpoint=latest
 python sac/gnn_train.py resume_from_checkpoint=/path/to/run/checkpoints/step_50000.pt
 ```
 - When W&B is enabled, resumed training reuses the previous W&B run ID from `${work_dir}/wandb_run.json` or the checkpoint metadata, so resumed logs append to the original run instead of creating a new one.
-- Set `set_wandb_offline=true` to force W&B offline logging. The supercomputer config enables this by default; local configs leave it false.
-- For Slurm preemption/requeue runs, use the Submitit-backed supercomputer config. It uses a stable `work_dir`, `resume_from_checkpoint=latest`, and passes `--requeue` through Submitit:
+- Set `set_wandb_offline=true` to force W&B offline logging. The `platform=supercomputer` profile enables this by default; local configs leave it false.
+- For Slurm preemption/requeue runs, use the Submitit-backed supercomputer platform profile. It uses a stable `work_dir`, `resume_from_checkpoint=latest`, and passes `--requeue` through Submitit:
 
 ```bash
-python sac/gnn_train.py --config-name supercomputer --multirun
+python sac/train.py platform=supercomputer sac_backend=gnn sim_backend=mjx --multirun
 ```
 
 Each multirun job is isolated under
@@ -92,21 +92,47 @@ Set `GNN_SAC_RUN_ROOT` to put runs on shared persistent storage, and override cl
 
 ```bash
 GNN_SAC_RUN_ROOT=/scratch/$USER/gnn-sac-runs \
-python sac/gnn_train.py --config-name supercomputer --multirun \
+python sac/train.py platform=supercomputer sac_backend=gnn sim_backend=mjx --multirun \
   hydra.launcher.partition=gpu hydra.launcher.account=my_account
 ```
 - Resume starts a fresh environment episode at the restored global step. The replay buffer and optimizer state are restored; any episode that was in progress when the checkpoint was written is not continued because the MuJoCo environment state is not currently serialized.
+
+# SAC Backend Profiles
+
+`config/config.yaml` now composes a `sac_backend` profile. The default is
+`mlp`; use `sac_backend=gnn` to switch the shared training config to graph
+observations, GNN dimensions, and the GNN SAC agent/buffer:
+
+```bash
+python sac/train.py sac_backend=mlp steps=10000
+python sac/train.py sac_backend=gnn steps=10000
+```
+
+Legacy wrapper configs live under `config/archieved/`; new runs should prefer
+the explicit config groups.
+
+Execution platform and simulator backend are separate config groups:
+
+```bash
+python sac/train.py sac_backend=gnn sim_backend=mujoco steps=10000
+python sac/train.py sac_backend=gnn sim_backend=mjx 'topologies=[octahedron,tetrahedron]'
+python sac/train.py platform=supercomputer sac_backend=gnn sim_backend=mjx --multirun
+```
+
+`config/archieved/supercomputer.yaml` remains as a legacy wrapper for
+`platform=supercomputer sac_backend=gnn sim_backend=mjx`.
 
 # Unified Truss Topology Environments
 - `truss-graph` is the reusable graph-observation environment for `mujoco_truss_gen` presets. It emits PyTorch Geometric graph observations through the wrapper layer and maps one scalar node action per graph node to tendon actuator commands.
 - `truss-mlp` is the reusable flat observation/action environment for standard MLP policies. It uses the same generated topology source, but keeps fixed-size vector observations and actions.
 - Select one generated topology with `truss_topology`. Valid names come from `mujoco_truss_gen.PRESETS`; these include the canonical `octahedron`, `tetrahedron`, `icosahedron`, and `solar_array` models plus the enumerated Henneberg and Usevitch families.
 
-For fixed-topology graph training, `config/gnn_mjx.yaml` selects the batch-native
-MJX backend, batched GNN inference, and DLPack exchange between JAX and PyTorch:
+For fixed-topology graph training on the cluster, select the supercomputer
+platform, GNN SAC backend, and batch-native MJX simulator backend:
 
 ```bash
-python sac/gnn_train.py --config-name gnn_mjx steps=10000 num_envs=256
+python sac/train.py platform=supercomputer sac_backend=gnn sim_backend=mjx \
+  steps=10000 num_envs=256
 ```
 
 MJX training uses a separate native MuJoCo evaluation environment by default
@@ -130,8 +156,8 @@ creates 500 octahedron environments and 500 tetrahedron environments while
 retaining a single mixed-graph policy inference call:
 
 ```bash
-python sac/gnn_train.py --config-name gnn_mjx num_envs=1000 \
-  'truss_topologies=[octahedron,tetrahedron]'
+python sac/train.py platform=supercomputer sac_backend=gnn sim_backend=mjx \
+  num_envs=1000 'topologies=[octahedron,tetrahedron]'
 ```
 
 Each topology has a separately compiled MJX step function and fixed-size state
@@ -142,7 +168,7 @@ Run checkpoint evaluation in vectorized waves with the matching inference
 profile:
 
 ```bash
-python sac/gnn_infer.py --config-name gnn_mjx_inference \
+python sac/gnn_infer.py --config-name inference/gnn_mjx \
   model=/path/to/final.pt episodes=256 num_envs=256
 ```
 
@@ -165,7 +191,7 @@ task: truss-mlp
 truss_topology: solar_array
 ```
 
-- Train or evaluate a graph policy across several topologies by listing `truss_topologies`. The environment factory expands this into topology-specific tasks such as `truss-graph:octahedron`.
+- Train or evaluate a graph policy across several topologies by listing `truss_topologies`. The shorter CLI alias `topologies` is also accepted. The environment factory expands this into topology-specific tasks such as `truss-graph:octahedron`.
 
 ```yaml
 task: truss-graph
@@ -209,7 +235,7 @@ eval_task: truss-mlp:tetrahedron
 ```
 
 - `truss_realistic` requests realistic generated models. `truss_graph_view: auto` uses physical graph nodes by default and logical graph nodes for realistic models; set it explicitly to `physical` or `logical` only when needed.
-- Generated model physical values live in `config/physical_parameters.yaml` under `physical_parameters` and apply to both training and `gnn_inference`. Set `physical_parameters_enabled: false` to skip this config and use the `mujoco-truss-gen` package defaults. Domain randomization lives in `config/domain_randomization.yaml`; use `domain_randomization` as the master switch. MJX supports the fixed-shape runtime ranges such as `body_mass_multiplier`, `dof_damping_multiplier`, `actuator_gain_multiplier`, `geom_friction_slide`, and `gravity_z`; native MuJoCo also supports model-level `length_scale` and `physical_parameters` randomization.
+- Generated model physical values live in `config/physics/physical_parameters.yaml` under `physical_parameters` and apply to both training and inference. Set `physical_parameters_enabled: false` to skip this config and use the `mujoco-truss-gen` package defaults. Domain randomization lives in `config/physics/domain_randomization.yaml`; use `domain_randomization` as the master switch. MJX supports the fixed-shape runtime ranges such as `body_mass_multiplier`, `dof_damping_multiplier`, `actuator_gain_multiplier`, `geom_friction_slide`, and `gravity_z`; native MuJoCo also supports model-level `length_scale` and `physical_parameters` randomization.
 
 ```yaml
 physical_parameters_enabled: true

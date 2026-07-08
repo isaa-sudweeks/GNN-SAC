@@ -1,0 +1,27 @@
+# @package _global_
+
+sac_backend: gnn
+exp_name: gnn-octahedron-node-sum
+
+# Graph environment
+task: truss-graph
+env_name: ${task}
+use_graph_observations: true
+use_control_graph: true # Opt-in mujoco-truss-gen control graph and incidence-based node command mapping.
+truss_topology: octahedron
+topology_id: ${truss_topology}
+node_feature_dim: 6
+obs_dim: 6
+node_action_dim: 1 # Per-node stochastic action width used by the GNN actor/critic.
+action_dim: ${node_action_dim} # Backward-compatible alias for current GNN tensor shapes.
+num_policy_actions: 6 # Total sampled node actions for SAC entropy tuning.
+num_actuators: 8 # Total MuJoCo actuator controls after node-to-edge mapping.
+
+# GNN actor-critic architecture
+embedding_dim: 128
+Q_output_dim: 128
+head_hidden_dims:
+  - 256
+  - 256
+
+target_entropy: -1

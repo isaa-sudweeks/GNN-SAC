@@ -56,7 +56,7 @@ def graph_test_cfg(**overrides):
     cfg = OmegaConf.merge(
         OmegaConf.load(ROOT / "config" / "algorithm.yaml"),
         OmegaConf.load(ROOT / "config" / "environment.yaml"),
-        OmegaConf.load(ROOT / "config" / "gnn_config.yaml"),
+        OmegaConf.load(ROOT / "config" / "sac_backend" / "gnn.yaml"),
         OmegaConf.create(
             {
                 "save_video": False,
