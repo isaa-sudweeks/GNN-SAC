@@ -79,19 +79,31 @@ class MjxVectorEnvTest(unittest.TestCase):
             make_env(mjx_cfg(domain_randomization=True))
 
     def test_accepts_fixed_shape_runtime_domain_randomization(self):
+        fixed_ranges = {
+            "body_mass_multiplier": 0.5,
+            "body_inertia_multiplier": 0.6,
+            "dof_damping_multiplier": 0.7,
+            "dof_armature": 0.01,
+            "dof_frictionloss": 0.02,
+            "actuator_gain_multiplier": 0.8,
+            "actuator_bias_multiplier": 0.9,
+            "actuator_dynprm_multiplier": 1.1,
+            "geom_friction_slide": 0.75,
+            "geom_friction_torsional": 0.005,
+            "geom_friction_rolling": 0.0005,
+            "tendon_stiffness": 10.0,
+            "tendon_damping": 0.2,
+            "tendon_armature": 0.01,
+            "tendon_frictionloss": 0.02,
+            "gravity_z": -9.5,
+        }
         cfg = mjx_cfg(
             domain_randomization=True,
             domain_randomization_params={
                 "length_scale": {"enabled": False},
-                "body_mass_multiplier": {
-                    "enabled": True,
-                    "min": 0.5,
-                    "max": 0.5,
-                },
-                "gravity_z": {
-                    "enabled": True,
-                    "min": -9.5,
-                    "max": -9.5,
+                **{
+                    name: {"enabled": True, "min": value, "max": value}
+                    for name, value in fixed_ranges.items()
                 },
             },
         )
@@ -101,10 +113,15 @@ class MjxVectorEnvTest(unittest.TestCase):
             self.assertEqual(len(observations), 2)
             self.assertTrue(all(obs.x.shape[1] == 6 for obs in observations))
             state = env.env._state.domain_randomization
-            body_mass_multiplier = env.env._jax.device_get(state.body_mass_multiplier)
-            gravity_z = env.env._jax.device_get(state.gravity_z)
-            self.assertEqual(body_mass_multiplier.tolist(), [0.5, 0.5])
-            self.assertEqual(gravity_z.tolist(), [-9.5, -9.5])
+            for name, expected in fixed_ranges.items():
+                sampled = env.env._jax.device_get(getattr(state, name))
+                self.assertTrue(
+                    torch.allclose(
+                        torch.tensor(sampled.tolist()),
+                        torch.full((2,), expected, dtype=torch.float32),
+                    ),
+                    msg=f"unexpected samples for {name}: {sampled}",
+                )
         finally:
             env.close()
 

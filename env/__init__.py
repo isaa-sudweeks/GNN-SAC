@@ -50,6 +50,12 @@ def _max_episode_steps(env):
         return spec.max_episode_steps
     raise AttributeError('Environment does not define max_episode_steps')
 
+def _configure_episode_length(cfg, episode_length):
+    """Record the environment horizon without overriding an explicit seed budget."""
+    cfg.episode_length = int(episode_length)
+    if getattr(cfg, "seed_steps", None) is None:
+        cfg.seed_steps = int(max(1000, 5 * cfg.episode_length))
+
 def _obs_shapes(env, cfg):
     try:
         return {k: v.shape for k, v in env.observation_space.spaces.items()}
@@ -105,13 +111,14 @@ def _make_mjx_vector_graph_env(cfg):
     cfg.policy_action_counts = [
         int(np.prod(component.action_space.shape)) for component in component_envs
     ]
+    cfg.node_counts = [int(component.action_space.shape[0]) for component in component_envs]
+    cfg.num_nodes = int(max(cfg.node_counts))
     cfg.policy_actuator_counts = [
         _num_policy_actuators(component) for component in component_envs
     ]
     cfg.num_policy_actions = int(max(cfg.policy_action_counts))
     cfg.num_actuators = int(max(cfg.policy_actuator_counts))
-    cfg.episode_length = int(env.max_episode_steps)
-    cfg.seed_steps = int(max(1000, 5 * cfg.episode_length))
+    _configure_episode_length(cfg, env.max_episode_steps)
     return TensorWrapper(env, graph_observations=True)
 
 def _configured_truss_topologies(cfg):
@@ -183,8 +190,7 @@ def make_env(cfg):
             cfg.policy_actuator_counts.append(_num_policy_actuators(e))
             cfg.episode_lengths.append(int(_max_episode_steps(e)))
         cfg.action_dim = int(max(cfg.action_dims))
-        cfg.episode_length = int(max(cfg.episode_lengths))
-        cfg.seed_steps = int(max(1000, 5*cfg.episode_length))
+        _configure_episode_length(cfg, max(cfg.episode_lengths))
         cfg.obs_shape = {}
         for shape_dict in cfg.obs_shapes:
             for k, v in shape_dict.items():
@@ -202,6 +208,8 @@ def make_env(cfg):
             cfg.node_action_dim = int(getattr(env.unwrapped, "node_action_dim", env.action_space.shape[-1]))
             cfg.action_dim = cfg.node_action_dim
             cfg.num_policy_actions = int(max(cfg.policy_action_counts))
+            cfg.node_counts = list(cfg.action_dims)
+            cfg.num_nodes = int(max(cfg.node_counts))
             cfg.num_actuators = int(max(cfg.policy_actuator_counts))
         return env
     else:
@@ -225,9 +233,10 @@ def make_env(cfg):
             cfg.node_action_dim = int(getattr(env.unwrapped, "node_action_dim", env.action_space.shape[-1]))
             cfg.action_dim = cfg.node_action_dim
             cfg.num_policy_actions = int(np.prod(env.action_space.shape))
+            cfg.node_counts = [int(env.action_space.shape[0])]
+            cfg.num_nodes = cfg.node_counts[0]
             cfg.num_actuators = _num_policy_actuators(env)
-            cfg.episode_length = episode_length
-            cfg.seed_steps = max(1000, 5*cfg.episode_length)
+            _configure_episode_length(cfg, episode_length)
             return env
         try: # Dict
             cfg.obs_shape = {k: v.shape for k, v in env.observation_space.spaces.items()}
@@ -235,7 +244,6 @@ def make_env(cfg):
             cfg.obs_shape = {cfg.get('obs', 'state'): env.observation_space.shape}
             cfg.obs_dim = int(np.prod(env.observation_space.shape))
         cfg.action_dim = env.action_space.shape[0]
-        cfg.episode_length = episode_length
-        cfg.seed_steps = max(1000, 5*cfg.episode_length)
+        _configure_episode_length(cfg, episode_length)
         # TODO: Add support for wrappers
         return env 

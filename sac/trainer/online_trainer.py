@@ -241,6 +241,7 @@ class OnlineTrainer(Trainer):
         if (
             self.eval_env is self.env
             and self._topology_bucket_metadata(self.eval_env) is None
+            and int(getattr(self.eval_env, "num_envs", 1)) > 1
             and hasattr(self.eval_env, "set_active_env")
         ):
             self.eval_env.set_active_env(env_idx)

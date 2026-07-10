@@ -235,7 +235,7 @@ eval_task: truss-mlp:tetrahedron
 ```
 
 - `truss_realistic` requests realistic generated models. `truss_graph_view: auto` uses physical graph nodes by default and logical graph nodes for realistic models; set it explicitly to `physical` or `logical` only when needed.
-- Generated model physical values live in `config/physics/physical_parameters.yaml` under `physical_parameters` and apply to both training and inference. Set `physical_parameters_enabled: false` to skip this config and use the `mujoco-truss-gen` package defaults. Domain randomization lives in `config/physics/domain_randomization.yaml`; use `domain_randomization` as the master switch. MJX supports the fixed-shape runtime ranges such as `body_mass_multiplier`, `dof_damping_multiplier`, `actuator_gain_multiplier`, `geom_friction_slide`, and `gravity_z`; native MuJoCo also supports model-level `length_scale` and `physical_parameters` randomization.
+- Generated model physical values live in `config/physics/physical_parameters.yaml` under `physical_parameters` and apply to both training and inference. Set `physical_parameters_enabled: false` to skip this config and use the `mujoco-truss-gen` package defaults. Domain randomization lives in `config/physics/domain_randomization.yaml`; use `domain_randomization` as the master switch. MJX and native MuJoCo support fixed-shape runtime ranges for body mass/inertia, DOF damping/armature/friction loss, actuator gain/bias/dynamics, all three geom-friction axes, tendon stiffness/damping/armature/friction loss, and vertical gravity. Native MuJoCo also supports model-level `length_scale` and `physical_parameters` randomization.
 
 ```yaml
 physical_parameters_enabled: true

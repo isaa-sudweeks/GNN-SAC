@@ -35,6 +35,29 @@ def _cfg_get(config, name, default=None):
 _MISSING = object()
 
 
+# User-facing Hydra names mapped to mujoco-truss-gen's dataclass field names.
+# Keep this explicit so configuration remains stable if the upstream dataclass
+# gains non-range bookkeeping fields.
+_RUNTIME_DOMAIN_RANDOMIZATION_FIELDS = {
+    "body_mass_multiplier": "body_mass_multiplier_range",
+    "body_inertia_multiplier": "body_inertia_multiplier_range",
+    "dof_damping_multiplier": "dof_damping_multiplier_range",
+    "dof_armature": "dof_armature_range",
+    "dof_frictionloss": "dof_frictionloss_range",
+    "actuator_gain_multiplier": "actuator_gain_multiplier_range",
+    "actuator_bias_multiplier": "actuator_bias_multiplier_range",
+    "actuator_dynprm_multiplier": "actuator_dynprm_multiplier_range",
+    "geom_friction_slide": "geom_friction_slide_range",
+    "geom_friction_torsional": "geom_friction_torsional_range",
+    "geom_friction_rolling": "geom_friction_rolling_range",
+    "tendon_stiffness": "tendon_stiffness_range",
+    "tendon_damping": "tendon_damping_range",
+    "tendon_armature": "tendon_armature_range",
+    "tendon_frictionloss": "tendon_frictionloss_range",
+    "gravity_z": "gravity_z_range",
+}
+
+
 def _is_mapping_like(value):
     return hasattr(value, "items") or hasattr(value, "keys")
 
@@ -246,23 +269,20 @@ def _domain_randomization(config, topology, realistic):
     scale_enabled = bool(_cfg_get(length_scale, "enabled", True))
     physical_randomization_enabled = _has_enabled_physical_parameter_randomization(config)
 
-    runtime_fields = {
-        "body_mass_multiplier": "body_mass_multiplier_range",
-        "body_inertia_multiplier": "body_inertia_multiplier_range",
-        "dof_damping_multiplier": "dof_damping_multiplier_range",
-        "actuator_gain_multiplier": "actuator_gain_multiplier_range",
-        "actuator_bias_multiplier": "actuator_bias_multiplier_range",
-        "geom_friction_slide": "geom_friction_slide_range",
-        "gravity_z": "gravity_z_range",
-    }
     randomization_kwargs = {}
     supported_randomization_fields = {
         field.name for field in fields(DomainRandomizationConfig)
     }
-    for config_name, randomization_name in runtime_fields.items():
+    for config_name, randomization_name in _RUNTIME_DOMAIN_RANDOMIZATION_FIELDS.items():
         value_range = _enabled_range(params, config_name)
-        if value_range is not None and randomization_name in supported_randomization_fields:
-            randomization_kwargs[randomization_name] = value_range
+        if value_range is None:
+            continue
+        if randomization_name not in supported_randomization_fields:
+            raise ValueError(
+                f"domain_randomization_params.{config_name} is enabled, but the installed "
+                f"mujoco-truss-gen does not support {randomization_name}. Upgrade the package."
+            )
+        randomization_kwargs[randomization_name] = value_range
 
     if not scale_enabled and not physical_randomization_enabled:
         return DomainRandomizationConfig(**randomization_kwargs)
