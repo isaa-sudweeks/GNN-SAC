@@ -51,21 +51,36 @@ def run_training(cfg, trial=None):
     """
     Execute one training run and return the best objective value seen.
     """
+    sac_backend = str(getattr(cfg, "sac_backend", "mlp")).lower()
+    if sac_backend not in {"mlp", "gnn"}:
+        raise ValueError(f"Unsupported sac_backend={sac_backend!r}; expected 'mlp' or 'gnn'.")
+
     if getattr(cfg, 'device', 'cuda') == 'cuda':
         assert torch.cuda.is_available(), "CUDA not available, please run on a GPU"
     assert cfg.steps > 0, "Number of steps must be positive"
     cfg = parse_cfg(cfg)
+    if sac_backend == "gnn" and str(getattr(cfg, "mujoco_backend", "mujoco")).lower() == "mjx":
+        os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     set_seed(cfg.seed)
 
     print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)
 
     env = make_env(cfg)
+    if sac_backend == "gnn":
+        from common.gnn_buffer import GNNBuffer
+        from gnn_sac import GNNSAC
+
+        agent = GNNSAC(cfg)
+        buffer = GNNBuffer(cfg)
+    else:
+        agent = SAC(cfg)
+        buffer = Buffer(cfg)
     trainer = OnlineTrainer(
         cfg = cfg,
-        env = env, # I need to make this 
-        agent=SAC(cfg),
+        env = env,
+        agent=agent,
         logger=Logger(cfg),
-        buffer=Buffer(cfg),
+        buffer=buffer,
         trial=trial,
     )
 

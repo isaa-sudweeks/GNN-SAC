@@ -1,6 +1,8 @@
+from collections.abc import Sequence
+
 import torch 
 import torch.nn.functional as F 
-from torch_geometric.data import Batch
+from torch_geometric.data import Batch, Data
 
 from common.gnn_actor_critic import GNNActorCritic 
 
@@ -88,11 +90,33 @@ class GNNSAC(torch.nn.Module):
         """
         Right now this assumes that obs is coming in as a torch geometric Data object
         """
-        obs = Batch.from_data_list([obs]).to(self.device, non_blocking=True)
-        action, info = self.model.pi(obs)
+        return self.act_batch([obs], eval_mode=eval_mode)[0]
+
+    @torch.no_grad()
+    def act_batch(self, observations: Sequence[Data], eval_mode: bool = False) -> list[torch.Tensor]:
+        """Compute actions for graph observations in one actor forward pass."""
+        if not observations:
+            return []
+
+        node_counts = [int(obs.x.size(0)) for obs in observations]
+        obs_batch = Batch.from_data_list(list(observations)).to(self.device, non_blocking=True)
         if eval_mode:
-            action = info["mean"]
-        return self._safe_action(action).cpu()
+            action = self.model.pi_mean(obs_batch)
+        else:
+            action, _ = self.model.pi(obs_batch)
+
+        action = self._safe_action(action)
+        keep_on_device = (
+            str(getattr(self.cfg, "mujoco_backend", "mujoco")).lower() == "mjx"
+            and bool(getattr(self.cfg, "mjx_zero_copy", True))
+        )
+        if not keep_on_device:
+            action = action.cpu()
+        if action.size(0) != sum(node_counts):
+            raise RuntimeError(
+                f"Actor produced {action.size(0)} node actions for {sum(node_counts)} observation nodes"
+            )
+        return list(action.split(node_counts, dim=0))
 
     @torch.no_grad()
     def _td_target(self, next_obs, reward, terminated):

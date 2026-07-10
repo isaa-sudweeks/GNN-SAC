@@ -55,6 +55,8 @@ def run_training(cfg, trial=None):
         assert torch.cuda.is_available(), "CUDA not available, please run on a GPU"
     assert cfg.steps > 0, "Number of steps must be positive"
     cfg = parse_cfg(cfg)
+    if str(getattr(cfg, "mujoco_backend", "mujoco")).lower() == "mjx":
+        os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     set_seed(cfg.seed)
 
     print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)
@@ -92,7 +94,7 @@ def run_training(cfg, trial=None):
     finally:
         env.close()
 
-@hydra.main(config_name='gnn_config', config_path='../config')
+@hydra.main(config_name='archieved/gnn_config', config_path='../config')
 def train(cfg):
     """
     Script for training SAC agents.

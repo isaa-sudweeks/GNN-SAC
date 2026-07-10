@@ -1,24 +1,28 @@
+# @package _global_
+
 defaults:
-  - gnn_config
-  - override hydra/launcher: submitit_slurm
+  - override /hydra/launcher: submitit_slurm
   - _self_
+
+platform: supercomputer
 
 # Stable run identity for preemptible/requeued jobs. Override run_root or set
 # GNN_SAC_RUN_ROOT to place checkpoints on persistent shared storage.
 run_root: ${oc.env:GNN_SAC_RUN_ROOT,/home/isuds/robotics/GNN-SAC/runs}
 work_dir: ${run_root}/${task}/${exp_name}/seed_${seed}
+# Append a stable Hydra job number and override hash during multirun execution.
+isolate_multirun_runs: true
 resume_from_checkpoint: latest
-checkpoint_freq: 10_000
+checkpoint_freq: 100_000
 checkpoint_keep_last: 5
 set_wandb_offline: true
 device: cuda
 
-# Submitit uses this Slurm launcher only in Hydra multirun mode:
-# python sac/gnn_train.py --config-name supercomputer --multirun
+# Submitit uses this Slurm launcher only in Hydra multirun mode.
 hydra:
   sweep:
-    dir: ${work_dir}/hydra
-    subdir: submitit
+    dir: ${run_root}/hydra/${task}/${exp_name}/${now:%Y-%m-%d_%H-%M-%S}
+    subdir: ${hydra.job.num}
   launcher:
     setup:
       - export PYTHONPATH=${oc.env:PWD}/sac:${oc.env:PWD}:${oc.env:PYTHONPATH,}

@@ -1,0 +1,8 @@
+# @package _global_
+
+sim_backend: mjx
+mujoco_backend: mjx
+eval_backend: mujoco
+num_envs: 256 # Total environments; mixed-topology MJX runs split this evenly across truss_topologies.
+save_video: false
+mjx_zero_copy: true

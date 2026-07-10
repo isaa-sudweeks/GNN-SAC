@@ -42,6 +42,8 @@ CONSOLE_FORMAT = [
     ("episode_reward", "R", "float"),
     ("episode_success", "Succ", "float"),
     ("episode_length", "Len", "float"),
+    ("buffer_size", "Buf", "int"),
+    ("optimizer_updates", "Upd", "int"),
     ("elapsed_time", "T", "time"),
     ("steps_per_sec", "SPS", "float"),
 ]
@@ -274,6 +276,7 @@ class Logger:
         self._save_agent = bool(_cfg_get(cfg, "save_agent", True))
         self._group = cfg_to_group(cfg)
         self._seed = _cfg_get(cfg, "seed", 0)
+        self._multirun_id = _cfg_get(cfg, "multirun_id", None)
         self._eval_rows: list[dict[str, Any]] = []
         self._finished = False
 
@@ -311,6 +314,8 @@ class Logger:
         name = _cfg_get(cfg, "wandb_name", None)
         if name in (None, "", "???"):
             name = str(self._seed)
+        if self._multirun_id not in (None, "", "???"):
+            name = f"{name}-{self._multirun_id}"
         tags = cfg_to_group(cfg, return_list=True) + [f"seed:{self._seed}"]
         init_kwargs = dict(
             project=self.project,
@@ -359,8 +364,11 @@ class Logger:
         fp = self._model_dir / f"{identifier}.pt"
         agent.save(fp)
         if self._wandb:
+            artifact_name = f"{self._group}-{self._seed}"
+            if self._multirun_id not in (None, "", "???"):
+                artifact_name = f"{artifact_name}-{self._multirun_id}"
             artifact = self._wandb.Artifact(
-                f"{self._group}-{self._seed}-{identifier}",
+                f"{artifact_name}-{identifier}",
                 type="model",
             )
             artifact.add_file(str(fp))

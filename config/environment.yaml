@@ -7,11 +7,14 @@ obs: state # Observation type expected by the MuJoCo environment factory.
 xml_path: env/truss/assets/Baseline/octahedron_velocity_integrated_ctr.xml # MuJoCo XML model used by the truss environment.
 truss_topology: octahedron # mujoco-truss-gen preset used by unified truss envs.
 truss_topologies: null # Optional list of mujoco-truss-gen presets for multi-topology runs.
+topologies: null # Alias for truss_topologies; useful for CLI sweeps.
 truss_realistic: false # Whether unified truss envs should request realistic generated models.
 truss_graph_view: auto # Graph view for unified graph envs: auto, physical, or logical.
 
 # Simulation timing
-mujoco_backend: mujoco # Simulation backend for custom truss envs: mjx for MuJoCo-JAX, mujoco for native MuJoCo.
+mujoco_backend: mujoco # Backend: mjx selects batch-native fixed-topology graph simulation; mujoco uses Gym environments.
+eval_backend: mujoco # Evaluation backend. Native MuJoCo supports fast single-env evaluation and rendering during MJX training.
+mjx_zero_copy: true # Exchange MJX observations/actions with PyTorch through DLPack when both use the same device.
 max_steps: 5_000 # Maximum simulator steps before the Timeout wrapper truncates an episode.
 episode_length: ${max_steps} # Nominal episode length used before make_env overwrites it from the wrapper.
 nsubsteps: 100 # Number of MuJoCo integration steps per environment step.

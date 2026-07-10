@@ -8,7 +8,9 @@ grad_clip_norm: 10.0 # Maximum global gradient norm before clipping optimizer st
 # Replay and update cadence
 buffer_size: 1_000_000 # Maximum number of transitions stored in replay.
 horizon: 2 # Sequence length used by the slice sampler; 2 gives one current/next transition.
-iterations: 1 # Base number of policy/value updates per environment step.
+replay_ratio: 10.0 # Replay samples consumed per new transition; updates are replay_ratio * collected / batch_size.
+update_every_vector_steps: 1 # Spend accumulated update budget after this many vector-environment steps; set to 1 for every step.
+iterations: null # Deprecated legacy optimizer updates per transition. Set only to reproduce the old update schedule.
 
 # SAC objective
 entropy_coef: 0.2 # Weight on policy entropy in the actor objective.
@@ -25,4 +27,3 @@ dropout: 0.0 # Dropout probability in critic MLP layers.
 num_q: 2 # Number of critic networks in the Q ensemble.
 log_std_min: -10.0 # Minimum actor log standard deviation before action sampling.
 log_std_max: 2.0 # Maximum actor log standard deviation before action sampling.
-

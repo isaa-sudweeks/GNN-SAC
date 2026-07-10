@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+from threading import Event
 import json
 import sys
 import tempfile
@@ -71,6 +72,7 @@ def make_trainer(work_dir, **overrides):
         **{
             "work_dir": str(work_dir),
             "checkpoint_dir": "checkpoints",
+            "checkpoint_async": False,
             "checkpoint_freq": 10,
             "checkpoint_keep_last": 2,
             "resume_from_checkpoint": None,
@@ -95,6 +97,12 @@ class CheckpointingTest(unittest.TestCase):
             trainer = make_trainer(Path(tmp_dir))
             trainer._step = 20
             trainer._ep_idx = 3
+            trainer._update_budget = 0.75
+            trainer._pending_update_transitions = 1536
+            trainer._vector_steps_since_update = 6
+            trainer._pretrain_complete = True
+            trainer._optimizer_updates = 17
+            trainer._last_eval_step = 20
             trainer.agent.model.weight.data.fill_(5.0)
             trainer.buffer.value = torch.tensor([7.0])
             trainer.logger.rows = [{"step": 10, "episode_reward": 1.5}]
@@ -105,6 +113,12 @@ class CheckpointingTest(unittest.TestCase):
 
             self.assertEqual(resumed._step, 20)
             self.assertEqual(resumed._ep_idx, 3)
+            self.assertEqual(resumed._update_budget, 0.75)
+            self.assertEqual(resumed._pending_update_transitions, 1536)
+            self.assertEqual(resumed._vector_steps_since_update, 6)
+            self.assertTrue(resumed._pretrain_complete)
+            self.assertEqual(resumed._optimizer_updates, 17)
+            self.assertEqual(resumed._last_eval_step, 20)
             self.assertEqual(float(resumed.agent.model.weight.item()), 5.0)
             self.assertEqual(float(resumed.buffer.value.item()), 7.0)
             self.assertEqual(resumed.logger.rows, [{"step": 10, "episode_reward": 1.5}])
@@ -125,6 +139,71 @@ class CheckpointingTest(unittest.TestCase):
             self.assertTrue((checkpoint_dir / "step_20.agent.pt").exists())
             self.assertTrue((checkpoint_dir / "step_30.pt").exists())
             self.assertTrue((checkpoint_dir / "step_30.agent.pt").exists())
+
+    def test_async_checkpoint_writes_snapshot_after_training_continues(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = make_trainer(Path(tmp_dir), checkpoint_async=True)
+            trainer._step = 10
+            trainer.agent.model.weight.data.fill_(3.0)
+            trainer.buffer.value = torch.tensor([4.0])
+
+            entered_writer = Event()
+            release_writer = Event()
+            original_writer = Trainer._write_checkpoint_files.__func__
+
+            def delayed_writer(cls, *args, **kwargs):
+                entered_writer.set()
+                release_writer.wait(timeout=5)
+                return original_writer(cls, *args, **kwargs)
+
+            with patch.object(Trainer, "_write_checkpoint_files", classmethod(delayed_writer)):
+                checkpoint = trainer.maybe_save_checkpoint(previous_step=9)
+                self.assertTrue(entered_writer.wait(timeout=5))
+                trainer._step = 20
+                trainer.agent.model.weight.data.fill_(8.0)
+                trainer.buffer.value = torch.tensor([9.0])
+                release_writer.set()
+                trainer.wait_for_async_checkpoint()
+
+            saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+            self.assertEqual(saved["trainer"]["step"], 10)
+            self.assertEqual(float(saved["agent"]["model"]["weight"].item()), 3.0)
+            self.assertEqual(float(saved["buffer"]["value"].item()), 4.0)
+            agent_sidecar = torch.load(
+                Path(tmp_dir) / "checkpoints" / "latest.agent.pt",
+                map_location="cpu",
+                weights_only=False,
+            )
+            self.assertEqual(float(agent_sidecar["model"]["weight"].item()), 3.0)
+
+    def test_forced_checkpoint_waits_for_pending_async_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = make_trainer(Path(tmp_dir), checkpoint_async=True)
+            trainer._step = 10
+
+            entered_writer = Event()
+            release_writer = Event()
+            original_writer = Trainer._write_checkpoint_files.__func__
+            delayed_identifiers = []
+
+            def delayed_first_writer(cls, checkpoint_dir, identifier, *args):
+                if identifier == "step_10":
+                    delayed_identifiers.append(identifier)
+                    entered_writer.set()
+                    release_writer.wait(timeout=5)
+                return original_writer(cls, checkpoint_dir, identifier, *args)
+
+            with patch.object(Trainer, "_write_checkpoint_files", classmethod(delayed_first_writer)):
+                trainer.maybe_save_checkpoint(previous_step=9)
+                self.assertTrue(entered_writer.wait(timeout=5))
+                trainer._step = 15
+                release_writer.set()
+                forced_checkpoint = trainer.maybe_save_checkpoint(force=True)
+
+            self.assertEqual(delayed_identifiers, ["step_10"])
+            self.assertTrue((Path(tmp_dir) / "checkpoints" / "step_10.pt").exists())
+            self.assertTrue(forced_checkpoint.exists())
+            self.assertIsNone(trainer._checkpoint_future)
 
     def test_resume_latest_resolves_checkpoint_dir(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -193,22 +272,35 @@ class WandbInitTest(unittest.TestCase):
             torch.save({"logger": {"wandb": {"id": "resume-run"}}}, checkpoint_dir / "latest.pt")
 
             init_calls = []
+            artifact_names = []
 
             class FakeRun:
                 id = "resume-run"
 
+            class FakeArtifact:
+                def __init__(self, name, type):
+                    artifact_names.append(name)
+
+                def add_file(self, path):
+                    return
+
             class FakeWandb:
                 run = FakeRun()
+                Artifact = FakeArtifact
 
                 @staticmethod
                 def init(**kwargs):
                     init_calls.append(kwargs)
                     return FakeRun()
 
+                @staticmethod
+                def log_artifact(artifact):
+                    return
+
             cfg = SimpleNamespace(
                 work_dir=str(work_dir),
                 save_csv=False,
-                save_agent=False,
+                save_agent=True,
                 env_name="env",
                 exp_name="exp",
                 seed=1,
@@ -216,6 +308,7 @@ class WandbInitTest(unittest.TestCase):
                 wandb_project="project",
                 wandb_entity=None,
                 wandb_name="run-name",
+                multirun_id="job_0002_deadbeefcafe",
                 wandb_silent=True,
                 enable_wandb=True,
                 save_video=False,
@@ -226,10 +319,16 @@ class WandbInitTest(unittest.TestCase):
 
             with patch.dict(sys.modules, {"wandb": FakeWandb}), patch.dict("os.environ", {}, clear=True):
                 logger = Logger(cfg)
+                logger.save_agent(DummyAgent())
 
             self.assertEqual(init_calls[0]["id"], "resume-run")
             self.assertEqual(init_calls[0]["resume"], "allow")
             self.assertEqual(init_calls[0]["mode"], "offline")
+            self.assertEqual(init_calls[0]["name"], "run-name-job_0002_deadbeefcafe")
+            self.assertEqual(
+                artifact_names,
+                ["env-exp-1-job_0002_deadbeefcafe-final"],
+            )
             self.assertEqual(json.loads((work_dir / "wandb_run.json").read_text())["id"], "resume-run")
             self.assertEqual(logger.state_dict()["wandb"]["id"], "resume-run")
 

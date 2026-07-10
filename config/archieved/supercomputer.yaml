@@ -1,0 +1,11 @@
+# @package _global_
+
+defaults:
+  - /config
+  - override /sac_backend: gnn
+  - override /sim_backend: mjx
+  - override /platform: supercomputer
+  - _self_
+
+# Compatibility profile for cluster GNN/MJX runs.
+use_control_graph: true

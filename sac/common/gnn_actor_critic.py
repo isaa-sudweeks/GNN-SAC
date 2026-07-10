@@ -93,6 +93,11 @@ class GNNActorCritic(nn.Module):
             "log_prob": log_prob,
             "entropy": entropy
         }
+
+    def pi_mean(self, obs):
+        """Compute deterministic actions without sampling policy noise or statistics."""
+        mean, _ = self._action_head(self._pi(obs.x, obs.edge_index)).chunk(2, dim=-1)
+        return torch.tanh(mean)
     
     def Q(self, obs, action, return_type="min", target=False):
         """

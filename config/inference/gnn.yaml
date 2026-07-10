@@ -1,5 +1,8 @@
+# @package _global_
+
 defaults:
-  - gnn_config
+  - /config
+  - override /sac_backend: gnn
   - _self_
 
 # Checkpoint source. Accepted values:

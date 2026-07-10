@@ -501,6 +501,157 @@ def _render_if_enabled(env, cfg, step_started_at: float | None = None, realtime_
         time.sleep(sleep_seconds)
 
 
+def _run_vectorized_inference(cfg, env, agent) -> list[dict]:
+    """Evaluate independent episodes with one batched actor and environment step."""
+    results = []
+    episode_count = int(cfg.episodes)
+    max_steps = getattr(cfg, "inference_max_steps", None)
+    deterministic = bool(cfg.deterministic)
+    print_position_command = bool(getattr(cfg, "print_position_command", True))
+    position_command_step = getattr(cfg, "position_command_step", None)
+    position_command_dt = getattr(cfg, "position_command_dt", None)
+    if position_command_dt is None:
+        position_command_dt = _simulation_step_seconds(env)
+    position_command_dt = float(position_command_dt or 1.0)
+
+    for episode_start in range(0, episode_count, int(env.num_envs)):
+        batch_size = min(int(env.num_envs), episode_count - episode_start)
+        env_indices = list(range(batch_size))
+        observations = env.reset_many(env_indices=env_indices)
+        active = list(env_indices)
+        rewards = [None] * batch_size
+        lengths = [0] * batch_size
+        final_info = [{} for _ in range(batch_size)]
+        position_commands = [None] * batch_size
+        printed_position_commands = [False] * batch_size
+
+        while active:
+            active_observations = [observations[env_idx] for env_idx in active]
+            actions = agent.act_batch(active_observations, eval_mode=deterministic)
+            if print_position_command:
+                action_batch = torch.stack(actions).detach().cpu().numpy()
+                for action_idx, env_idx in enumerate(active):
+                    velocity_command = action_batch[action_idx] * float(getattr(cfg, "speed", 1.0))
+                    velocity_command, _ = _zero_passive_commands(velocity_command, env)
+                    if position_commands[env_idx] is None:
+                        position_commands[env_idx] = np.zeros_like(
+                            velocity_command, dtype=np.float64
+                        )
+                    position_commands[env_idx] += velocity_command * position_command_dt
+                    next_step = lengths[env_idx] + 1
+                    if position_command_step is not None and next_step == int(position_command_step):
+                        episode = episode_start + env_idx
+                        print(
+                            f"episode={episode} step={next_step} "
+                            f"position_command={_command_dict(position_commands[env_idx], env)}"
+                        )
+                        printed_position_commands[env_idx] = True
+            step_results = env.step_many(actions, env_indices=active)
+            next_active = []
+            for env_idx, (obs, reward, done, info) in zip(active, step_results):
+                observations[env_idx] = obs
+                rewards[env_idx] = reward if rewards[env_idx] is None else rewards[env_idx] + reward
+                lengths[env_idx] += 1
+                final_info[env_idx] = info
+                hit_limit = max_steps is not None and lengths[env_idx] >= int(max_steps)
+                if not done and not hit_limit:
+                    next_active.append(env_idx)
+            active = next_active
+
+        for env_idx in env_indices:
+            episode = episode_start + env_idx
+            info = final_info[env_idx]
+            if (
+                print_position_command
+                and position_commands[env_idx] is not None
+                and not printed_position_commands[env_idx]
+            ):
+                print(
+                    f"episode={episode} step={lengths[env_idx]} "
+                    f"position_command={_command_dict(position_commands[env_idx], env)}"
+                )
+            row = {
+                "episode": episode,
+                "episode_reward": _to_float(rewards[env_idx]),
+                "episode_success": _to_float(info.get("success", 0.0)),
+                "episode_length": lengths[env_idx],
+                "terminated": _to_float(info.get("terminated", 0.0)),
+                "truncated": _to_float(info.get("truncated", 0.0)),
+            }
+            results.append(row)
+            print(
+                f"episode={episode} reward={row['episode_reward']:.6f} "
+                f"success={row['episode_success']:.3f} length={row['episode_length']}"
+            )
+    return results
+
+
+def _run_serialized_inference(cfg, env, agent, smooth_rendering: bool) -> list[dict]:
+    results = []
+    for episode in range(int(cfg.episodes)):
+        obs = env.reset()
+        _render_if_enabled(env, cfg)
+        done = False
+        ep_reward = 0.0
+        ep_success = 0.0
+        info = {}
+        step = 0
+        max_steps = getattr(cfg, "inference_max_steps", None)
+        print_position_command = bool(getattr(cfg, "print_position_command", True))
+        position_command_step = getattr(cfg, "position_command_step", None)
+        position_command_dt = getattr(cfg, "position_command_dt", None)
+        if position_command_dt is None:
+            position_command_dt = _simulation_step_seconds(env)
+        position_command_dt = float(position_command_dt or 1.0)
+        position_command = None
+        printed_position_command = False
+        while not done:
+            step_started_at = time.perf_counter()
+            action = agent.act(obs, t0=step == 0, eval_mode=bool(cfg.deterministic))
+            velocity_command = _velocity_command_from_action(action, cfg)
+            velocity_command, _ = _zero_passive_commands(velocity_command, env)
+            if position_command is None:
+                position_command = np.zeros_like(velocity_command, dtype=np.float64)
+            position_command += velocity_command * position_command_dt
+            next_step = step + 1
+            if (
+                print_position_command
+                and position_command_step is not None
+                and next_step == int(position_command_step)
+            ):
+                print(
+                    f"episode={episode} step={next_step} "
+                    f"position_command={_command_dict(position_command, env)}"
+                )
+                printed_position_command = True
+            obs, reward, done, info = env.step(action)
+            _render_if_enabled(env, cfg, step_started_at, realtime_pacing=not smooth_rendering)
+            ep_reward += _to_float(reward)
+            ep_success = float(info.get("success", ep_success))
+            step = next_step
+            if max_steps is not None and step >= int(max_steps):
+                break
+        if print_position_command and position_command is not None and not printed_position_command:
+            print(
+                f"episode={episode} step={step} "
+                f"position_command={_command_dict(position_command, env)}"
+            )
+        row = {
+            "episode": episode,
+            "episode_reward": ep_reward,
+            "episode_success": ep_success,
+            "episode_length": step,
+            "terminated": _to_float(info.get("terminated", 0.0)),
+            "truncated": _to_float(info.get("truncated", 0.0)),
+        }
+        results.append(row)
+        print(
+            f"episode={episode} reward={ep_reward:.6f} "
+            f"success={ep_success:.3f} length={step}"
+        )
+    return results
+
+
 def run_inference(cfg):
     if getattr(cfg, "device", "cuda") == "cuda":
         assert torch.cuda.is_available(), "CUDA not available, please run on a GPU"
@@ -511,6 +662,8 @@ def run_inference(cfg):
         cfg.save_csv = False
 
     cfg = parse_cfg(cfg)
+    if str(getattr(cfg, "mujoco_backend", "mujoco")).lower() == "mjx":
+        os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     set_seed(cfg.seed)
 
     checkpoint = resolve_checkpoint(str(cfg.model), cfg)
@@ -523,68 +676,10 @@ def run_inference(cfg):
     try:
         load_agent_checkpoint(agent, checkpoint)
         agent.model.eval()
-        results = []
-        for episode in range(int(cfg.episodes)):
-            obs = env.reset()
-            _render_if_enabled(env, cfg)
-            done = False
-            ep_reward = 0.0
-            ep_success = 0.0
-            info = {}
-            step = 0
-            max_steps = getattr(cfg, "inference_max_steps", None)
-            print_position_command = bool(getattr(cfg, "print_position_command", True))
-            position_command_step = getattr(cfg, "position_command_step", None)
-            position_command_dt = getattr(cfg, "position_command_dt", None)
-            if position_command_dt is None:
-                position_command_dt = _simulation_step_seconds(env)
-            position_command_dt = float(position_command_dt or 1.0)
-            position_command = None
-            printed_position_command = False
-            while not done:
-                step_started_at = time.perf_counter()
-                action = agent.act(obs, t0=step == 0, eval_mode=bool(cfg.deterministic))
-                velocity_command = _velocity_command_from_action(action, cfg)
-                velocity_command, _ = _zero_passive_commands(velocity_command, env)
-                if position_command is None:
-                    position_command = np.zeros_like(velocity_command, dtype=np.float64)
-                position_command += velocity_command * position_command_dt
-                next_step = step + 1
-                if (
-                    print_position_command
-                    and position_command_step is not None
-                    and next_step == int(position_command_step)
-                ):
-                    print(
-                        f"episode={episode} step={next_step} "
-                        f"position_command={_command_dict(position_command, env)}"
-                    )
-                    printed_position_command = True
-                obs, reward, done, info = env.step(action)
-                _render_if_enabled(env, cfg, step_started_at, realtime_pacing=not smooth_rendering)
-                ep_reward += _to_float(reward)
-                ep_success = float(info.get("success", ep_success))
-                step = next_step
-                if max_steps is not None and step >= int(max_steps):
-                    break
-            if print_position_command and position_command is not None and not printed_position_command:
-                print(
-                    f"episode={episode} step={step} "
-                    f"position_command={_command_dict(position_command, env)}"
-                )
-            row = {
-                "episode": episode,
-                "episode_reward": ep_reward,
-                "episode_success": ep_success,
-                "episode_length": step,
-                "terminated": _to_float(info.get("terminated", 0.0)),
-                "truncated": _to_float(info.get("truncated", 0.0)),
-            }
-            results.append(row)
-            print(
-                f"episode={episode} reward={ep_reward:.6f} "
-                f"success={ep_success:.3f} length={step}"
-            )
+        if int(getattr(env, "num_envs", 1)) > 1 and not bool(getattr(cfg, "visualize", False)):
+            results = _run_vectorized_inference(cfg, env, agent)
+        else:
+            results = _run_serialized_inference(cfg, env, agent, smooth_rendering)
 
         rewards = np.asarray([row["episode_reward"] for row in results], dtype=np.float64)
         successes = np.asarray([row["episode_success"] for row in results], dtype=np.float64)
@@ -614,7 +709,7 @@ def run_inference(cfg):
         env.close()
 
 
-@hydra.main(config_name="gnn_inference", config_path="../config", version_base=None)
+@hydra.main(config_name="inference/gnn", config_path="../config", version_base=None)
 def infer(cfg):
     """
     Run a trained GNN SAC checkpoint on any configured graph environment.

@@ -30,6 +30,7 @@ def load_cfg(args: argparse.Namespace, num_envs: int, backend: str):
                 "multitask": False,
                 "num_envs": num_envs,
                 "mujoco_backend": backend,
+                "truss_topologies": args.topologies,
                 "nsubsteps": args.nsubsteps,
                 "max_steps": max(args.steps_per_env + args.warmup + 1, args.max_steps),
                 "episode_length": max(args.steps_per_env + args.warmup + 1, args.max_steps),
@@ -46,36 +47,40 @@ def load_cfg(args: argparse.Namespace, num_envs: int, backend: str):
 
 
 def step_all_envs(env, num_envs: int):
+    if num_envs > 1:
+        actions = [env.rand_act(env_idx=env_idx) for env_idx in range(num_envs)]
+        env.step_many(actions, env_indices=range(num_envs))
+        return
     for env_idx in range(num_envs):
-        if num_envs > 1:
-            env.set_active_env(env_idx)
         env.step(env.rand_act())
 
 
 def reset_all_envs(env, num_envs: int):
+    if num_envs > 1:
+        env.reset_many(env_indices=range(num_envs))
+        return
     for env_idx in range(num_envs):
-        if num_envs > 1:
-            env.reset(task_idx=env_idx)
-        else:
-            env.reset()
+        env.reset()
 
 
 def run_case(args: argparse.Namespace, num_envs: int, backend: str):
     cfg = load_cfg(args, num_envs, backend)
     env = make_env(cfg)
+    total_num_envs = int(getattr(env, "num_envs", num_envs))
     try:
-        reset_all_envs(env, num_envs)
+        reset_all_envs(env, total_num_envs)
         for _ in range(args.warmup):
-            step_all_envs(env, num_envs)
+            step_all_envs(env, total_num_envs)
 
         start = time.perf_counter()
         for _ in range(args.steps_per_env):
-            step_all_envs(env, num_envs)
+            step_all_envs(env, total_num_envs)
         elapsed = time.perf_counter() - start
 
-        total_env_steps = args.steps_per_env * num_envs
+        total_env_steps = args.steps_per_env * total_num_envs
         total_physics_steps = total_env_steps * args.nsubsteps
         return {
+            "total_num_envs": total_num_envs,
             "elapsed": elapsed,
             "env_steps_per_sec": total_env_steps / elapsed,
             "per_env_steps_per_sec": args.steps_per_env / elapsed,
@@ -87,11 +92,17 @@ def run_case(args: argparse.Namespace, num_envs: int, backend: str):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Benchmark the repo's current serial multi-environment training step pattern."
+        description="Benchmark native repeated environments against batch-native MJX."
     )
-    parser.add_argument("--task", default="truss-velocity-command-right")
+    parser.add_argument("--task", default="truss-graph")
     parser.add_argument("--num-envs", type=int, nargs="+", default=[1, 2, 4, 8])
     parser.add_argument("--backend", choices=("both", "mjx", "mujoco"), default="both")
+    parser.add_argument(
+        "--topologies",
+        nargs="+",
+        default=None,
+        help="MJX topology buckets, for example: --topologies octahedron tetrahedron",
+    )
     parser.add_argument("--steps-per-env", type=int, default=100)
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--nsubsteps", type=int, default=100)
@@ -102,13 +113,14 @@ def main():
 
     backends = ("mjx", "mujoco") if args.backend == "both" else (args.backend,)
     print(
-        "backend,num_envs,elapsed_s,total_env_steps_s,per_env_steps_s,total_physics_steps_s"
+        "backend,requested_num_envs,total_envs,elapsed_s,total_env_steps_s,"
+        "per_env_steps_s,total_physics_steps_s"
     )
     for backend in backends:
         for num_envs in args.num_envs:
             result = run_case(args, num_envs, backend)
             print(
-                f"{backend},{num_envs},{result['elapsed']:.3f},"
+                f"{backend},{num_envs},{result['total_num_envs']},{result['elapsed']:.3f},"
                 f"{result['env_steps_per_sec']:.2f},"
                 f"{result['per_env_steps_per_sec']:.2f},"
                 f"{result['physics_steps_per_sec']:.2f}"

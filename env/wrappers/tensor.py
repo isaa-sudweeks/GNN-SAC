@@ -18,7 +18,10 @@ class TensorWrapper(gym.Wrapper):
 	def rand_act(self, env_idx=None):
 		if env_idx is not None and hasattr(self.env, "set_active_env"):
 			self.env.set_active_env(env_idx)
-		return torch.from_numpy(self.env.action_space.sample().astype(np.float32))
+		action = torch.from_numpy(self.env.action_space.sample().astype(np.float32))
+		if bool(getattr(self.env, "accepts_torch_actions", False)):
+			action = action.to(getattr(self.env, "action_device", torch.device("cpu")))
+		return action
 
 	def set_active_env(self, env_idx):
 		if not hasattr(self.env, "set_active_env"):
@@ -60,15 +63,20 @@ class TensorWrapper(gym.Wrapper):
 		return [self._obs_to_tensor(obs) for obs in self.env.reset_many(env_indices=env_indices)]
 
 	def step(self, action):
-		obs, reward, done, info = self.env.step(self._action_to_numpy(action))
+		obs, reward, done, info = self.env.step(self._prepare_action(action))
 		return self._step_to_tensor(obs, reward, done, info)
 
 	def step_many(self, actions, env_indices=None):
 		if not hasattr(self.env, "step_many"):
 			raise AttributeError("Wrapped environment does not support batched step")
-		np_actions = [self._action_to_numpy(action) for action in actions]
-		results = self.env.step_many(np_actions, env_indices=env_indices)
+		prepared_actions = [self._prepare_action(action) for action in actions]
+		results = self.env.step_many(prepared_actions, env_indices=env_indices)
 		return [self._step_to_tensor(obs, reward, done, info) for obs, reward, done, info in results]
+
+	def _prepare_action(self, action):
+		if bool(getattr(self.env, "accepts_torch_actions", False)):
+			return action
+		return self._action_to_numpy(action)
 
 	def _action_to_numpy(self, action):
 		if isinstance(action, torch.Tensor):
@@ -78,6 +86,11 @@ class TensorWrapper(gym.Wrapper):
 	def _step_to_tensor(self, obs, reward, done, info):
 		info = defaultdict(float, info)
 		info['success'] = float(info['success'])
-		info['terminated'] = torch.tensor(float(info['terminated']))
-		info['truncated'] = torch.tensor(float(info['truncated']))
-		return self._obs_to_tensor(obs), torch.tensor(reward, dtype=torch.float32), done, info
+		info['terminated'] = self._scalar_tensor(info['terminated'])
+		info['truncated'] = self._scalar_tensor(info['truncated'])
+		return self._obs_to_tensor(obs), self._scalar_tensor(reward), done, info
+
+	def _scalar_tensor(self, value):
+		if isinstance(value, torch.Tensor):
+			return value.float().reshape(())
+		return torch.tensor(value, dtype=torch.float32)

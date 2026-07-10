@@ -1,0 +1,9 @@
+# @package _global_
+
+sac_backend: mlp
+exp_name: truss-velocity-command
+
+# MLP policies consume flat observations and emit flat actuator actions.
+use_graph_observations: false
+use_control_graph: false
+target_entropy: auto

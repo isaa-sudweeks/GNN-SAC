@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -14,12 +15,14 @@ for path in (ROOT, SAC_ROOT):
 
 from omegaconf import OmegaConf
 from torch_geometric.data import Data
-from mujoco_truss_gen import PRESETS, TrussPhysicalParameters
+from mujoco_truss_gen import DomainRandomizationConfig, PRESETS, TrussPhysicalParameters
 
 from common.gnn_buffer import GNNBuffer
 from common.parser import parse_cfg
 from env import make_env
 from env.mujoco_gen.topology_envs import (
+    _RUNTIME_DOMAIN_RANDOMIZATION_FIELDS,
+    _domain_randomization,
     _physical_parameters_from_config,
     _randomized_physical_parameter_overrides,
 )
@@ -55,7 +58,7 @@ def graph_test_cfg(**overrides):
     cfg = OmegaConf.merge(
         OmegaConf.load(ROOT / "config" / "algorithm.yaml"),
         OmegaConf.load(ROOT / "config" / "environment.yaml"),
-        OmegaConf.load(ROOT / "config" / "gnn_config.yaml"),
+        OmegaConf.load(ROOT / "config" / "sac_backend" / "gnn.yaml"),
         OmegaConf.create(
             {
                 "save_video": False,
@@ -77,6 +80,167 @@ def graph_test_cfg(**overrides):
 
 
 class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
+    def test_fixed_topology_mjx_training_uses_distinct_native_eval_env(self):
+        cfg = SimpleNamespace(
+            task="truss-graph",
+            env_name="truss-graph",
+            mujoco_backend="mjx",
+            eval_backend="mujoco",
+            num_envs=1024,
+            domain_randomization=False,
+            eval_task=None,
+            resume_from_checkpoint=None,
+            work_dir=str(ROOT / "logs" / "test-smoke"),
+        )
+        training_env = SimpleNamespace()
+        native_eval_env = SimpleNamespace()
+        agent = SimpleNamespace(model="dummy")
+
+        with patch("env.make_env", return_value=native_eval_env) as make_eval_env:
+            trainer = OnlineTrainer(
+                cfg=cfg,
+                env=training_env,
+                agent=agent,
+                buffer=None,
+                logger=SimpleNamespace(),
+            )
+
+        eval_cfg = make_eval_env.call_args.args[0]
+        self.assertIs(trainer.eval_env, native_eval_env)
+        self.assertEqual(eval_cfg.mujoco_backend, "mujoco")
+        self.assertEqual(eval_cfg.num_envs, 1)
+        self.assertEqual(cfg.mujoco_backend, "mjx")
+
+    def test_mjx_training_uses_native_mujoco_for_topology_evaluation(self):
+        class DummyTrainingBuckets:
+            is_topology_bucket = True
+            topologies = ["octahedron", "tetrahedron"]
+            topology_representative_indices = {"octahedron": 0, "tetrahedron": 1}
+
+        class DummyNativeEvalEnv:
+            num_envs = 2
+
+            def __init__(self):
+                self.active_env_idx = 0
+                self.reset_task_indices = []
+                self.selected_env_indices = []
+
+            def set_active_env(self, env_idx):
+                self.selected_env_indices.append(env_idx)
+
+            def reset(self, task_idx=None):
+                self.active_env_idx = int(task_idx or 0)
+                self.reset_task_indices.append(task_idx)
+                return torch.tensor([float(self.active_env_idx)])
+
+            def step(self, action):
+                reward = torch.tensor(float(self.active_env_idx + 1))
+                info = {
+                    "success": torch.tensor(float(self.active_env_idx)),
+                    "terminated": torch.tensor(0.0),
+                    "truncated": torch.tensor(1.0),
+                }
+                return torch.tensor([float(self.active_env_idx)]), reward, True, info
+
+            def close(self):
+                return
+
+        class DummyAgent:
+            model = "dummy"
+
+            def act(self, obs, t0=False, eval_mode=False):
+                return torch.tensor([0.0])
+
+        class DummyLogger:
+            video = None
+
+        cfg = SimpleNamespace(
+            task="truss-graph",
+            env_name="truss-graph",
+            mujoco_backend="mjx",
+            eval_backend="mujoco",
+            domain_randomization=False,
+            eval_task=None,
+            eval_episodes=1,
+            save_video=False,
+            multitask=False,
+            truss_topologies=["octahedron", "tetrahedron"],
+            tasks=["truss-graph:octahedron", "truss-graph:tetrahedron"],
+            resume_from_checkpoint=None,
+            work_dir=str(ROOT / "logs" / "test-smoke"),
+        )
+        eval_env = DummyNativeEvalEnv()
+        captured_cfg = None
+
+        def make_eval_env(eval_cfg):
+            nonlocal captured_cfg
+            captured_cfg = eval_cfg
+            return eval_env
+
+        with patch("env.make_env", side_effect=make_eval_env):
+            trainer = OnlineTrainer(
+                cfg=cfg,
+                env=DummyTrainingBuckets(),
+                agent=DummyAgent(),
+                buffer=None,
+                logger=DummyLogger(),
+            )
+
+        self.assertEqual(captured_cfg.mujoco_backend, "mujoco")
+        self.assertTrue(captured_cfg.multitask)
+        self.assertEqual(captured_cfg.num_envs, 1)
+        self.assertEqual(
+            list(captured_cfg.tasks),
+            ["truss-graph:octahedron", "truss-graph:tetrahedron"],
+        )
+
+        metrics = trainer.eval()
+
+        self.assertEqual(eval_env.reset_task_indices, [0, 1])
+        self.assertEqual(metrics["octahedron_episode_reward"], 1.0)
+        self.assertEqual(metrics["tetrahedron_episode_reward"], 2.0)
+        self.assertEqual(metrics["episode_reward"], 1.5)
+
+        trainer._activate_shared_eval_env(1724)
+        self.assertEqual(eval_env.selected_env_indices, [])
+
+    def test_eval_scalar_value_moves_tensor_to_host_scalar(self):
+        self.assertEqual(OnlineTrainer._scalar_value(torch.tensor(2.5)), 2.5)
+        self.assertEqual(OnlineTrainer._scalar_value(3), 3.0)
+        with self.assertRaisesRegex(ValueError, "Expected a scalar tensor"):
+            OnlineTrainer._scalar_value(torch.tensor([1.0, 2.0]))
+
+    def test_shared_single_environment_evaluation_does_not_select_a_slot(self):
+        class SingleEnvironmentWrapper:
+            num_envs = 1
+
+            def set_active_env(self, env_idx):
+                raise AttributeError("Wrapped environment does not support multiple active envs")
+
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        trainer.env = SingleEnvironmentWrapper()
+        trainer.eval_env = trainer.env
+
+        trainer._activate_shared_eval_env(0)
+
+    def test_shared_vector_environment_evaluation_selects_requested_slot(self):
+        class VectorEnvironmentWrapper:
+            num_envs = 2
+
+            def __init__(self):
+                self.selected_env_indices = []
+
+            def set_active_env(self, env_idx):
+                self.selected_env_indices.append(env_idx)
+
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        trainer.env = VectorEnvironmentWrapper()
+        trainer.eval_env = trainer.env
+
+        trainer._activate_shared_eval_env(1)
+
+        self.assertEqual(trainer.env.selected_env_indices, [1])
+
     def test_action_noise_is_domain_randomization_gated(self):
         trainer = OnlineTrainer.__new__(OnlineTrainer)
         action = torch.zeros(8)
@@ -104,6 +268,58 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
 
         trainer.cfg.domain_randomization_params["action_noise"]["apply_to_seed_actions"] = False
         self.assertTrue(torch.equal(trainer._apply_action_noise(action, seed_action=True), action))
+
+    def test_observation_noise_is_domain_randomization_gated(self):
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        obs = torch.zeros(8)
+
+        trainer.cfg = SimpleNamespace(
+            domain_randomization=False,
+            domain_randomization_params={
+                "observation_noise": {
+                    "enabled": True,
+                    "std": 10.0,
+                    "clip_low": -0.1,
+                    "clip_high": 0.1,
+                }
+            },
+        )
+        self.assertTrue(torch.equal(trainer._apply_observation_noise(obs), obs))
+
+        trainer.cfg.domain_randomization = True
+        torch.manual_seed(1)
+        noisy_obs = trainer._apply_observation_noise(obs)
+        self.assertFalse(torch.equal(noisy_obs, obs))
+        self.assertTrue(torch.all(noisy_obs <= 0.1))
+        self.assertTrue(torch.all(noisy_obs >= -0.1))
+
+    def test_observation_noise_only_changes_graph_node_features(self):
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        trainer.cfg = SimpleNamespace(
+            domain_randomization=True,
+            domain_randomization_params={
+                "observation_noise": {
+                    "enabled": True,
+                    "std": 10.0,
+                    "clip_low": -0.1,
+                    "clip_high": 0.1,
+                }
+            },
+        )
+        obs = Data(
+            x=torch.zeros(3, 2),
+            edge_index=torch.tensor([[0, 1], [1, 2]], dtype=torch.long),
+        )
+
+        torch.manual_seed(1)
+        noisy_obs = trainer._apply_observation_noise(obs)
+
+        self.assertIsNot(noisy_obs, obs)
+        self.assertFalse(torch.equal(noisy_obs.x, obs.x))
+        self.assertTrue(torch.equal(noisy_obs.edge_index, obs.edge_index))
+        self.assertTrue(torch.equal(obs.x, torch.zeros(3, 2)))
+        self.assertTrue(torch.all(noisy_obs.x <= 0.1))
+        self.assertTrue(torch.all(noisy_obs.x >= -0.1))
 
     def test_physical_parameters_are_loaded_from_config(self):
         cfg = graph_test_cfg(
@@ -175,6 +391,37 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         cfg.domain_randomization = False
         self.assertEqual(_randomized_physical_parameter_overrides(cfg, np.random.default_rng(1)), {})
 
+    def test_all_upstream_runtime_randomization_ranges_are_configurable(self):
+        upstream_range_fields = {
+            name
+            for name in DomainRandomizationConfig.__dataclass_fields__
+            if name.endswith("_range")
+        }
+        self.assertEqual(
+            set(_RUNTIME_DOMAIN_RANDOMIZATION_FIELDS.values()),
+            upstream_range_fields,
+        )
+
+        yaml_cfg = OmegaConf.load(ROOT / "config" / "physics" / "domain_randomization.yaml")
+        params = yaml_cfg.domain_randomization_params
+        self.assertTrue(set(_RUNTIME_DOMAIN_RANDOMIZATION_FIELDS).issubset(params.keys()))
+
+        configured_params = {
+            "length_scale": {"enabled": False},
+            **{
+                name: {"enabled": True, "min": index + 0.25, "max": index + 0.75}
+                for index, name in enumerate(_RUNTIME_DOMAIN_RANDOMIZATION_FIELDS)
+            },
+        }
+        cfg = graph_test_cfg(
+            domain_randomization=True,
+            domain_randomization_params=configured_params,
+        )
+        randomization = _domain_randomization(cfg, "octahedron", False)
+
+        for index, field_name in enumerate(_RUNTIME_DOMAIN_RANDOMIZATION_FIELDS.values()):
+            self.assertEqual(getattr(randomization, field_name), (index + 0.25, index + 0.75))
+
     def test_eval_interval_crossing_with_batched_steps(self):
         self.assertFalse(OnlineTrainer._crossed_eval_interval(0, 3, 5))
         self.assertTrue(OnlineTrainer._crossed_eval_interval(3, 6, 5))
@@ -221,6 +468,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             obs = env.reset()
             self.assertIsInstance(obs, Data)
             self.assertEqual(obs.x.shape[0], cfg.num_nodes)
+            self.assertEqual(cfg.node_counts, [len(env.unwrapped.mj_model.control_node_names)])
             self.assertEqual(obs.edge_index.shape[0], 2)
             self.assertEqual(cfg.node_action_dim, 1)
             self.assertEqual(cfg.action_dim, cfg.node_action_dim)
@@ -357,8 +605,20 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
-    def test_unified_graph_env_supports_all_mujoco_truss_gen_presets(self):
-        for topology in sorted(PRESETS):
+    def test_unified_graph_env_supports_representative_mujoco_truss_gen_presets(self):
+        # PRESETS now contains hundreds of enumerated Henneberg variants. Their
+        # exhaustive generation belongs to mujoco-truss-gen's own test suite;
+        # cover every preset family at this integration boundary.
+        representative_presets = [
+            "octahedron",
+            "tetrahedron",
+            "icosahedron",
+            "solar_array",
+            "henneberg_n5_1tube",
+            "usevitch_1514879",
+        ]
+        self.assertTrue(set(representative_presets).issubset(PRESETS))
+        for topology in representative_presets:
             with self.subTest(topology=topology):
                 cfg = graph_test_cfg(
                     task="truss-graph",
@@ -395,13 +655,22 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         try:
             self.assertEqual(env.num_envs, 2)
             observations = env.reset_many(env_indices=[0, 1])
-            self.assertEqual([obs.num_nodes for obs in observations], [6, 4])
+            control_node_counts = [
+                len(component.unwrapped.mj_model.control_node_names)
+                for component in env.env.envs
+            ]
+            self.assertEqual(control_node_counts, [12, 8])
+            self.assertEqual(cfg.node_counts, control_node_counts)
+            self.assertEqual([obs.num_nodes for obs in observations], control_node_counts)
 
             actions = [env.rand_act(env_idx=0), env.rand_act(env_idx=1)]
-            self.assertEqual([tuple(action.shape) for action in actions], [(6, 1), (4, 1)])
+            self.assertEqual(
+                [tuple(action.shape) for action in actions],
+                [(node_count, 1) for node_count in control_node_counts],
+            )
 
             results = env.step_many(actions, env_indices=[0, 1])
-            self.assertEqual([result[0].num_nodes for result in results], [6, 4])
+            self.assertEqual([result[0].num_nodes for result in results], control_node_counts)
             self.assertEqual([result[3]["task"] for result in results], cfg.tasks)
             self.assertEqual([result[3]["env_idx"] for result in results], [0, 1])
             self.assertEqual([result[3]["task_idx"] for result in results], [0, 1])
@@ -424,13 +693,22 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             self.assertEqual(cfg.tasks, ["truss-graph:octahedron", "truss-graph:tetrahedron"])
 
             observations = env.reset_many(env_indices=[0, 1])
-            self.assertEqual([obs.num_nodes for obs in observations], [6, 4])
+            control_node_counts = [
+                len(component.unwrapped.mj_model.control_node_names)
+                for component in env.env.envs
+            ]
+            self.assertEqual(control_node_counts, [12, 8])
+            self.assertEqual(cfg.node_counts, control_node_counts)
+            self.assertEqual([obs.num_nodes for obs in observations], control_node_counts)
 
             actions = [env.rand_act(env_idx=0), env.rand_act(env_idx=1)]
-            self.assertEqual([tuple(action.shape) for action in actions], [(6, 1), (4, 1)])
+            self.assertEqual(
+                [tuple(action.shape) for action in actions],
+                [(node_count, 1) for node_count in control_node_counts],
+            )
 
             results = env.step_many(actions, env_indices=[0, 1])
-            self.assertEqual([result[0].num_nodes for result in results], [6, 4])
+            self.assertEqual([result[0].num_nodes for result in results], control_node_counts)
             self.assertEqual([result[3]["task"] for result in results], cfg.tasks)
         finally:
             env.close()

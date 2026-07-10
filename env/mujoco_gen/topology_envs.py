@@ -35,6 +35,29 @@ def _cfg_get(config, name, default=None):
 _MISSING = object()
 
 
+# User-facing Hydra names mapped to mujoco-truss-gen's dataclass field names.
+# Keep this explicit so configuration remains stable if the upstream dataclass
+# gains non-range bookkeeping fields.
+_RUNTIME_DOMAIN_RANDOMIZATION_FIELDS = {
+    "body_mass_multiplier": "body_mass_multiplier_range",
+    "body_inertia_multiplier": "body_inertia_multiplier_range",
+    "dof_damping_multiplier": "dof_damping_multiplier_range",
+    "dof_armature": "dof_armature_range",
+    "dof_frictionloss": "dof_frictionloss_range",
+    "actuator_gain_multiplier": "actuator_gain_multiplier_range",
+    "actuator_bias_multiplier": "actuator_bias_multiplier_range",
+    "actuator_dynprm_multiplier": "actuator_dynprm_multiplier_range",
+    "geom_friction_slide": "geom_friction_slide_range",
+    "geom_friction_torsional": "geom_friction_torsional_range",
+    "geom_friction_rolling": "geom_friction_rolling_range",
+    "tendon_stiffness": "tendon_stiffness_range",
+    "tendon_damping": "tendon_damping_range",
+    "tendon_armature": "tendon_armature_range",
+    "tendon_frictionloss": "tendon_frictionloss_range",
+    "gravity_z": "gravity_z_range",
+}
+
+
 def _is_mapping_like(value):
     return hasattr(value, "items") or hasattr(value, "keys")
 
@@ -141,6 +164,49 @@ def _randomized_physical_parameter_overrides(config, rng):
     return overrides
 
 
+def _has_enabled_physical_parameter_randomization(config):
+    if not bool(_cfg_get(config, "physical_parameters_enabled", True)):
+        return False
+    if not bool(_cfg_get(config, "domain_randomization", False)):
+        return False
+    params = _cfg_get(config, "domain_randomization_params", {})
+    physical_randomization = _cfg_get(params, "physical_parameters", {})
+    if physical_randomization in (None, "null"):
+        return False
+    field_names = _physical_parameter_field_names()
+    if _is_mapping_like(physical_randomization):
+        for name in physical_randomization.keys():
+            if name not in field_names:
+                raise ValueError(f"Unknown domain-randomized physical parameter: {name}")
+        return any(
+            bool(_cfg_get(_cfg_get(physical_randomization, name, None), "enabled", False))
+            for name in field_names
+        )
+    return False
+
+
+def _enabled_range(params, name):
+    spec = _cfg_get(params, name, None)
+    if spec in (None, "null"):
+        return None
+    if isinstance(spec, (list, tuple)) and len(spec) == 2:
+        low, high = spec
+    else:
+        if not bool(_cfg_get(spec, "enabled", False)):
+            return None
+        low = _cfg_get(spec, "min", _cfg_get(spec, "low", _MISSING))
+        high = _cfg_get(spec, "max", _cfg_get(spec, "high", _MISSING))
+    if low is _MISSING or high is _MISSING:
+        raise ValueError(f"domain_randomization_params.{name} requires min and max values.")
+    low = float(low)
+    high = float(high)
+    if not np.isfinite(low) or not np.isfinite(high) or low > high:
+        raise ValueError(
+            f"domain_randomization_params.{name} must contain finite values with min <= max."
+        )
+    return (low, high)
+
+
 def _copy_config_with(config, **updates):
     copied = copy.copy(config)
     for key, value in updates.items():
@@ -201,6 +267,25 @@ def _domain_randomization(config, topology, realistic):
     params = _cfg_get(config, "domain_randomization_params", {})
     length_scale = _cfg_get(params, "length_scale", {})
     scale_enabled = bool(_cfg_get(length_scale, "enabled", True))
+    physical_randomization_enabled = _has_enabled_physical_parameter_randomization(config)
+
+    randomization_kwargs = {}
+    supported_randomization_fields = {
+        field.name for field in fields(DomainRandomizationConfig)
+    }
+    for config_name, randomization_name in _RUNTIME_DOMAIN_RANDOMIZATION_FIELDS.items():
+        value_range = _enabled_range(params, config_name)
+        if value_range is None:
+            continue
+        if randomization_name not in supported_randomization_fields:
+            raise ValueError(
+                f"domain_randomization_params.{config_name} is enabled, but the installed "
+                f"mujoco-truss-gen does not support {randomization_name}. Upgrade the package."
+            )
+        randomization_kwargs[randomization_name] = value_range
+
+    if not scale_enabled and not physical_randomization_enabled:
+        return DomainRandomizationConfig(**randomization_kwargs)
 
     def randomized_model(rng):
         if scale_enabled:
@@ -228,7 +313,8 @@ def _domain_randomization(config, topology, realistic):
         )
         return get_mujoco_spec(topology, realistic=realistic, scale=scale, physical_params=physical_params)
 
-    return DomainRandomizationConfig(model_factory=randomized_model)
+    randomization_kwargs["model_factory"] = randomized_model
+    return DomainRandomizationConfig(**randomization_kwargs)
 
 
 def _fixed_model_scale(config):
@@ -250,23 +336,41 @@ def make_truss_env_config(config):
         scale=_fixed_model_scale(config),
         physical_params=_physical_parameters_from_config(config),
     )
-    return TrussEnvConfig(
-        model_source=model_source,
-        max_steps=int(_cfg_get(config, "max_steps", 10000)),
-        nsubsteps=int(_cfg_get(config, "nsubsteps", 1)),
-        speed=float(_cfg_get(config, "speed", 0.01)),
-        forward_weight=float(_cfg_get(config, "forward_weight", 5.0)),
-        energy_weight=float(_cfg_get(config, "energy_weight", 0.005)),
-        alive_bonus=float(_cfg_get(config, "alive_bonus", 0.1)),
-        rigidity_weight=float(_cfg_get(config, "rigidity_weight", 0.5)),
-        slip_weight=float(_cfg_get(config, "slip_weight", 0.1)),
-        critical_eig_threshold=float(_cfg_get(config, "critical_eig_threshold", 0.03)),
-        slip_height=float(_cfg_get(config, "slip_height", 0.2)),
-        domain_randomization=_domain_randomization(config, topology, realistic),
-        normalize_observations=bool(
+    config_values = {
+        "model_source": model_source,
+        "max_steps": int(_cfg_get(config, "max_steps", 10000)),
+        "nsubsteps": int(_cfg_get(config, "nsubsteps", 1)),
+        "speed": float(_cfg_get(config, "speed", 0.01)),
+        "forward_weight": float(_cfg_get(config, "forward_weight", 5.0)),
+        "energy_weight": float(_cfg_get(config, "energy_weight", 0.005)),
+        "alive_bonus": float(_cfg_get(config, "alive_bonus", 0.1)),
+        "rigidity_weight": float(_cfg_get(config, "rigidity_weight", 0.5)),
+        "slip_weight": float(_cfg_get(config, "slip_weight", 0.1)),
+        "critical_eig_threshold": float(_cfg_get(config, "critical_eig_threshold", 0.03)),
+        "slip_height": float(_cfg_get(config, "slip_height", 0.2)),
+        "domain_randomization": _domain_randomization(config, topology, realistic),
+        "normalize_observations": bool(
             _cfg_get(config, "normalize_observations", _cfg_get(config, "obs_norm", False))
         ),
-    )
+    }
+    optional_fields = {
+        "control_noise_std": float,
+        "control_noise_relative": bool,
+        "runtime_apply_control_noise": bool,
+        "max_forward_velocity": lambda value: None if value in (None, "null") else float(value),
+        "zero_positive_forward_reward_on_termination": bool,
+        "collapse_penalty": float,
+        "zero_alive_bonus_on_termination": bool,
+        "zero_rigidity_reward_on_termination": bool,
+        "zero_velocity_shaping_on_termination": bool,
+    }
+    supported_fields = {field.name for field in fields(TrussEnvConfig)}
+    for name, converter in optional_fields.items():
+        if name in supported_fields:
+            value = _cfg_get(config, name, _MISSING)
+            if value is not _MISSING:
+                config_values[name] = converter(value)
+    return TrussEnvConfig(**config_values)
 
 
 class MujocoPresetMLPEnv(MujocoRelativeObsEnv):

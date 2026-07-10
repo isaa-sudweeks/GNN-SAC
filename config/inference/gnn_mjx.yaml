@@ -1,0 +1,17 @@
+# @package _global_
+
+defaults:
+  - /inference/gnn
+  - override /sim_backend: mjx
+  - _self_
+
+# Batched, accelerator-native checkpoint evaluation. Select this profile with:
+# python sac/gnn_infer.py --config-name inference/gnn_mjx model=/path/to/model.pt
+use_control_graph: true
+truss_realistic: false
+truss_topologies: null
+domain_randomization: false
+episodes: 256
+device: cuda
+visualize: false
+print_position_command: false
