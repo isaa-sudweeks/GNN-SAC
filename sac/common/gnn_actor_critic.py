@@ -20,22 +20,29 @@ class GNNActorCritic(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg 
-        hidden = 2 * [cfg.mlp_dim] # I don't really know what this is about 
+        legacy_hidden = 2 * [cfg.mlp_dim]
+        message_hidden = getattr(cfg, "message_hidden_dims", legacy_hidden)
+        action_head_hidden = getattr(cfg, "action_head_hidden_dims", legacy_hidden)
+        shared_mpl_dims = getattr(cfg, "mpl_dims", None)
+        actor_mpl_dims = [cfg.embedding_dim] if shared_mpl_dims is None else shared_mpl_dims
+        critic_mpl_dims = [cfg.Q_output_dim] if shared_mpl_dims is None else shared_mpl_dims
+        skip_connections = getattr(cfg, "mpl_skip_connections", True)
 
         self._pi = gnn_layers.GNN(
-            cfg.obs_dim, cfg.embedding_dim, hidden,
-            dropout=cfg.dropout
+            cfg.obs_dim, hidden_channels=message_hidden, mpl_dims=actor_mpl_dims,
+            dropout=cfg.dropout, skip_connections=skip_connections
         )
 
         self._action_head = layers.mlp(
-            cfg.embedding_dim, hidden, 2*cfg.action_dim,
+            actor_mpl_dims[-1], action_head_hidden, 2*cfg.action_dim,
             dropout=cfg.dropout
         )
 
         self._Qs = layers.Ensemble(
             [gnn_layers.Q_GNN(
-                cfg.obs_dim + cfg.action_dim, cfg.Q_output_dim, hidden, cfg.head_hidden_dims,
-                dropout=cfg.dropout
+                cfg.obs_dim + cfg.action_dim, hidden_channels=message_hidden,
+                head_hidden_dims=cfg.head_hidden_dims, mpl_dims=critic_mpl_dims,
+                dropout=cfg.dropout, skip_connections=skip_connections
             ) for _ in range(int(cfg.num_q))]
         )
 

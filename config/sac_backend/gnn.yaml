@@ -18,8 +18,16 @@ num_policy_actions: 6 # Total sampled node actions for SAC entropy tuning.
 num_actuators: 8 # Total MuJoCo actuator controls after node-to-edge mapping.
 
 # GNN actor-critic architecture
-embedding_dim: 128
-Q_output_dim: 128
+# Message-passing depth is the list length; each value is that layer's output width.
+mpl_dims:
+  - 128
+message_hidden_dims:
+  - 256
+  - 256
+action_head_hidden_dims:
+  - 256
+  - 256
+mpl_skip_connections: true
 head_hidden_dims:
   - 256
   - 256
