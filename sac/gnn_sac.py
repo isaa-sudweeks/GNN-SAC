@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+import re
 
 import torch 
 import torch.nn.functional as F 
@@ -131,9 +132,7 @@ class GNNSAC(torch.nn.Module):
         return reward + self.discount * (1.0 - terminated) * target_v
 
     def update_q(self, obs, action, reward, terminated, next_obs):
-        td_target = self._td_target(next_obs, reward, terminated)
-        qs = self.model.Q(obs, action, return_type="all")
-        q_loss = F.mse_loss(qs, td_target.unsqueeze(0).expand_as(qs))
+        q_loss = self._q_loss(obs, action, reward, terminated, next_obs)
 
         self.q_optim.zero_grad(set_to_none=True)
         q_loss.backward()
@@ -142,10 +141,8 @@ class GNNSAC(torch.nn.Module):
         return q_loss.detach(), q_grad_norm.detach()
 
     def update_pi_and_alpha(self, obs):
-        action, info = self.model.pi(obs)
-        q = self.model.Q(obs, action, return_type="min")
+        pi_loss, info = self._pi_loss(obs)
         log_prob = info["log_prob"]
-        pi_loss = (self.alpha.detach() * log_prob - q).mean()
 
         self.pi_optim.zero_grad(set_to_none=True)
         pi_loss.backward()
@@ -164,12 +161,126 @@ class GNNSAC(torch.nn.Module):
             "alpha": self.alpha.detach(),
             "entropy": info["entropy"].detach().mean(),
         }
-    def update(self, buffer):
-        obs, action, reward, terminated, next_obs = buffer.sample()
+    def _q_loss(self, obs, action, reward, terminated, next_obs):
+        td_target = self._td_target(next_obs, reward, terminated)
+        qs = self.model.Q(obs, action, return_type="all")
+        return F.mse_loss(qs, td_target.unsqueeze(0).expand_as(qs))
+
+    def _pi_loss(self, obs):
+        action, info = self.model.pi(obs)
+        q = self.model.Q(obs, action, return_type="min")
+        return (self.alpha.detach() * info["log_prob"] - q).mean(), info
+
+    @staticmethod
+    def _parameter_gradients(loss, parameters):
+        parameters = tuple(parameters)
+        gradients = torch.autograd.grad(
+            loss,
+            parameters,
+            allow_unused=True,
+            retain_graph=False,
+            create_graph=False,
+        )
+        return tuple(
+            torch.zeros_like(parameter) if gradient is None else gradient.detach()
+            for parameter, gradient in zip(parameters, gradients)
+        )
+
+    @staticmethod
+    def _gradient_norm(gradients):
+        squared_norm = sum(torch.sum(gradient.double() ** 2) for gradient in gradients)
+        return torch.sqrt(squared_norm)
+
+    @classmethod
+    def gradient_pair_metrics(cls, first, second):
+        first_norm = cls._gradient_norm(first)
+        second_norm = cls._gradient_norm(second)
+        dot = sum(
+            torch.sum(first_gradient.double() * second_gradient.double())
+            for first_gradient, second_gradient in zip(first, second)
+        )
+        norm_product = first_norm * second_norm
+        cosine = torch.where(
+            norm_product > 0,
+            dot / norm_product,
+            torch.zeros_like(dot),
+        )
+        norm_denominator = first_norm.square() + second_norm.square()
+        norm_agreement = torch.where(
+            norm_denominator > 0,
+            2.0 * norm_product / norm_denominator,
+            torch.zeros_like(norm_denominator),
+        )
+        return {
+            "cosine": cosine.float(),
+            "norm_agreement": norm_agreement.float(),
+            "first_norm": first_norm.float(),
+            "second_norm": second_norm.float(),
+        }
+
+    @staticmethod
+    def _diagnostic_key(task):
+        return re.sub(r"[^0-9a-zA-Z_.-]+", "_", str(task)).strip("_") or "task"
+
+    def _gradient_diagnostics(self, task_batches):
+        cpu_rng = torch.random.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        try:
+            gradients = {"critic": {}, "actor": {}}
+            q_parameters = tuple(self.model._Qs.parameters())
+            pi_parameters = tuple(self.model._pi.parameters())
+            for task, batch in task_batches.items():
+                obs, action, reward, terminated, next_obs = batch
+                gradients["critic"][task] = self._parameter_gradients(
+                    self._q_loss(obs, action, reward, terminated, next_obs),
+                    q_parameters,
+                )
+                pi_loss, _ = self._pi_loss(obs)
+                gradients["actor"][task] = self._parameter_gradients(pi_loss, pi_parameters)
+        finally:
+            torch.random.set_rng_state(cpu_rng)
+            if cuda_rng is not None:
+                torch.cuda.set_rng_state_all(cuda_rng)
+
+        metrics = {}
+        task_names = list(task_batches)
+        for objective, task_gradients in gradients.items():
+            for task in task_names:
+                task_key = self._diagnostic_key(task)
+                metrics[f"{objective}/norm/{task_key}"] = self._gradient_norm(
+                    task_gradients[task]
+                ).float()
+            for first_idx, first_task in enumerate(task_names):
+                for second_task in task_names[first_idx + 1:]:
+                    pair_key = (
+                        f"{self._diagnostic_key(first_task)}__"
+                        f"{self._diagnostic_key(second_task)}"
+                    )
+                    pair = self.gradient_pair_metrics(
+                        task_gradients[first_task],
+                        task_gradients[second_task],
+                    )
+                    metrics[f"{objective}/cosine/{pair_key}"] = pair["cosine"]
+                    metrics[f"{objective}/norm_agreement/{pair_key}"] = pair["norm_agreement"]
+        return metrics
+
+    def update(self, buffer, compute_diagnostics=False):
+        if hasattr(buffer, "sample_with_tasks"):
+            replay_batch = buffer.sample_with_tasks()
+            obs, action, reward, terminated, next_obs = replay_batch.combined
+            task_batches = replay_batch.by_task
+        else:
+            obs, action, reward, terminated, next_obs = buffer.sample()
+            task_batches = None
        # if self.device.type == 'cuda':
        #     torch.compiler.cudagraph_mark_step_begin()
         
         self.model.train()
+        diagnostics = (
+            self._gradient_diagnostics(task_batches)
+            if compute_diagnostics and task_batches is not None
+            else None
+        )
         q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
         pi_info = self.update_pi_and_alpha(obs)
         self.model.soft_update_target_Q()
@@ -180,4 +291,6 @@ class GNNSAC(torch.nn.Module):
             "q_grad_norm": q_grad_norm,
         }
         info.update(pi_info)
+        if diagnostics is not None:
+            info["gradient_diagnostics"] = diagnostics
         return info

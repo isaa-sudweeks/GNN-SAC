@@ -228,7 +228,8 @@ class MjxVectorEnvTest(unittest.TestCase):
                             "reward": next_results[env_idx][1],
                             "terminated": second_info["terminated"],
                         },
-                    ]
+                    ],
+                    task=first_info["task"],
                 )
             update_info = agent.update(buffer)
             self.assertIn("value_loss", update_info)

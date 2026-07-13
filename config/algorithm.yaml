@@ -4,6 +4,8 @@
 lr: 3e-4 # Adam learning rate for actor and critic optimizers.
 batch_size: 256 # Number of replay slices sampled for each gradient update.
 grad_clip_norm: 10.0 # Maximum global gradient norm before clipping optimizer steps.
+gradient_diagnostics: false # Compare task-specific actor and critic gradients without changing the optimizer update.
+gradient_diagnostics_freq: 100 # Optimizer-update interval for gradient diagnostics when enabled.
 
 # Replay and update cadence
 buffer_size: 1_000_000 # Maximum number of transitions stored in replay.
