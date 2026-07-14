@@ -58,6 +58,35 @@ def transition(marker):
     ]
 
 
+def agent_cfg(**overrides):
+    values = vars(cfg()).copy()
+    values.update(
+        obs_dim=3,
+        embedding_dim=8,
+        mlp_dim=8,
+        dropout=0.0,
+        action_dim=1,
+        Q_output_dim=8,
+        head_hidden_dims=[8],
+        num_q=2,
+        log_std_min=-10.0,
+        log_std_max=2.0,
+        lr=3e-4,
+        entropy_coef=0.2,
+        target_entropy="auto",
+        num_policy_actions=3,
+        episode_length=100,
+        discount_denom=500,
+        discount_min=0.95,
+        discount_max=0.995,
+        tau=0.005,
+        grad_clip_norm=10.0,
+        pcgrad=False,
+    )
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 class TaskBalancedReplayTest(unittest.TestCase):
     def test_routes_and_samples_equally(self):
         buffer = GNNBuffer(cfg())
@@ -121,30 +150,7 @@ class GradientMetricTest(unittest.TestCase):
         self.assertEqual(float(zero["norm_agreement"]), 0.0)
 
     def test_diagnostics_report_actor_and_critic_without_changing_update(self):
-        agent_values = vars(cfg()).copy()
-        agent_values.update(
-            obs_dim=3,
-            embedding_dim=8,
-            mlp_dim=8,
-            dropout=0.0,
-            action_dim=1,
-            Q_output_dim=8,
-            head_hidden_dims=[8],
-            num_q=2,
-            log_std_min=-10.0,
-            log_std_max=2.0,
-            lr=3e-4,
-            entropy_coef=0.2,
-            target_entropy="auto",
-            num_policy_actions=3,
-            episode_length=100,
-            discount_denom=500,
-            discount_min=0.95,
-            discount_max=0.995,
-            tau=0.005,
-            grad_clip_norm=10.0,
-        )
-        agent_config = SimpleNamespace(**agent_values)
+        agent_config = agent_cfg()
         plain_agent = GNNSAC(agent_config)
         diagnostic_agent = GNNSAC(agent_config)
         diagnostic_agent.load_training_state_dict(plain_agent.training_state_dict())
@@ -168,6 +174,115 @@ class GradientMetricTest(unittest.TestCase):
             plain_agent.parameters(), diagnostic_agent.parameters()
         ):
             torch.testing.assert_close(plain_parameter, diagnostic_parameter)
+
+
+class PCGradTest(unittest.TestCase):
+    def test_projects_conflicting_gradients(self):
+        merged = GNNSAC.pcgrad_project(
+            (
+                (torch.tensor([1.0, 0.0]),),
+                (torch.tensor([-1.0, 1.0]),),
+            )
+        )
+        torch.testing.assert_close(merged[0], torch.tensor([0.25, 0.75]))
+
+    def test_preserves_aligned_orthogonal_and_zero_gradients(self):
+        aligned = GNNSAC.pcgrad_project(
+            ((torch.tensor([1.0, 0.0]),), (torch.tensor([2.0, 0.0]),))
+        )
+        orthogonal = GNNSAC.pcgrad_project(
+            ((torch.tensor([1.0, 0.0]),), (torch.tensor([0.0, 1.0]),))
+        )
+        with_zero = GNNSAC.pcgrad_project(
+            ((torch.tensor([0.0, 0.0]),), (torch.tensor([1.0, 0.0]),))
+        )
+        single = GNNSAC.pcgrad_project(((torch.tensor([3.0, -2.0]),),))
+
+        torch.testing.assert_close(aligned[0], torch.tensor([1.5, 0.0]))
+        torch.testing.assert_close(orthogonal[0], torch.tensor([0.5, 0.5]))
+        torch.testing.assert_close(with_zero[0], torch.tensor([0.5, 0.0]))
+        torch.testing.assert_close(single[0], torch.tensor([3.0, -2.0]))
+
+    def test_random_projection_order_is_seeded(self):
+        gradients = (
+            (torch.tensor([1.0, 0.0]),),
+            (torch.tensor([-1.0, 1.0]),),
+            (torch.tensor([-1.0, -1.0]),),
+        )
+        torch.manual_seed(91)
+        first = GNNSAC.pcgrad_project(gradients)
+        torch.manual_seed(91)
+        second = GNNSAC.pcgrad_project(gradients)
+        torch.testing.assert_close(first[0], second[0])
+
+    def test_disabled_pcgrad_matches_config_without_the_flag(self):
+        disabled_config = agent_cfg(pcgrad=False)
+        legacy_config = agent_cfg()
+        delattr(legacy_config, "pcgrad")
+        disabled_agent = GNNSAC(disabled_config)
+        legacy_agent = GNNSAC(legacy_config)
+        legacy_agent.load_training_state_dict(disabled_agent.training_state_dict())
+        disabled_buffer = GNNBuffer(disabled_config)
+        legacy_buffer = GNNBuffer(legacy_config)
+        for task, markers in (("truss-graph:a", (1, 2)), ("truss-graph:b", (11, 12))):
+            for marker in markers:
+                disabled_buffer.add(transition(marker), task=task)
+                legacy_buffer.add(transition(marker), task=task)
+
+        torch.manual_seed(123)
+        disabled_agent.update(disabled_buffer)
+        torch.manual_seed(123)
+        legacy_agent.update(legacy_buffer)
+        for disabled_parameter, legacy_parameter in zip(
+            disabled_agent.parameters(), legacy_agent.parameters()
+        ):
+            torch.testing.assert_close(disabled_parameter, legacy_parameter)
+
+    def test_pcgrad_updates_actor_and_critic_and_keeps_diagnostics(self):
+        config = agent_cfg(pcgrad=True)
+        agent = GNNSAC(config)
+        buffer = GNNBuffer(config)
+        for task, markers in (("truss-graph:a", (1, 2)), ("truss-graph:b", (11, 12))):
+            for marker in markers:
+                buffer.add(transition(marker), task=task)
+
+        q_before = [
+            parameter.detach().clone() for parameter in agent.model._Qs.parameters()
+        ]
+        pi_before = [
+            parameter.detach().clone() for parameter in agent.model._pi.parameters()
+        ]
+        torch.manual_seed(123)
+        info = agent.update(buffer, compute_diagnostics=True)
+
+        self.assertTrue(
+            any(
+                not torch.equal(before, after)
+                for before, after in zip(q_before, agent.model._Qs.parameters())
+            )
+        )
+        self.assertTrue(
+            any(
+                not torch.equal(before, after)
+                for before, after in zip(pi_before, agent.model._pi.parameters())
+            )
+        )
+        self.assertIn(
+            "actor/cosine/truss-graph_a__truss-graph_b",
+            info["gradient_diagnostics"],
+        )
+        self.assertIn(
+            "critic/cosine/truss-graph_a__truss-graph_b",
+            info["gradient_diagnostics"],
+        )
+
+    def test_pcgrad_requires_task_aware_batches(self):
+        class BufferWithoutTasks:
+            def sample(self):
+                raise AssertionError("sample should not run")
+
+        with self.assertRaisesRegex(ValueError, "grouped by task"):
+            GNNSAC(agent_cfg(pcgrad=True)).update(BufferWithoutTasks())
 
 
 class DiagnosticCadenceTest(unittest.TestCase):
