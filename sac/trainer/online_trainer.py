@@ -1,3 +1,4 @@
+import inspect
 from time import time 
 
 import numpy as np 
@@ -94,7 +95,7 @@ class OnlineTrainer(Trainer):
         Return a dictionary of current metrics.
         """
         elapsed_time = time() - self._start_time 
-        return dict(
+        metrics = dict(
             step= self._step,
             episode= self._ep_idx,
             buffer_size=int(getattr(self.buffer, "size", 0)),
@@ -102,6 +103,9 @@ class OnlineTrainer(Trainer):
             elapsed_time= elapsed_time,
             steps_per_sec= self._step / elapsed_time if elapsed_time > 0 else 0,
         )
+        for task, size in getattr(self.buffer, "sizes_by_task", {}).items():
+            metrics[f"buffer_size/{self._metric_key(task)}"] = int(size)
+        return metrics
 
     def _extract_reward_components(self, info):
         """
@@ -282,8 +286,27 @@ class OnlineTrainer(Trainer):
     def _run_agent_updates(self, num_updates):
         update_metrics = {}
         for _ in range(int(num_updates)):
-            update_metrics = self.agent.update(self.buffer)
-        self._optimizer_updates += int(num_updates)
+            next_update = self._optimizer_updates + 1
+            diagnostics_enabled = bool(getattr(self.cfg, "gradient_diagnostics", False))
+            diagnostics_freq = int(getattr(self.cfg, "gradient_diagnostics_freq", 100))
+            if diagnostics_enabled and diagnostics_freq <= 0:
+                raise ValueError("gradient_diagnostics_freq must be positive")
+            run_diagnostics = diagnostics_enabled and next_update % diagnostics_freq == 0
+            update_parameters = inspect.signature(self.agent.update).parameters
+            if "compute_diagnostics" in update_parameters:
+                update_metrics = self.agent.update(
+                    self.buffer,
+                    compute_diagnostics=run_diagnostics,
+                )
+            else:
+                update_metrics = self.agent.update(self.buffer)
+            self._optimizer_updates = next_update
+            diagnostics = update_metrics.pop("gradient_diagnostics", None)
+            if diagnostics:
+                self.logger.log(
+                    {"step": self._step, **diagnostics},
+                    "gradient_diagnostics",
+                )
         return update_metrics
 
     def _update_cadence(self):
@@ -306,7 +329,10 @@ class OnlineTrainer(Trainer):
             return 0
         if not force and self._vector_steps_since_update < self._update_cadence():
             return 0
-        if self._step < self.cfg.seed_steps or self.buffer.size < self.cfg.batch_size:
+        buffer_ready = bool(
+            getattr(self.buffer, "ready", self.buffer.size >= self.cfg.batch_size)
+        )
+        if self._step < self.cfg.seed_steps or not buffer_ready:
             return 0
 
         collected_transitions = self._pending_update_transitions
@@ -326,12 +352,15 @@ class OnlineTrainer(Trainer):
         self._ep_idx = self.buffer.add(payload, count_episode=completed)
         return len(trajectory) - 1
 
-    def _add_transition_to_buffer(self, previous_td, current_td, *, completed):
+    def _add_transition_to_buffer(self, previous_td, current_td, *, completed, task=None):
         """Store one transition without waiting for its episode to finish."""
-        return self._add_trajectory_to_buffer(
-            [previous_td, current_td],
-            completed=completed,
-        )
+        trajectory = [previous_td, current_td]
+        payload = trajectory if isinstance(previous_td["obs"], Data) else torch.cat(trajectory)
+        if hasattr(self.buffer, "task_names"):
+            self._ep_idx = self.buffer.add(payload, count_episode=completed, task=task)
+        else:
+            self._ep_idx = self.buffer.add(payload, count_episode=completed)
+        return 1
 
     def _log_collection_progress(self, previous_step=None, *, force=False):
         progress_freq = int(getattr(self.cfg, "progress_freq", 10_000) or 0)
@@ -572,6 +601,7 @@ class OnlineTrainer(Trainer):
                 previous_td,
                 current_td,
                 completed=bool(done),
+                task=info.get("task"),
             )
             self._queue_collected_transitions(inserted_transitions)
 
@@ -682,6 +712,7 @@ class OnlineTrainer(Trainer):
                     previous_td,
                     current_td,
                     completed=bool(is_done),
+                    task=info.get("task"),
                 )
 
             previous_step = self._step

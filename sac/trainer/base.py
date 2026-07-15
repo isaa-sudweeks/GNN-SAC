@@ -112,13 +112,14 @@ class Trainer:
 
     def _snapshot_buffer_state_dict(self, state_dict):
         """Copy replay metadata while avoiding a full clone of immutable stored samples."""
-        snapshot = {}
-        for key, value in state_dict.items():
+        def snapshot_value(value):
+            if isinstance(value, Mapping):
+                return {key: snapshot_value(item) for key, item in value.items()}
             if isinstance(value, list):
-                snapshot[key] = list(value)
-            else:
-                snapshot[key] = self._snapshot_checkpoint_value(value)
-        return snapshot
+                return list(value)
+            return self._snapshot_checkpoint_value(value)
+
+        return snapshot_value(state_dict)
 
     def _checkpoint_state_snapshot(self):
         state_dict = self.checkpoint_state_dict()
