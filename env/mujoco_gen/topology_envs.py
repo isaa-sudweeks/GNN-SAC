@@ -55,6 +55,9 @@ _RUNTIME_DOMAIN_RANDOMIZATION_FIELDS = {
     "tendon_armature": "tendon_armature_range",
     "tendon_frictionloss": "tendon_frictionloss_range",
     "gravity_z": "gravity_z_range",
+    "initial_translation_x": "initial_translation_x_range",
+    "initial_translation_y": "initial_translation_y_range",
+    "initial_yaw": "initial_yaw_range",
 }
 
 

@@ -96,6 +96,9 @@ class MjxVectorEnvTest(unittest.TestCase):
             "tendon_armature": 0.01,
             "tendon_frictionloss": 0.02,
             "gravity_z": -9.5,
+            "initial_translation_x": 0.5,
+            "initial_translation_y": -0.25,
+            "initial_yaw": 1.0,
         }
         cfg = mjx_cfg(
             domain_randomization=True,
