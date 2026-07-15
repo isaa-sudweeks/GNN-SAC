@@ -6,6 +6,7 @@ from torch_geometric.nn import global_add_pool, global_mean_pool
 
 from common import math 
 from common import gnn_layers
+from common.graph_transforms import physical_node_mask
 from common import mlp_layers as layers 
 
 class GNNActorCritic(nn.Module):
@@ -81,7 +82,9 @@ class GNNActorCritic(nn.Module):
         Args:
             obs:Observation data of a graph in the torch geometric Data format
         """
-        mean, log_std = self._action_head(self._pi(obs.x, obs.edge_index)).chunk(2, dim=-1)
+        action_mask = physical_node_mask(obs)
+        embeddings = self._pi(obs.x, obs.edge_index)
+        mean, log_std = self._action_head(embeddings[action_mask]).chunk(2, dim=-1)
         log_std = math.log_std(log_std, self.log_std_min, self.log_std_dif)
         
         eps = torch.randn_like(mean)
@@ -92,6 +95,8 @@ class GNNActorCritic(nn.Module):
         batch = getattr(obs, "batch", None)
         if batch is None:
             batch = log_prob.new_zeros(log_prob.size(0), dtype=torch.long)
+        else:
+            batch = batch[action_mask]
         log_prob = global_mean_pool(log_prob, batch).squeeze(-1) # Using a global mean pool means that the entropy then becomes normalized by the number of nodes.
         entropy = -log_prob
         return action, {
@@ -103,7 +108,9 @@ class GNNActorCritic(nn.Module):
 
     def pi_mean(self, obs):
         """Compute deterministic actions without sampling policy noise or statistics."""
-        mean, _ = self._action_head(self._pi(obs.x, obs.edge_index)).chunk(2, dim=-1)
+        action_mask = physical_node_mask(obs)
+        embeddings = self._pi(obs.x, obs.edge_index)
+        mean, _ = self._action_head(embeddings[action_mask]).chunk(2, dim=-1)
         return torch.tanh(mean)
     
     def Q(self, obs, action, return_type="min", target=False):
@@ -118,7 +125,15 @@ class GNNActorCritic(nn.Module):
         """
         assert return_type in {"min", "avg", "all"}
         qnet = self._target_Qs if target else self._Qs
-        q_values = qnet(torch.cat([obs.x, action], dim=-1), obs.edge_index, getattr(obs, "batch", None)) # TODO: I am not sure if this works well or correctly because the dimensionality between the observation and actions seem off.
+        action_mask = physical_node_mask(obs)
+        node_action = action.new_zeros((obs.x.size(0), action.size(-1)))
+        node_action[action_mask] = action
+        q_values = qnet(
+            torch.cat([obs.x, node_action], dim=-1),
+            obs.edge_index,
+            getattr(obs, "batch", None),
+            action_mask,
+        )
 
         if return_type == "all":
             return q_values

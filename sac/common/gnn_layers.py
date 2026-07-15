@@ -123,10 +123,13 @@ class Q_GNN(GNN):
         self.head_hidden_dims = _validate_dims("head_hidden_dims", head_hidden_dims, allow_empty=True)
         self.head = mlp(self.out_channels, self.head_hidden_dims, 1)
 
-    def forward(self, x, edge_index, batch=None):
+    def forward(self, x, edge_index, batch=None, action_mask=None):
         x = super().forward(x, edge_index)
         if batch is None:
             batch = x.new_zeros(x.size(0), dtype=torch.long)
+        if action_mask is not None:
+            x = x[action_mask]
+            batch = batch[action_mask]
         return self.head(global_mean_pool(x, batch)).squeeze(-1)
 
     def __repr__(self):

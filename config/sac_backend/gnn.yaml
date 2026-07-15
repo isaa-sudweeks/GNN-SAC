@@ -8,6 +8,7 @@ task: truss-graph
 env_name: ${task}
 use_graph_observations: true
 use_control_graph: true # Opt-in mujoco-truss-gen control graph and incidence-based node command mapping.
+use_virtual_node: false # Add one zero-filled PyG virtual node per graph inside the GNN input pipeline.
 truss_topology: octahedron
 topology_id: ${truss_topology}
 node_feature_dim: 6
