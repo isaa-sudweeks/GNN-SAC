@@ -5,6 +5,7 @@ import numpy as np
 import re
 import torch 
 from tensordict.tensordict import TensorDict 
+from common.reward_normalizer import TaskRewardNormalizer
 from trainer.base import Trainer 
 
 try:
@@ -33,6 +34,7 @@ class OnlineTrainer(Trainer):
         self._pretrain_complete = False
         self._optimizer_updates = 0
         self._last_eval_step = None
+        self.reward_normalizer = self._make_reward_normalizer()
         
         self.eval_env = self.env
         eval_task = getattr(self.cfg, "eval_task", None)
@@ -90,6 +92,43 @@ class OnlineTrainer(Trainer):
             
         self.maybe_load_checkpoint()
 
+    def _make_reward_normalizer(self):
+        if not bool(getattr(self.cfg, "normalize_rewards", False)):
+            return None
+        configured_gamma = getattr(self.cfg, "reward_norm_gamma", None)
+        gamma = self.agent.discount if configured_gamma is None else float(configured_gamma)
+        task_names = getattr(self.buffer, "task_names", None)
+        if task_names is None:
+            task_names = [str(getattr(self.cfg, "task", "task"))]
+        return TaskRewardNormalizer(
+            gamma=gamma,
+            epsilon=float(getattr(self.cfg, "reward_norm_epsilon", 1e-8)),
+            clip=float(getattr(self.cfg, "reward_norm_clip", 10.0)),
+            allowed_tasks=task_names,
+        )
+
+    def _normalization_task(self, info):
+        task = info.get("task")
+        if task is not None:
+            return str(task)
+        task_names = getattr(self.buffer, "task_names", None)
+        if task_names is not None and len(task_names) == 1:
+            return str(task_names[0])
+        if task_names is None and not bool(getattr(self.cfg, "multitask", False)):
+            return str(getattr(self.cfg, "task", "task"))
+        raise ValueError("Multi-task reward normalization requires info['task'] on every transition.")
+
+    def _normalize_reward(self, reward, info, *, stream, done):
+        reward_normalizer = getattr(self, "reward_normalizer", None)
+        if reward_normalizer is None:
+            return reward
+        return reward_normalizer.normalize(
+            reward,
+            task=self._normalization_task(info),
+            stream=stream,
+            done=done,
+        )
+
     def common_metrics(self):
         """
         Return a dictionary of current metrics.
@@ -105,6 +144,12 @@ class OnlineTrainer(Trainer):
         )
         for task, size in getattr(self.buffer, "sizes_by_task", {}).items():
             metrics[f"buffer_size/{self._metric_key(task)}"] = int(size)
+        reward_normalizer = getattr(self, "reward_normalizer", None)
+        if reward_normalizer is not None:
+            for task, task_metrics in reward_normalizer.metrics().items():
+                task_key = self._metric_key(task)
+                for name, value in task_metrics.items():
+                    metrics[f"reward_norm/{task_key}/{name}"] = value
         return metrics
 
     def _extract_reward_components(self, info):
@@ -512,7 +557,7 @@ class OnlineTrainer(Trainer):
             for action in actions
         ]
     
-    def to_td(self, obs, action=None, reward=None, terminated=None):
+    def to_td(self, obs, action=None, reward=None, terminated=None, raw_reward=None):
         """
         Creates a TensorDict for a new episode.
         """
@@ -527,12 +572,19 @@ class OnlineTrainer(Trainer):
             action = torch.full_like(self.env.rand_act(), float('nan'))
         if reward is None:
             reward = torch.tensor(float('nan'))
+        elif not isinstance(reward, torch.Tensor):
+            reward = torch.as_tensor(reward, dtype=torch.float32)
+        if raw_reward is None:
+            raw_reward = reward
+        elif not isinstance(raw_reward, torch.Tensor):
+            raw_reward = torch.as_tensor(raw_reward, dtype=torch.float32)
         if terminated is None:
             terminated = torch.tensor(float('nan'))
         fields = {
             "obs": obs,
             "action": action.unsqueeze(0),
             "reward": reward.unsqueeze(0),
+            "raw_reward": raw_reward.unsqueeze(0),
             "terminated": terminated.unsqueeze(0),
         }
         if is_graph_obs:
@@ -564,7 +616,7 @@ class OnlineTrainer(Trainer):
                     eval_next = False
                 if self._step > 0:
                     train_metrics.update(
-                        episode_reward=torch.stack([td["reward"].view(()) for td in self._tds[1:]]).sum(),
+                        episode_reward=torch.stack([td["raw_reward"].view(()) for td in self._tds[1:]]).sum(),
                         episode_success=info["success"],
                         episode_length=len(self._tds) - 1,
                         episode_terminated=info["terminated"],
@@ -595,7 +647,14 @@ class OnlineTrainer(Trainer):
             self._accumulate_reward_components(info)
             terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
             previous_td = self._tds[-1]
-            current_td = self.to_td(obs, action, reward, terminated)
+            normalized_reward = self._normalize_reward(reward, info, stream=0, done=bool(done))
+            current_td = self.to_td(
+                obs,
+                action,
+                normalized_reward,
+                terminated,
+                raw_reward=reward,
+            )
             self._tds.append(current_td)
             inserted_transitions += self._add_transition_to_buffer(
                 previous_td,
@@ -654,7 +713,7 @@ class OnlineTrainer(Trainer):
                     if episode_tds[env_idx] is not None and len(episode_tds[env_idx]) > 1:
                         info = infos[env_idx]
                         train_metrics.update(
-                            episode_reward=torch.stack([td["reward"].view(()) for td in episode_tds[env_idx][1:]]).sum(),
+                            episode_reward=torch.stack([td["raw_reward"].view(()) for td in episode_tds[env_idx][1:]]).sum(),
                             episode_success=info["success"],
                             episode_length=len(episode_tds[env_idx]) - 1,
                             episode_terminated=info["terminated"],
@@ -706,7 +765,19 @@ class OnlineTrainer(Trainer):
 
                 terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
                 previous_td = episode_tds[env_idx][-1]
-                current_td = self.to_td(obs, action, reward, terminated)
+                normalized_reward = self._normalize_reward(
+                    reward,
+                    info,
+                    stream=env_idx,
+                    done=bool(is_done),
+                )
+                current_td = self.to_td(
+                    obs,
+                    action,
+                    normalized_reward,
+                    terminated,
+                    raw_reward=reward,
+                )
                 episode_tds[env_idx].append(current_td)
                 inserted_transitions += self._add_transition_to_buffer(
                     previous_td,

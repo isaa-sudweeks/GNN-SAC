@@ -79,7 +79,7 @@ class Trainer:
             return {}
 
     def checkpoint_state_dict(self):
-        return {
+        state = {
             "format_version": 3,
             "trainer": {
                 "step": getattr(self, "_step", 0),
@@ -98,6 +98,10 @@ class Trainer:
             "rng": self._rng_state_dict(),
             "config": self._config_state_dict(),
         }
+        reward_normalizer = getattr(self, "reward_normalizer", None)
+        if reward_normalizer is not None:
+            state["reward_normalizer"] = reward_normalizer.state_dict()
+        return state
 
     def _snapshot_checkpoint_value(self, value):
         if isinstance(value, torch.Tensor):
@@ -123,7 +127,7 @@ class Trainer:
 
     def _checkpoint_state_snapshot(self):
         state_dict = self.checkpoint_state_dict()
-        return {
+        snapshot = {
             "format_version": state_dict["format_version"],
             "trainer": self._snapshot_checkpoint_value(state_dict["trainer"]),
             "agent": self._snapshot_checkpoint_value(state_dict["agent"]),
@@ -132,6 +136,11 @@ class Trainer:
             "rng": self._snapshot_checkpoint_value(state_dict["rng"]),
             "config": self._snapshot_checkpoint_value(state_dict["config"]),
         }
+        if "reward_normalizer" in state_dict:
+            snapshot["reward_normalizer"] = self._snapshot_checkpoint_value(
+                state_dict["reward_normalizer"]
+            )
+        return snapshot
 
     def load_checkpoint_state_dict(self, state_dict):
         trainer_state = state_dict.get("trainer", {})
@@ -157,6 +166,14 @@ class Trainer:
         self._last_eval_step = None if last_eval_step is None else int(last_eval_step)
         if "logger" in state_dict:
             self.logger.load_state_dict(state_dict["logger"])
+        saved_reward_normalizer = state_dict.get("reward_normalizer")
+        reward_normalizer = getattr(self, "reward_normalizer", None)
+        if saved_reward_normalizer is not None and reward_normalizer is None:
+            raise ValueError(
+                "Checkpoint contains reward-normalization state, but normalize_rewards is disabled."
+            )
+        if saved_reward_normalizer is not None:
+            reward_normalizer.load_state_dict(saved_reward_normalizer)
         self._load_rng_state_dict(state_dict.get("rng"))
 
     @staticmethod
