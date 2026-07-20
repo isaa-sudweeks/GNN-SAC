@@ -99,7 +99,6 @@ class GNN(MessagePassing):
             f"Additional MPLs:\t{self.extra_mpls}"
         )
 
-
 class Q_GNN(GNN):
     def __init__(
         self,
