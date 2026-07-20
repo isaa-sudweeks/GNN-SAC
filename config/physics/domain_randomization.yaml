@@ -1,14 +1,14 @@
 # @package _global_
 
 # Master domain-randomization switch. Keep false for deterministic/default training.
-domain_randomization: false
+domain_randomization: true
 
 # Domain-randomization parameters live here so future randomized dynamics,
 # sensing, latency, terrain, and actuator effects can be added in one place.
 domain_randomization_params:
   # Randomly scale generated truss geometry at reset time.
   length_scale:
-    enabled: true
+    enabled: false
     min: 0.75
     max: 2.0
 
@@ -82,6 +82,21 @@ domain_randomization_params:
     enabled: false
     min: -10.5
     max: -9.1
+
+  # Randomize the truss's planar pose at each reset. Translation bounds are
+  # in meters and yaw bounds are in radians.
+  initial_translation_x:
+    enabled: true
+    min: -1.0
+    max: 1.0
+  initial_translation_y:
+    enabled: true
+    min: -1.0
+    max: 1.0
+  initial_yaw:
+    enabled: true
+    min: -3.141592653589793
+    max: 3.141592653589793
 
   # Randomize mujoco-truss-gen TrussPhysicalParameters at reset time. Enable
   # the master switch above, then enable individual parameters here.
@@ -250,7 +265,7 @@ domain_randomization_params:
   # Add Gaussian noise to normalized policy actions during training rollouts.
   # The executed action is clipped back to [clip_low, clip_high] and stored in replay.
   action_noise:
-    enabled: true
+    enabled: false
     std: 0.05
     clip_low: -1.0
     clip_high: 1.0
