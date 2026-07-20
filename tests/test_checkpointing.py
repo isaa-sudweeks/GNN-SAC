@@ -17,6 +17,7 @@ for path in (ROOT, SAC_ROOT):
 
 from trainer.base import Trainer
 from common.logger import Logger, wandb_resume_info
+from common.reward_normalizer import TaskRewardNormalizer
 
 
 class DummyModel(torch.nn.Module):
@@ -103,12 +104,21 @@ class CheckpointingTest(unittest.TestCase):
             trainer._pretrain_complete = True
             trainer._optimizer_updates = 17
             trainer._last_eval_step = 20
+            trainer.reward_normalizer = TaskRewardNormalizer(
+                gamma=0.9,
+                allowed_tasks=["task"],
+            )
+            trainer.reward_normalizer.normalize(3.0, task="task", stream=0)
             trainer.agent.model.weight.data.fill_(5.0)
             trainer.buffer.value = torch.tensor([7.0])
             trainer.logger.rows = [{"step": 10, "episode_reward": 1.5}]
             checkpoint = trainer.save_checkpoint()
 
             resumed = make_trainer(Path(tmp_dir))
+            resumed.reward_normalizer = TaskRewardNormalizer(
+                gamma=0.9,
+                allowed_tasks=["task"],
+            )
             resumed.load_checkpoint_state_dict(torch.load(checkpoint, map_location="cpu", weights_only=False))
 
             self.assertEqual(resumed._step, 20)
@@ -122,6 +132,10 @@ class CheckpointingTest(unittest.TestCase):
             self.assertEqual(float(resumed.agent.model.weight.item()), 5.0)
             self.assertEqual(float(resumed.buffer.value.item()), 7.0)
             self.assertEqual(resumed.logger.rows, [{"step": 10, "episode_reward": 1.5}])
+            self.assertEqual(
+                resumed.reward_normalizer.state_dict(),
+                trainer.reward_normalizer.state_dict(),
+            )
 
     def test_latest_and_retention(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -139,6 +153,21 @@ class CheckpointingTest(unittest.TestCase):
             self.assertTrue((checkpoint_dir / "step_20.agent.pt").exists())
             self.assertTrue((checkpoint_dir / "step_30.pt").exists())
             self.assertTrue((checkpoint_dir / "step_30.agent.pt").exists())
+
+    def test_older_checkpoint_starts_enabled_normalizer_with_empty_statistics(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = make_trainer(Path(tmp_dir))
+            state = trainer.checkpoint_state_dict()
+            self.assertNotIn("reward_normalizer", state)
+
+            resumed = make_trainer(Path(tmp_dir))
+            resumed.reward_normalizer = TaskRewardNormalizer(
+                gamma=0.9,
+                allowed_tasks=["task"],
+            )
+            resumed.load_checkpoint_state_dict(state)
+
+            self.assertEqual(resumed.reward_normalizer.metrics(), {})
 
     def test_async_checkpoint_writes_snapshot_after_training_continues(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
