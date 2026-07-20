@@ -9,6 +9,10 @@ class SAC(torch.nn.Module):
 
     def __init__(self, cfg):
         super().__init__()
+        if bool(getattr(cfg, "pcgrad", False)):
+            raise ValueError(
+                "pcgrad=true requires sac_backend=gnn and task-aware GNN replay batches."
+            )
         self.cfg = cfg
         self.device = torch.device(getattr(cfg, "device", "cuda"))
         self.model = ActorCritic(cfg).to(self.device)

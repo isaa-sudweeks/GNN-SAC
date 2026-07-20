@@ -191,14 +191,76 @@ class GNNSAC(torch.nn.Module):
         squared_norm = sum(torch.sum(gradient.double() ** 2) for gradient in gradients)
         return torch.sqrt(squared_norm)
 
+    @staticmethod
+    def _gradient_dot(first, second):
+        return sum(
+            torch.sum(first_gradient.double() * second_gradient.double())
+            for first_gradient, second_gradient in zip(first, second)
+        )
+
+    @staticmethod
+    def _gradient_dot_native(first, second):
+        return sum(
+            torch.sum(first_gradient * second_gradient)
+            for first_gradient, second_gradient in zip(first, second)
+        )
+
+    @classmethod
+    def pcgrad_project(cls, task_gradients):
+        """Return the equally weighted PCGrad update for per-task gradients."""
+        task_gradients = tuple(tuple(gradients) for gradients in task_gradients)
+        if not task_gradients:
+            raise ValueError("PCGrad requires at least one task gradient.")
+
+        gradient_count = len(task_gradients[0])
+        if any(len(gradients) != gradient_count for gradients in task_gradients):
+            raise ValueError("All PCGrad task gradients must use the same parameters.")
+
+        projected = [
+            [gradient.detach().clone() for gradient in gradients]
+            for gradients in task_gradients
+        ]
+        for task_idx, task_gradient in enumerate(projected):
+            for other_idx in torch.randperm(len(task_gradients)).tolist():
+                if other_idx == task_idx:
+                    continue
+                other_gradient = task_gradients[other_idx]
+                other_norm_squared = cls._gradient_dot_native(
+                    other_gradient,
+                    other_gradient,
+                )
+                if float(other_norm_squared) == 0.0:
+                    continue
+                dot = cls._gradient_dot_native(task_gradient, other_gradient)
+                if float(dot) >= 0.0:
+                    continue
+                coefficient = dot / other_norm_squared
+                task_gradient[:] = [
+                    gradient
+                    - coefficient.to(device=gradient.device, dtype=gradient.dtype)
+                    * other.to(device=gradient.device, dtype=gradient.dtype)
+                    for gradient, other in zip(task_gradient, other_gradient)
+                ]
+
+        return tuple(
+            sum(
+                (task_gradient[param_idx] for task_gradient in projected),
+                start=torch.zeros_like(projected[0][param_idx]),
+            )
+            / len(projected)
+            for param_idx in range(gradient_count)
+        )
+
+    @staticmethod
+    def _set_parameter_gradients(parameters, gradients):
+        for parameter, gradient in zip(parameters, gradients):
+            parameter.grad = gradient.detach().clone()
+
     @classmethod
     def gradient_pair_metrics(cls, first, second):
         first_norm = cls._gradient_norm(first)
         second_norm = cls._gradient_norm(second)
-        dot = sum(
-            torch.sum(first_gradient.double() * second_gradient.double())
-            for first_gradient, second_gradient in zip(first, second)
-        )
+        dot = cls._gradient_dot(first, second)
         norm_product = first_norm * second_norm
         cosine = torch.where(
             norm_product > 0,
@@ -242,9 +304,12 @@ class GNNSAC(torch.nn.Module):
             if cuda_rng is not None:
                 torch.cuda.set_rng_state_all(cuda_rng)
 
+        return self._gradient_metrics(gradients)
+
+    def _gradient_metrics(self, gradients):
         metrics = {}
-        task_names = list(task_batches)
         for objective, task_gradients in gradients.items():
+            task_names = list(task_gradients)
             for task in task_names:
                 task_key = self._diagnostic_key(task)
                 metrics[f"{objective}/norm/{task_key}"] = self._gradient_norm(
@@ -264,25 +329,103 @@ class GNNSAC(torch.nn.Module):
                     metrics[f"{objective}/norm_agreement/{pair_key}"] = pair["norm_agreement"]
         return metrics
 
+    def _pcgrad_q_update(self, task_batches):
+        parameters = tuple(self.model._Qs.parameters())
+        losses = []
+        task_gradients = {}
+        for task, batch in task_batches.items():
+            obs, action, reward, terminated, next_obs = batch
+            loss = self._q_loss(obs, action, reward, terminated, next_obs)
+            losses.append(loss)
+            task_gradients[task] = self._parameter_gradients(loss, parameters)
+
+        self.q_optim.zero_grad(set_to_none=True)
+        self._set_parameter_gradients(
+            parameters,
+            self.pcgrad_project(task_gradients.values()),
+        )
+        grad_norm = torch.nn.utils.clip_grad_norm_(parameters, self.cfg.grad_clip_norm)
+        self.q_optim.step()
+        return (
+            torch.stack([loss.detach() for loss in losses]).mean(),
+            grad_norm.detach(),
+            task_gradients,
+        )
+
+    def _pcgrad_pi_and_alpha_update(self, task_batches):
+        parameters = tuple(self.model._pi.parameters())
+        losses = []
+        task_gradients = {}
+        task_info = []
+        for task, batch in task_batches.items():
+            pi_loss, info = self._pi_loss(batch[0])
+            losses.append(pi_loss)
+            task_info.append(info)
+            task_gradients[task] = self._parameter_gradients(pi_loss, parameters)
+
+        self.pi_optim.zero_grad(set_to_none=True)
+        self._set_parameter_gradients(
+            parameters,
+            self.pcgrad_project(task_gradients.values()),
+        )
+        pi_grad_norm = torch.nn.utils.clip_grad_norm_(parameters, self.cfg.grad_clip_norm)
+        self.pi_optim.step()
+
+        log_prob = torch.cat([info["log_prob"].reshape(-1) for info in task_info])
+        alpha_loss = -(self.log_alpha * (log_prob.detach() + self.target_entropy)).mean()
+        self.alpha_optim.zero_grad(set_to_none=True)
+        alpha_loss.backward()
+        self.alpha_optim.step()
+
+        entropy = torch.stack(
+            [info["entropy"].detach().mean() for info in task_info]
+        ).mean()
+        return (
+            {
+                "pi_loss": torch.stack([loss.detach() for loss in losses]).mean(),
+                "pi_grad_norm": pi_grad_norm.detach(),
+                "alpha_loss": alpha_loss.detach(),
+                "alpha": self.alpha.detach(),
+                "entropy": entropy,
+            },
+            task_gradients,
+        )
+
     def update(self, buffer, compute_diagnostics=False):
+        pcgrad_enabled = bool(getattr(self.cfg, "pcgrad", False))
         if hasattr(buffer, "sample_with_tasks"):
             replay_batch = buffer.sample_with_tasks()
             obs, action, reward, terminated, next_obs = replay_batch.combined
             task_batches = replay_batch.by_task
         else:
+            if pcgrad_enabled:
+                raise ValueError(
+                    "pcgrad=true requires replay batches grouped by task via sample_with_tasks()."
+                )
             obs, action, reward, terminated, next_obs = buffer.sample()
             task_batches = None
        # if self.device.type == 'cuda':
        #     torch.compiler.cudagraph_mark_step_begin()
         
         self.model.train()
-        diagnostics = (
-            self._gradient_diagnostics(task_batches)
-            if compute_diagnostics and task_batches is not None
-            else None
-        )
-        q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
-        pi_info = self.update_pi_and_alpha(obs)
+        if pcgrad_enabled:
+            q_loss, q_grad_norm, q_task_gradients = self._pcgrad_q_update(task_batches)
+            pi_info, pi_task_gradients = self._pcgrad_pi_and_alpha_update(task_batches)
+            diagnostics = (
+                self._gradient_metrics(
+                    {"critic": q_task_gradients, "actor": pi_task_gradients}
+                )
+                if compute_diagnostics
+                else None
+            )
+        else:
+            diagnostics = (
+                self._gradient_diagnostics(task_batches)
+                if compute_diagnostics and task_batches is not None
+                else None
+            )
+            q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
+            pi_info = self.update_pi_and_alpha(obs)
         self.model.soft_update_target_Q()
         self.model.eval()
 
