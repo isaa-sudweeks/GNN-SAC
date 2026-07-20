@@ -318,12 +318,16 @@ class Logger:
         if self._multirun_id not in (None, "", "???"):
             name = f"{name}-{self._multirun_id}"
         tags = cfg_to_group(cfg, return_list=True) + [f"seed:{self._seed}"]
+        wandb_dir = Path(_cfg_get(cfg, "wandb_dir", Path(__file__).resolve().parents[2]))
+        if not wandb_dir.is_absolute():
+            wandb_dir = Path(__file__).resolve().parents[2] / wandb_dir
+        make_dir(wandb_dir)
         init_kwargs = dict(
             project=self.project,
             name=str(name),
             group=self._group,
             tags=tags,
-            dir=str(self._log_dir),
+            dir=str(wandb_dir),
             config=cfg_to_dict(cfg),
         )
         if self.entity not in (None, "", "none", "???"):

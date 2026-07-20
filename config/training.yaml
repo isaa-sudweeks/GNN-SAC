@@ -33,6 +33,7 @@ checkpoint_keep_last: 3 # Number of numbered step checkpoints to keep; latest.pt
 resume_from_checkpoint: null # Path to a checkpoint, or "latest" to load checkpoint_dir/latest.pt.
 save_video: false # Whether to render and log video for the first evaluation episode.
 enable_wandb: true # Whether to send metrics, config, video, and artifacts to Weights & Biases.
+wandb_dir: null # W&B storage parent; null uses the GNN-SAC root so all offline runs collect in ./wandb.
 wandb_project: ${project} # W&B project name.
 wandb_entity: null # Optional W&B entity/team; null uses the local default.
 wandb_name: ${exp_name}-${seed} # W&B run name.

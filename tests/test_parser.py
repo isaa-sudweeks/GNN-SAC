@@ -77,6 +77,23 @@ class TopologyAliasTest(unittest.TestCase):
             )
 
 
+class RunMetadataTest(unittest.TestCase):
+    def test_defaults_wandb_storage_to_project_root(self):
+        cfg = parse_cfg(topology_cfg())
+
+        self.assertEqual(cfg.wandb_dir, ROOT)
+
+    def test_records_shell_safe_original_launch_command(self):
+        argv = [".venv/bin/python", "sac/gnn_train.py", "exp_name=my run", "steps=1000"]
+        with patch("common.parser.sys.orig_argv", argv):
+            cfg = parse_cfg(topology_cfg())
+
+        self.assertEqual(
+            cfg.launch_command,
+            ".venv/bin/python sac/gnn_train.py 'exp_name=my run' steps=1000",
+        )
+
+
 class MultirunWorkDirTest(unittest.TestCase):
     def test_different_overrides_use_different_work_dirs(self):
         with patch(

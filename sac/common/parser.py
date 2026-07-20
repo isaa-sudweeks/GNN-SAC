@@ -1,6 +1,8 @@
 import dataclasses
 import hashlib
 import re
+import shlex
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +80,11 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 
 	# Convenience
 	with open_dict(cfg):
+		project_root = Path(__file__).resolve().parents[2]
+		if cfg.get("wandb_dir", None) in {None, "???"}:
+			# wandb appends its own `wandb/` directory to this storage parent.
+			cfg.wandb_dir = project_root
+		cfg.launch_command = shlex.join(getattr(sys, "orig_argv", sys.argv))
 		topologies = cfg.get("topologies", None)
 		truss_topologies = cfg.get("truss_topologies", None)
 		if topologies is not None:
