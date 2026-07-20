@@ -7,7 +7,6 @@ from torch_geometric.data import Batch, Data
 
 from common.graph_transforms import prepare_graph
 
-
 @dataclass(frozen=True)
 class ReplayBatch:
     """One balanced learner batch plus its task-specific constituent batches."""
