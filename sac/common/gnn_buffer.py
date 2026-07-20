@@ -5,6 +5,7 @@ from typing import Mapping
 import torch
 from torch_geometric.data import Batch, Data
 
+from common.graph_transforms import prepare_graph
 
 @dataclass(frozen=True)
 class ReplayBatch:
@@ -95,8 +96,13 @@ class _GNNTaskBuffer:
             raise ValueError(f"Replay buffer has {self._size} transitions, need batch_size={self._batch_size}.")
 
         idx = torch.randint(self._size, (self._batch_size,), device=self._storage_device).tolist()
-        obs = Batch.from_data_list([self._obs[i] for i in idx]).to(self._device, non_blocking=True)
-        next_obs = Batch.from_data_list([self._next_obs[i] for i in idx]).to(self._device, non_blocking=True)
+        use_virtual_node = bool(getattr(self.cfg, "use_virtual_node", False))
+        obs = Batch.from_data_list([
+            prepare_graph(self._obs[i], use_virtual_node=use_virtual_node) for i in idx
+        ]).to(self._device, non_blocking=True)
+        next_obs = Batch.from_data_list([
+            prepare_graph(self._next_obs[i], use_virtual_node=use_virtual_node) for i in idx
+        ]).to(self._device, non_blocking=True)
         action = torch.cat([self._action[i] for i in idx], dim=0).to(self._device, non_blocking=True)
         reward = torch.stack([self._reward[i] for i in idx], dim=0).to(self._device, non_blocking=True)
         terminated = torch.stack([self._terminated[i] for i in idx], dim=0).to(self._device, non_blocking=True)

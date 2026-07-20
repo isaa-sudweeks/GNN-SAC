@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Batch, Data
 
 from common.gnn_actor_critic import GNNActorCritic 
+from common.graph_transforms import prepare_graph
 
 class GNNSAC(torch.nn.Module):
     """
@@ -100,7 +101,11 @@ class GNNSAC(torch.nn.Module):
             return []
 
         node_counts = [int(obs.x.size(0)) for obs in observations]
-        obs_batch = Batch.from_data_list(list(observations)).to(self.device, non_blocking=True)
+        use_virtual_node = bool(getattr(self.cfg, "use_virtual_node", False))
+        prepared = [
+            prepare_graph(obs, use_virtual_node=use_virtual_node) for obs in observations
+        ]
+        obs_batch = Batch.from_data_list(prepared).to(self.device, non_blocking=True)
         if eval_mode:
             action = self.model.pi_mean(obs_batch)
         else:
