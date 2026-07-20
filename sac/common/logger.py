@@ -52,6 +52,7 @@ CAT_TO_COLOR = {
     "train": "blue",
     "eval": "green",
     "training_rewards": "magenta",
+    "gradient_diagnostics": "cyan",
 }
 
 

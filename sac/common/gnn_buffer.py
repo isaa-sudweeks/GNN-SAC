@@ -1,8 +1,20 @@
+from copy import deepcopy
+from dataclasses import dataclass
+from typing import Mapping
+
 import torch
 from torch_geometric.data import Batch, Data
 
 
-class GNNBuffer:
+@dataclass(frozen=True)
+class ReplayBatch:
+    """One balanced learner batch plus its task-specific constituent batches."""
+
+    combined: tuple
+    by_task: Mapping[str, tuple]
+
+
+class _GNNTaskBuffer:
     """Circular replay buffer for graph observations and node-aligned actions."""
 
     def __init__(self, cfg):
@@ -154,6 +166,163 @@ class GNNBuffer:
         self._action = state_dict["action"]
         self._reward = state_dict["reward"]
         self._terminated = state_dict["terminated"]
+
+
+class GNNBuffer:
+    """Task-balanced replay for graph SAC.
+
+    ``buffer_size`` remains the total replay capacity. Multi-task batches draw
+    exactly the same number of transitions from every distinct task.
+    """
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.task_names = self._task_names(cfg)
+        self._task_count = len(self.task_names)
+        total_capacity = int(cfg.buffer_size)
+        batch_size = int(cfg.batch_size)
+        if total_capacity % self._task_count != 0:
+            raise ValueError(
+                f"buffer_size={total_capacity} must be divisible by the number of tasks "
+                f"({self._task_count})."
+            )
+        if batch_size % self._task_count != 0:
+            raise ValueError(
+                f"batch_size={batch_size} must be divisible by the number of tasks "
+                f"({self._task_count})."
+            )
+
+        self._batch_size = batch_size
+        self._batch_size_per_task = batch_size // self._task_count
+        self._capacity_per_task = total_capacity // self._task_count
+        self._buffers = {}
+        for task_name in self.task_names:
+            task_cfg = deepcopy(cfg)
+            task_cfg.buffer_size = self._capacity_per_task
+            task_cfg.batch_size = self._batch_size_per_task
+            # _GNNTaskBuffer caps capacity by steps. Each task can receive no
+            # more than the total run length, so this preserves the requested
+            # per-task capacity even for small test configurations.
+            task_cfg.steps = max(int(getattr(cfg, "steps", total_capacity)), self._capacity_per_task)
+            self._buffers[task_name] = _GNNTaskBuffer(task_cfg)
+
+    @staticmethod
+    def _task_names(cfg):
+        multitask = bool(getattr(cfg, "multitask", False))
+        backend = str(getattr(cfg, "mujoco_backend", "mujoco")).lower()
+        topologies = getattr(cfg, "truss_topologies", None)
+        if backend == "mjx" and topologies and len(topologies) > 1:
+            base_task = str(getattr(cfg, "task", "truss-graph")).split(":", 1)[0]
+            candidates = [f"{base_task}:{topology}" for topology in topologies]
+        elif multitask:
+            candidates = [str(task) for task in getattr(cfg, "tasks", [])]
+        else:
+            candidates = [str(getattr(cfg, "task", "task"))]
+        task_names = list(dict.fromkeys(candidates))
+        if not task_names:
+            raise ValueError("Task-balanced replay requires at least one task.")
+        return task_names
+
+    @property
+    def capacity(self):
+        return sum(buffer.capacity for buffer in self._buffers.values())
+
+    @property
+    def num_eps(self):
+        return sum(buffer.num_eps for buffer in self._buffers.values())
+
+    @property
+    def size(self):
+        return sum(buffer.size for buffer in self._buffers.values())
+
+    @property
+    def sizes_by_task(self):
+        return {task: buffer.size for task, buffer in self._buffers.items()}
+
+    @property
+    def ready(self):
+        return all(buffer.size >= self._batch_size_per_task for buffer in self._buffers.values())
+
+    def add(self, td, count_episode=True, *, task=None):
+        if task is None:
+            if self._task_count != 1:
+                raise ValueError("Multi-task replay insertion requires an explicit task name.")
+            task = self.task_names[0]
+        task = str(task)
+        if task not in self._buffers:
+            raise KeyError(f"Unknown replay task {task!r}; expected one of {self.task_names!r}.")
+        self._buffers[task].add(td, count_episode=count_episode)
+        return self.num_eps
+
+    def sample_task_batches(self):
+        if not self.ready:
+            sizes = ", ".join(f"{task}={size}" for task, size in self.sizes_by_task.items())
+            raise ValueError(
+                f"Every task replay buffer needs {self._batch_size_per_task} transitions; got {sizes}."
+            )
+        return {task: self._buffers[task].sample() for task in self.task_names}
+
+    @staticmethod
+    def combine_task_batches(by_task):
+        batches = list(by_task.values())
+        if not batches:
+            raise ValueError("Cannot combine an empty set of task batches.")
+        observations = Batch.from_data_list(
+            [graph for batch in batches for graph in batch[0].to_data_list()]
+        )
+        next_observations = Batch.from_data_list(
+            [graph for batch in batches for graph in batch[4].to_data_list()]
+        )
+        actions = torch.cat([batch[1] for batch in batches], dim=0)
+        rewards = torch.cat([batch[2] for batch in batches], dim=0)
+        terminated = torch.cat([batch[3] for batch in batches], dim=0)
+        return observations, actions, rewards, terminated, next_observations
+
+    def sample_with_tasks(self):
+        by_task = self.sample_task_batches()
+        return ReplayBatch(combined=self.combine_task_batches(by_task), by_task=by_task)
+
+    def sample(self):
+        return self.sample_with_tasks().combined
+
+    def state_dict(self):
+        return {
+            "format_version": 2,
+            "task_names": list(self.task_names),
+            "batch_size": self._batch_size,
+            "batch_size_per_task": self._batch_size_per_task,
+            "capacity_per_task": self._capacity_per_task,
+            "buffers": {
+                task: buffer.state_dict() for task, buffer in self._buffers.items()
+            },
+        }
+
+    def load_state_dict(self, state_dict):
+        saved_tasks = list(state_dict.get("task_names", []))
+        if saved_tasks != self.task_names:
+            raise ValueError(
+                f"Checkpoint replay tasks {saved_tasks!r} do not match configured tasks {self.task_names!r}."
+            )
+        expected_layout = (
+            self._batch_size,
+            self._batch_size_per_task,
+            self._capacity_per_task,
+        )
+        saved_layout = (
+            int(state_dict.get("batch_size", -1)),
+            int(state_dict.get("batch_size_per_task", -1)),
+            int(state_dict.get("capacity_per_task", -1)),
+        )
+        if saved_layout != expected_layout:
+            raise ValueError(
+                f"Checkpoint replay layout {saved_layout!r} does not match configured layout "
+                f"{expected_layout!r}."
+            )
+        saved_buffers = state_dict.get("buffers", {})
+        if list(saved_buffers) != self.task_names:
+            raise ValueError("Checkpoint replay buffer ordering does not match the configured task ordering.")
+        for task in self.task_names:
+            self._buffers[task].load_state_dict(saved_buffers[task])
 
 
 Buffer = GNNBuffer
