@@ -36,13 +36,15 @@ if sys.version_info >= (3, 14):
         _check_help_compat._hydra_py314_compat = True
         argparse._ActionsContainer._check_help = _check_help_compat
 
-from common.parser import parse_cfg
+from common.parser import capture_launch_command, parse_cfg
 from common.seed import set_seed
 from common.buffer import Buffer
 from env import make_env
 from sac import SAC
 from trainer.online_trainer import OnlineTrainer
 from common.logger import Logger
+
+capture_launch_command()
 
 torch.backends.cudnn.benchmark = True 
 torch.set_float32_matmul_precision('high')

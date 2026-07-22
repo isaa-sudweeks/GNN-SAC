@@ -37,4 +37,7 @@ hydra:
     max_num_timeout: 20
     qos: standby
     additional_parameters:
+      # Explicitly propagate the original sweep command captured by the
+      # launcher process into every Submitit worker.
+      export: ALL,GNN_SAC_LAUNCH_COMMAND
       requeue: true
