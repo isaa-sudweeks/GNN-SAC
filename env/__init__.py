@@ -73,6 +73,19 @@ def _num_policy_actuators(env):
     mj_model = env.unwrapped.mj_model
     return int(len(getattr(mj_model, "external_actuator_ids", range(mj_model.model.nu))))
 
+def _num_policy_actions(env):
+    """Count node-action scalars that can affect an actuator."""
+    unwrapped = env.unwrapped
+    if hasattr(unwrapped, "_policy_action_mask"):
+        active_nodes = int(np.asarray(unwrapped._policy_action_mask(), dtype=bool).sum())
+        return active_nodes * int(getattr(unwrapped, "node_action_dim", 1))
+    passive_names = set(getattr(unwrapped, "passive_node_names", ()))
+    graph_names = list(getattr(unwrapped, "graph_node_names", ()))
+    if graph_names:
+        active_nodes = sum(name not in passive_names for name in graph_names)
+        return active_nodes * int(getattr(unwrapped, "node_action_dim", 1))
+    return int(np.prod(env.action_space.shape))
+
 def _is_mjx_vector_graph_run(cfg):
     task = str(getattr(cfg, "task", "")).split(":", 1)[0]
     return str(getattr(cfg, "mujoco_backend", "mujoco")).lower() == "mjx" and task == "truss-graph"
@@ -109,7 +122,7 @@ def _make_mjx_vector_graph_env(cfg):
     cfg.node_action_dim = env.node_action_dim
     cfg.action_dim = env.node_action_dim
     cfg.policy_action_counts = [
-        int(np.prod(component.action_space.shape)) for component in component_envs
+        _num_policy_actions(component) for component in component_envs
     ]
     cfg.node_counts = [int(component.action_space.shape[0]) for component in component_envs]
     cfg.num_nodes = int(max(cfg.node_counts))
@@ -186,7 +199,7 @@ def make_env(cfg):
         for e in env.envs:
             cfg.obs_shapes.append(_obs_shapes(e, cfg))
             cfg.action_dims.append(int(e.action_space.shape[0]))
-            cfg.policy_action_counts.append(int(np.prod(e.action_space.shape)))
+            cfg.policy_action_counts.append(_num_policy_actions(e))
             cfg.policy_actuator_counts.append(_num_policy_actuators(e))
             cfg.episode_lengths.append(int(_max_episode_steps(e)))
         cfg.action_dim = int(max(cfg.action_dims))
@@ -232,7 +245,7 @@ def make_env(cfg):
             cfg.node_feature_dim = cfg.obs_dim
             cfg.node_action_dim = int(getattr(env.unwrapped, "node_action_dim", env.action_space.shape[-1]))
             cfg.action_dim = cfg.node_action_dim
-            cfg.num_policy_actions = int(np.prod(env.action_space.shape))
+            cfg.num_policy_actions = _num_policy_actions(env)
             cfg.node_counts = [int(env.action_space.shape[0])]
             cfg.num_nodes = cfg.node_counts[0]
             cfg.num_actuators = _num_policy_actuators(env)

@@ -78,6 +78,9 @@ class MjxVectorGraphEnv(gym.Env):
             )
             if is_passive
         ]
+        self._action_mask = torch.as_tensor(
+            ~np.asarray(self._core._controller.passive_node_mask, dtype=bool)
+        )
         self.num_external_actuators = int(len(self.mj_model.external_actuator_ids))
 
         node_count = int(self._core.action_size)
@@ -99,6 +102,7 @@ class MjxVectorGraphEnv(gym.Env):
                     shape=edge_index.shape,
                     dtype=np.int64,
                 ),
+                "action_mask": spaces.MultiBinary(node_count),
             }
         )
         self.action_space = spaces.Box(
@@ -243,7 +247,11 @@ class MjxVectorGraphEnv(gym.Env):
         )
         features = torch.cat((positions, velocities), dim=-1)
         return [
-            {"x": features[env_idx], "edge_index": self._edge_index}
+            {
+                "x": features[env_idx],
+                "edge_index": self._edge_index,
+                "action_mask": self._action_mask,
+            }
             for env_idx in indices
         ]
 

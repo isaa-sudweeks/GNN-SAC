@@ -61,7 +61,7 @@ class MjxVectorEnvTest(unittest.TestCase):
             self.assertEqual(len(observations), 2)
             self.assertTrue(all(isinstance(obs, Data) for obs in observations))
             self.assertTrue(all(obs.x.shape[1] == 6 for obs in observations))
-            self.assertEqual(cfg.num_policy_actions, observations[0].num_nodes)
+            self.assertEqual(cfg.num_policy_actions, int(observations[0].action_mask.sum()))
 
             action = env.rand_act(env_idx=1)
             results = env.step_many([action], env_indices=[1])
@@ -139,7 +139,7 @@ class MjxVectorEnvTest(unittest.TestCase):
         try:
             observations = env.reset_many()
             self.assertEqual(len(observations), 1)
-            self.assertEqual(cfg.num_policy_actions, observations[0].num_nodes)
+            self.assertEqual(cfg.num_policy_actions, int(observations[0].action_mask.sum()))
             result = env.step_many([env.rand_act(env_idx=0)], env_indices=[0])[0]
             self.assertEqual(result[0].num_nodes, observations[0].num_nodes)
             self.assertTrue(torch.isfinite(result[1]))

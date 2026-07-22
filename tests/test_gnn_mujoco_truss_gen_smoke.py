@@ -472,7 +472,10 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             self.assertEqual(obs.edge_index.shape[0], 2)
             self.assertEqual(cfg.node_action_dim, 1)
             self.assertEqual(cfg.action_dim, cfg.node_action_dim)
-            self.assertEqual(cfg.num_policy_actions, cfg.num_nodes * cfg.node_action_dim)
+            self.assertEqual(
+                cfg.num_policy_actions,
+                int(obs.action_mask.sum()) * cfg.node_action_dim,
+            )
             self.assertEqual(cfg.num_actuators, env.unwrapped.mj_model.model.nu)
 
             action = env.rand_act()
@@ -530,8 +533,20 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
                 self.assertIsInstance(obs, Data)
                 self.assertEqual(obs.edge_index.shape[0], 2)
                 self.assertEqual(obs.x.shape[0], env.action_space.shape[0])
+                self.assertTrue(torch.equal(
+                    obs.action_mask,
+                    torch.as_tensor(
+                        ~np.asarray(
+                            env.unwrapped.node_velocity_controller.passive_node_mask,
+                            dtype=bool,
+                        )
+                    ),
+                ))
                 self.assertEqual(env.action_space.shape[1], cfg.node_action_dim)
-                self.assertEqual(cfg.num_policy_actions, int(np.prod(env.action_space.shape)))
+                self.assertEqual(
+                    cfg.num_policy_actions,
+                    int(obs.action_mask.sum()) * cfg.node_action_dim,
+                )
 
                 action = env.rand_act()
                 next_obs, reward, done, info = env.step(action)

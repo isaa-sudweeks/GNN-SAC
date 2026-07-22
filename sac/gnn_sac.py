@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Batch, Data
 
 from common.gnn_actor_critic import GNNActorCritic 
-from common.graph_transforms import prepare_graph
+from common.graph_transforms import policy_action_mask, prepare_graph
 
 class GNNSAC(torch.nn.Module):
     """
@@ -101,6 +101,8 @@ class GNNSAC(torch.nn.Module):
             return []
 
         node_counts = [int(obs.x.size(0)) for obs in observations]
+        action_masks = [policy_action_mask(obs) for obs in observations]
+        action_counts = [int(mask.sum()) for mask in action_masks]
         use_virtual_node = bool(getattr(self.cfg, "use_virtual_node", False))
         prepared = [
             prepare_graph(obs, use_virtual_node=use_virtual_node) for obs in observations
@@ -118,11 +120,19 @@ class GNNSAC(torch.nn.Module):
         )
         if not keep_on_device:
             action = action.cpu()
-        if action.size(0) != sum(node_counts):
+        if action.size(0) != sum(action_counts):
             raise RuntimeError(
-                f"Actor produced {action.size(0)} node actions for {sum(node_counts)} observation nodes"
+                f"Actor produced {action.size(0)} node actions for "
+                f"{sum(action_counts)} actuated observation nodes"
             )
-        return list(action.split(node_counts, dim=0))
+        full_actions = []
+        for node_count, mask, active_action in zip(
+            node_counts, action_masks, action.split(action_counts, dim=0)
+        ):
+            full_action = action.new_zeros((node_count, action.size(-1)))
+            full_action[mask.to(action.device)] = active_action
+            full_actions.append(full_action)
+        return full_actions
 
     @torch.no_grad()
     def _td_target(self, next_obs, reward, terminated):

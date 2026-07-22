@@ -125,7 +125,12 @@ class MultitaskWrapper(gym.Env):
     def _compatible_graph_spaces(self, reference_obs, candidate_obs):
         if not (isinstance(reference_obs, spaces.Dict) and isinstance(candidate_obs, spaces.Dict)):
             return False
-        if set(reference_obs.spaces) != {"x", "edge_index"} or set(candidate_obs.spaces) != {"x", "edge_index"}:
+        required = {"x", "edge_index"}
+        allowed = required | {"action_mask"}
+        if not (
+            required <= set(reference_obs.spaces) <= allowed
+            and required <= set(candidate_obs.spaces) <= allowed
+        ):
             return False
         reference_x = reference_obs.spaces["x"]
         candidate_x = candidate_obs.spaces["x"]

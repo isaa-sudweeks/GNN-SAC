@@ -480,7 +480,25 @@ class MujocoPresetGraphEnv(WorstCaseRigidityRewardMixin, MujocoRelativeObsEnv):
                     shape=edge_index.shape,
                     dtype=np.int64,
                 ),
+                "action_mask": spaces.MultiBinary(len(self._node_names())),
             }
+        )
+
+    def _policy_action_mask(self):
+        if self._use_control_graph():
+            passive = np.asarray(
+                self.node_velocity_controller.passive_node_mask, dtype=bool
+            )
+            return ~passive
+
+        actuated_nodes = {
+            node_name
+            for edge in self._actuator_edges
+            if edge is not None
+            for node_name in edge
+        }
+        return np.asarray(
+            [name in actuated_nodes for name in self.graph_node_names], dtype=bool
         )
 
     def _get_obs(self):
@@ -509,6 +527,7 @@ class MujocoPresetGraphEnv(WorstCaseRigidityRewardMixin, MujocoRelativeObsEnv):
         return {
             "x": np.concatenate([pos_rel, vel_norm], axis=1).astype(np.float32),
             "edge_index": edge_index,
+            "action_mask": self._policy_action_mask(),
         }
 
     def step(self, action):

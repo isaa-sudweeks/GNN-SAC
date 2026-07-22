@@ -6,7 +6,7 @@ from torch_geometric.nn import global_add_pool, global_mean_pool
 
 from common import math 
 from common import gnn_layers
-from common.graph_transforms import physical_node_mask
+from common.graph_transforms import physical_node_mask, policy_action_mask
 from common import mlp_layers as layers 
 
 class GNNActorCritic(nn.Module):
@@ -82,7 +82,7 @@ class GNNActorCritic(nn.Module):
         Args:
             obs:Observation data of a graph in the torch geometric Data format
         """
-        action_mask = physical_node_mask(obs)
+        action_mask = policy_action_mask(obs)
         embeddings = self._pi(obs.x, obs.edge_index)
         mean, log_std = self._action_head(embeddings[action_mask]).chunk(2, dim=-1)
         log_std = math.log_std(log_std, self.log_std_min, self.log_std_dif)
@@ -108,7 +108,7 @@ class GNNActorCritic(nn.Module):
 
     def pi_mean(self, obs):
         """Compute deterministic actions without sampling policy noise or statistics."""
-        action_mask = physical_node_mask(obs)
+        action_mask = policy_action_mask(obs)
         embeddings = self._pi(obs.x, obs.edge_index)
         mean, _ = self._action_head(embeddings[action_mask]).chunk(2, dim=-1)
         return torch.tanh(mean)
@@ -125,14 +125,23 @@ class GNNActorCritic(nn.Module):
         """
         assert return_type in {"min", "avg", "all"}
         qnet = self._target_Qs if target else self._Qs
-        action_mask = physical_node_mask(obs)
+        action_mask = policy_action_mask(obs)
+        pool_mask = physical_node_mask(obs)
         node_action = action.new_zeros((obs.x.size(0), action.size(-1)))
-        node_action[action_mask] = action
+        if action.size(0) == obs.x.size(0):
+            node_action[action_mask] = action[action_mask]
+        elif action.size(0) == int(action_mask.sum()):
+            node_action[action_mask] = action
+        else:
+            raise ValueError(
+                f"Got {action.size(0)} node actions for {int(action_mask.sum())} "
+                f"actuated nodes and {obs.x.size(0)} total nodes."
+            )
         q_values = qnet(
             torch.cat([obs.x, node_action], dim=-1),
             obs.edge_index,
             getattr(obs, "batch", None),
-            action_mask,
+            pool_mask,
         )
 
         if return_type == "all":

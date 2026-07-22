@@ -44,10 +44,13 @@ class TensorWrapper(gym.Wrapper):
 			for k in obs.keys():
 				obs[k] = self._try_f32_tensor(obs[k])
 			if self.graph_observations:
-				return Data(
+				graph = Data(
 					x=obs["x"].float(),
 					edge_index=obs["edge_index"].long(),
 				)
+				if "action_mask" in obs:
+					graph.action_mask = obs["action_mask"].bool()
+				return graph
 		else:
 			obs = self._try_f32_tensor(obs)
 		return obs

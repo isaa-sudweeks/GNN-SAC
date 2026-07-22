@@ -17,7 +17,8 @@ for path in (ROOT, SAC_ROOT):
 from common.gnn_actor_critic import GNNActorCritic
 from common.gnn_buffer import _GNNTaskBuffer
 from common.gnn_layers import GNN, Q_GNN
-from common.graph_transforms import prepare_graph
+from common.graph_transforms import physical_node_mask, prepare_graph
+from gnn_sac import GNNSAC
 
 
 def graph(num_nodes: int) -> Data:
@@ -57,6 +58,7 @@ class VirtualNodeTest(unittest.TestCase):
         self.assertEqual(prepared.num_nodes, 5)
         self.assertEqual(prepared.edge_index.size(1), original.edge_index.size(1) + 8)
         self.assertTrue(torch.equal(prepared.action_mask, torch.tensor([1, 1, 1, 1, 0], dtype=torch.bool)))
+        self.assertTrue(torch.equal(prepared.physical_node_mask, torch.tensor([1, 1, 1, 1, 0], dtype=torch.bool)))
         self.assertTrue(torch.equal(prepared.x[-1], torch.zeros(3)))
 
     def test_batch_has_one_isolated_virtual_node_per_graph(self):
@@ -112,13 +114,43 @@ class VirtualNodeTest(unittest.TestCase):
         self.assertEqual(info["mean"].shape, (8, 1))
         self.assertEqual(info["log_prob"].shape, (2,))
 
+    def test_actor_excludes_passive_nodes_and_act_batch_zero_pads_them(self):
+        observation = graph(4)
+        observation.action_mask = torch.tensor([True, False, True, False])
+        agent_cfg = cfg()
+        agent_cfg.device = "cpu"
+        agent_cfg.lr = 1e-3
+        agent_cfg.entropy_coef = 0.2
+        agent_cfg.target_entropy = -1
+        agent_cfg.episode_length = 100
+        agent_cfg.discount_denom = 5
+        agent_cfg.discount_min = 0.95
+        agent_cfg.discount_max = 0.999
+        agent_cfg.use_virtual_node = True
+        agent_cfg.mujoco_backend = "mujoco"
+
+        agent = GNNSAC(agent_cfg)
+        prepared = prepare_graph(observation, use_virtual_node=True)
+        sampled_action, info = agent.model.pi(prepared)
+        env_action = agent.act(observation)
+
+        self.assertEqual(sampled_action.shape, (2, 1))
+        self.assertEqual(info["mean"].shape, (2, 1))
+        self.assertEqual(info["log_prob"].shape, (1,))
+        self.assertEqual(env_action.shape, (4, 1))
+        self.assertTrue(torch.equal(env_action[~observation.action_mask], torch.zeros(2, 1)))
+
     def test_critic_zero_pads_virtual_actions_and_pools_physical_nodes(self):
+        first = graph(3)
+        first.action_mask = torch.tensor([True, False, True])
+        second = graph(4)
+        second.action_mask = torch.tensor([False, True, True, True])
         batch = Batch.from_data_list([
-            prepare_graph(graph(3), use_virtual_node=True),
-            prepare_graph(graph(4), use_virtual_node=True),
+            prepare_graph(first, use_virtual_node=True),
+            prepare_graph(second, use_virtual_node=True),
         ])
         model = GNNActorCritic(cfg())
-        action = torch.randn(7, 1)
+        action = torch.randn(5, 1)
         captured_input = []
         captured_pool = []
         critic = model._Qs.modules_list[0]
@@ -135,10 +167,11 @@ class VirtualNodeTest(unittest.TestCase):
             head_hook.remove()
 
         self.assertEqual(values.shape, (2, 2))
-        self.assertTrue(torch.equal(captured_input[0][~batch.action_mask, -1], torch.zeros(2)))
+        self.assertTrue(torch.equal(captured_input[0][~batch.action_mask, -1], torch.zeros(4)))
         encoded = GNN.forward(critic, captured_input[0], batch.edge_index)
+        pool_mask = physical_node_mask(batch)
         expected_pool = global_mean_pool(
-            encoded[batch.action_mask], batch.batch[batch.action_mask]
+            encoded[pool_mask], batch.batch[pool_mask]
         )
         self.assertTrue(torch.allclose(captured_pool[0], expected_pool))
 
