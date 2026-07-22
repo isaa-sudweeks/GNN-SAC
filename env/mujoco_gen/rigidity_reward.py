@@ -9,7 +9,27 @@ class WorstCaseRigidityRewardMixin:
             self.mj_model.set_wcrm(True)
         elif hasattr(self.mj_model, "wcrm"):
             self.mj_model.wcrm = True
+        self._initial_wcrm = max(float(self.mj_model._critical_eig()), 1e-8)
+        self._observation_rigidity = None
         super()._on_model_changed()
+
+    def reset(self, *args, **kwargs):
+        self._observation_rigidity = None
+        return super().reset(*args, **kwargs)
+
+    def _rigidity_ratio(self, critical_eig=None):
+        if critical_eig is None:
+            critical_eig = float(self.mj_model._critical_eig())
+        if not np.isfinite(critical_eig):
+            return 0.0
+        return float(max(critical_eig, 0.0) / self._initial_wcrm)
+
+    def _current_observation_rigidity(self):
+        if self._observation_rigidity is None:
+            return self._rigidity_ratio()
+        rigidity = self._observation_rigidity
+        self._observation_rigidity = None
+        return rigidity
 
     def _compute_reward(self, action, previous_com=None):
         critical_eig_raw = float(self.mj_model._critical_eig())
@@ -18,6 +38,7 @@ class WorstCaseRigidityRewardMixin:
             or critical_eig_raw < self.config.critical_eig_threshold
         )
         critical_eig = critical_eig_raw if np.isfinite(critical_eig_raw) else 0.0
+        self._observation_rigidity = self._rigidity_ratio(critical_eig_raw)
 
         com_delta_x = 0.0
         if previous_com is None:

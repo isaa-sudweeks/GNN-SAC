@@ -481,6 +481,12 @@ class MujocoPresetGraphEnv(WorstCaseRigidityRewardMixin, MujocoRelativeObsEnv):
                     dtype=np.int64,
                 ),
                 "action_mask": spaces.MultiBinary(len(self._node_names())),
+                "rigidity": spaces.Box(
+                    low=0.0,
+                    high=np.inf,
+                    shape=(1,),
+                    dtype=np.float32,
+                ),
             }
         )
 
@@ -528,6 +534,9 @@ class MujocoPresetGraphEnv(WorstCaseRigidityRewardMixin, MujocoRelativeObsEnv):
             "x": np.concatenate([pos_rel, vel_norm], axis=1).astype(np.float32),
             "edge_index": edge_index,
             "action_mask": self._policy_action_mask(),
+            "rigidity": np.asarray(
+                [self._current_observation_rigidity()], dtype=np.float32
+            ),
         }
 
     def step(self, action):

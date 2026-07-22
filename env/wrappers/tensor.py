@@ -50,6 +50,8 @@ class TensorWrapper(gym.Wrapper):
 				)
 				if "action_mask" in obs:
 					graph.action_mask = obs["action_mask"].bool()
+				if "rigidity" in obs:
+					graph.rigidity = obs["rigidity"].float().reshape(1)
 				return graph
 		else:
 			obs = self._try_f32_tensor(obs)

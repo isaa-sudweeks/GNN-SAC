@@ -6,7 +6,7 @@ from torch_geometric.nn import global_add_pool, global_mean_pool
 
 from common import math 
 from common import gnn_layers
-from common.graph_transforms import physical_node_mask, policy_action_mask
+from common.graph_transforms import graph_input_dim, physical_node_mask, policy_action_mask
 from common import mlp_layers as layers 
 
 class GNNActorCritic(nn.Module):
@@ -28,9 +28,13 @@ class GNNActorCritic(nn.Module):
         actor_mpl_dims = [cfg.embedding_dim] if shared_mpl_dims is None else shared_mpl_dims
         critic_mpl_dims = [cfg.Q_output_dim] if shared_mpl_dims is None else shared_mpl_dims
         skip_connections = getattr(cfg, "mpl_skip_connections", True)
+        gnn_obs_dim = graph_input_dim(
+            cfg.obs_dim,
+            use_virtual_node=bool(getattr(cfg, "use_virtual_node", False)),
+        )
 
         self._pi = gnn_layers.GNN(
-            cfg.obs_dim, hidden_channels=message_hidden, mpl_dims=actor_mpl_dims,
+            gnn_obs_dim, hidden_channels=message_hidden, mpl_dims=actor_mpl_dims,
             dropout=cfg.dropout, skip_connections=skip_connections
         )
 
@@ -41,7 +45,7 @@ class GNNActorCritic(nn.Module):
 
         self._Qs = layers.Ensemble(
             [gnn_layers.Q_GNN(
-                cfg.obs_dim + cfg.action_dim, hidden_channels=message_hidden,
+                gnn_obs_dim + cfg.action_dim, hidden_channels=message_hidden,
                 head_hidden_dims=cfg.head_hidden_dims, mpl_dims=critic_mpl_dims,
                 dropout=cfg.dropout, skip_connections=skip_connections
             ) for _ in range(int(cfg.num_q))]
@@ -130,12 +134,17 @@ class GNNActorCritic(nn.Module):
         node_action = action.new_zeros((obs.x.size(0), action.size(-1)))
         if action.size(0) == obs.x.size(0):
             node_action[action_mask] = action[action_mask]
+        elif action.size(0) == int(pool_mask.sum()):
+            # Replay stores one row per physical node, including zero-padded
+            # passive-node actions, while virtual nodes exist only at sampling.
+            node_action[pool_mask] = action
         elif action.size(0) == int(action_mask.sum()):
             node_action[action_mask] = action
         else:
             raise ValueError(
                 f"Got {action.size(0)} node actions for {int(action_mask.sum())} "
-                f"actuated nodes and {obs.x.size(0)} total nodes."
+                f"actuated nodes, {int(pool_mask.sum())} physical nodes, and "
+                f"{obs.x.size(0)} total nodes."
             )
         q_values = qnet(
             torch.cat([obs.x, node_action], dim=-1),

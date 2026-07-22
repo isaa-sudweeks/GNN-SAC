@@ -45,12 +45,14 @@ def cfg() -> SimpleNamespace:
         log_std_min=-10.0,
         log_std_max=2.0,
         tau=0.005,
+        use_virtual_node=True,
     )
 
 
 class VirtualNodeTest(unittest.TestCase):
-    def test_pyg_transform_adds_masked_zero_node_without_mutating_source(self):
+    def test_pyg_transform_adds_rigidity_virtual_node_without_mutating_source(self):
         original = graph(4)
+        original.rigidity = torch.tensor([0.625])
         prepared = prepare_graph(original, use_virtual_node=True)
 
         self.assertEqual(original.num_nodes, 4)
@@ -59,7 +61,12 @@ class VirtualNodeTest(unittest.TestCase):
         self.assertEqual(prepared.edge_index.size(1), original.edge_index.size(1) + 8)
         self.assertTrue(torch.equal(prepared.action_mask, torch.tensor([1, 1, 1, 1, 0], dtype=torch.bool)))
         self.assertTrue(torch.equal(prepared.physical_node_mask, torch.tensor([1, 1, 1, 1, 0], dtype=torch.bool)))
-        self.assertTrue(torch.equal(prepared.x[-1], torch.zeros(3)))
+        self.assertEqual(tuple(original.x.shape), (4, 3))
+        self.assertEqual(tuple(prepared.x.shape), (5, 5))
+        self.assertTrue(torch.equal(prepared.x[:-1, -2:], torch.zeros(4, 2)))
+        self.assertTrue(
+            torch.equal(prepared.x[-1], torch.tensor([0.0, 0.0, 0.0, 1.0, 0.625]))
+        )
 
     def test_batch_has_one_isolated_virtual_node_per_graph(self):
         prepared = [prepare_graph(graph(count), use_virtual_node=True) for count in (3, 5)]
@@ -175,6 +182,10 @@ class VirtualNodeTest(unittest.TestCase):
         )
         self.assertTrue(torch.allclose(captured_pool[0], expected_pool))
 
+        full_physical_action = torch.randn(int(pool_mask.sum()), 1)
+        full_values = model.Q(batch, full_physical_action, return_type="all")
+        self.assertEqual(full_values.shape, (2, 2))
+
     def test_two_layers_create_physical_virtual_physical_dependency(self):
         base = Data(
             x=torch.randn(2, 3),
@@ -184,12 +195,24 @@ class VirtualNodeTest(unittest.TestCase):
 
         def cross_node_gradient(depth: int) -> torch.Tensor:
             x = prepared.x.clone().requires_grad_(True)
-            model = GNN(3, hidden_channels=[6], mpl_dims=[5] * depth, skip_connections=False)
+            model = GNN(5, hidden_channels=[6], mpl_dims=[5] * depth, skip_connections=False)
             output = model(x, prepared.edge_index)
-            return torch.autograd.grad(output[1].sum(), x)[0][0]
+            return torch.autograd.grad(output[1].sum(), x)[0][0, :3]
 
         self.assertTrue(torch.equal(cross_node_gradient(1), torch.zeros(3)))
         self.assertGreater(float(cross_node_gradient(2).abs().sum()), 0.0)
+
+    def test_one_layer_broadcasts_virtual_rigidity_to_physical_nodes(self):
+        base = graph(3)
+        base.rigidity = torch.tensor([0.75])
+        prepared = prepare_graph(base, use_virtual_node=True)
+        x = prepared.x.clone().requires_grad_(True)
+        model = GNN(5, hidden_channels=[6], mpl_dims=[5], skip_connections=False)
+
+        physical_output = model(x, prepared.edge_index)[:-1].sum()
+        gradient = torch.autograd.grad(physical_output, x)[0]
+
+        self.assertGreater(float(gradient[-1, -1].abs()), 0.0)
 
 
 if __name__ == "__main__":

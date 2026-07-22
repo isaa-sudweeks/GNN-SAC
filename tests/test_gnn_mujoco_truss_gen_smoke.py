@@ -584,6 +584,14 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             env.unwrapped._node_action_to_actuator_action = fail_legacy_node_sum
             next_obs, reward, done, info = env.step(action)
             self.assertIsInstance(next_obs, Data)
+            self.assertEqual(next_obs.rigidity.shape, (1,))
+            self.assertTrue(torch.isfinite(next_obs.rigidity).all())
+            self.assertGreaterEqual(float(next_obs.rigidity.item()), 0.0)
+            self.assertAlmostEqual(
+                float(next_obs.rigidity.item()),
+                float(info["critical_eig"]) / env.unwrapped._initial_wcrm,
+                places=5,
+            )
             self.assertTrue(float(reward) == float(reward))
             self.assertIn("terminated", info)
             self.assertIn("truncated", info)
