@@ -590,14 +590,20 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
-    def test_graph_rigidity_reward_uses_raw_wcrm_metric(self):
+    def test_graph_rigidity_reward_uses_bounded_danger_zone_barrier(self):
         cfg = graph_test_cfg(
-            rigidity_weight=2.5,
+            rigidity_weight=0.0,
+            rigidity_safe_threshold=0.3,
+            rigidity_barrier_weight=2.0,
+            rigidity_barrier_power=2.0,
+            rigidity_barrier_epsilon=1e-8,
+            rigidity_barrier_max_penalty=5.0,
             forward_weight=0.0,
             energy_weight=0.0,
             alive_bonus=0.0,
             slip_weight=0.0,
-            critical_eig_threshold=0.0,
+            critical_eig_threshold=0.1,
+            collapse_penalty=7.0,
         )
         env = make_env(cfg)
         try:
@@ -615,8 +621,23 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             self.assertFalse(terminated)
             self.assertEqual(info["critical_eig"], 0.25)
             self.assertEqual(info["critical_eig_raw"], 0.25)
-            self.assertAlmostEqual(info["rigidity"], 2.5 * 0.25)
-            self.assertAlmostEqual(reward, 2.5 * 0.25)
+            expected = -2.0 * ((0.3 - 0.25) / (0.25 - 0.1 + 1e-8)) ** 2
+            self.assertAlmostEqual(info["rigidity"], expected)
+            self.assertAlmostEqual(info["rigidity_barrier"], expected)
+            self.assertAlmostEqual(reward, expected)
+
+            unwrapped.mj_model._critical_eig = lambda: 0.100001
+            reward, info, terminated = unwrapped._compute_reward(action)
+            self.assertFalse(terminated)
+            self.assertEqual(info["rigidity"], -5.0)
+            self.assertEqual(reward, -5.0)
+
+            unwrapped.mj_model._critical_eig = lambda: 0.09
+            reward, info, terminated = unwrapped._compute_reward(action)
+            self.assertTrue(terminated)
+            self.assertEqual(info["rigidity"], 0.0)
+            self.assertEqual(info["collapse_penalty"], -7.0)
+            self.assertEqual(reward, -7.0)
         finally:
             env.close()
 

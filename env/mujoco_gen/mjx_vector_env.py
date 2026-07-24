@@ -11,6 +11,7 @@ from env.mujoco_gen.topology_envs import (
     make_truss_env_config,
     resolve_truss_topology,
 )
+from env.mujoco_gen.rigidity_reward import danger_zone_rigidity_penalty
 
 
 class MjxVectorGraphEnv(gym.Env):
@@ -203,6 +204,24 @@ class MjxVectorGraphEnv(gym.Env):
                 keys, self._state, jax_actions, mask
             )
 
+        old_rigidity_reward = info["rigidity"]
+        rigidity_reward = danger_zone_rigidity_penalty(
+            info["critical_eig"],
+            collapse_threshold=float(cfg_value(self.cfg, "critical_eig_threshold")),
+            safe_threshold=float(cfg_value(self.cfg, "rigidity_safe_threshold")),
+            weight=float(cfg_value(self.cfg, "rigidity_barrier_weight")),
+            power=float(cfg_value(self.cfg, "rigidity_barrier_power")),
+            epsilon=float(cfg_value(self.cfg, "rigidity_barrier_epsilon")),
+            max_penalty=float(cfg_value(self.cfg, "rigidity_barrier_max_penalty")),
+            array_module=self._jnp,
+        )
+        rigidity_reward = self._jnp.where(
+            info["terminated_by_collapse"], 0.0, rigidity_reward
+        )
+        reward = reward - old_rigidity_reward + rigidity_reward
+        info["rigidity"] = rigidity_reward
+        info["rigidity_barrier"] = rigidity_reward
+
         observations = self._graph_observations(flat_obs, indices)
         rewards = self._to_torch(reward)
         dones = np.asarray(self._jax.device_get(done), dtype=bool)
@@ -289,3 +308,10 @@ class MjxVectorGraphEnv(gym.Env):
 
     def render(self, **kwargs):
         raise RuntimeError("The MJX vector backend does not support rendering.")
+
+
+def cfg_value(cfg, name: str):
+    """Read a required reward-shaping value with a useful error."""
+    if not hasattr(cfg, name):
+        raise ValueError(f"Missing required reward configuration value: {name}")
+    return getattr(cfg, name)

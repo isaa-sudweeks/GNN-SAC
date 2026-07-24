@@ -29,10 +29,16 @@ action_high: 1.0 # Upper bound of the normalized policy action space.
 forward_weight: 19.65175423 # Reward multiplier for commanded center-of-mass velocity.
 energy_weight: 0.1 # Penalty multiplier on squared actuator command magnitude.
 alive_bonus: 0.1 # Reward added each step while the structure remains valid.
-rigidity_weight: 0.1 # Reward multiplier for graph env worst-case rigidity metric.
+rigidity_weight: 0.0 # Legacy positive rigidity reward; kept at zero for simulator compatibility.
+rigidity_safe_threshold: 0.001 # No rigidity cost at or above this safety margin.
+rigidity_barrier_weight: 0.1 # Scale of the danger-zone rigidity penalty.
+rigidity_barrier_power: 2.0 # Curvature of the penalty as rigidity approaches collapse.
+rigidity_barrier_epsilon: 1.0e-8 # Numerical floor in the distance-to-collapse denominator.
+rigidity_barrier_max_penalty: 10.0 # Maximum per-step magnitude of the bounded barrier penalty.
 slip_weight: 0.1215063801500649 # Penalty multiplier for horizontal velocity at low-contact nodes.
 slip_height: 0.1879452990963082 # Height threshold used to decide which nodes count as ground contacts.
 critical_eig_threshold: 0.0001 # Terminate when the active rigidity metric falls below this value.
+collapse_penalty: 10.0 # One-time penalty when rigidity crosses the collapse threshold.
 
 # Flat observation/action dimensions. make_env overwrites action_dim from the Gym space.
 obs_dim: 44 # Flat default octahedron observation size (overwritten at runtime).

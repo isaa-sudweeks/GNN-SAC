@@ -1,6 +1,39 @@
 import numpy as np
 
 
+def danger_zone_rigidity_penalty(
+    critical_eig,
+    *,
+    collapse_threshold: float,
+    safe_threshold: float,
+    weight: float,
+    power: float,
+    epsilon: float,
+    max_penalty: float,
+    array_module=np,
+):
+    """Return a bounded barrier cost inside the rigidity danger zone."""
+    if safe_threshold <= collapse_threshold:
+        raise ValueError("rigidity_safe_threshold must exceed critical_eig_threshold.")
+    if weight < 0.0:
+        raise ValueError("rigidity_barrier_weight must be non-negative.")
+    if power <= 0.0:
+        raise ValueError("rigidity_barrier_power must be positive.")
+    if epsilon <= 0.0:
+        raise ValueError("rigidity_barrier_epsilon must be positive.")
+    if max_penalty < 0.0:
+        raise ValueError("rigidity_barrier_max_penalty must be non-negative.")
+
+    xp = array_module
+    eig = xp.asarray(critical_eig)
+    distance_into_zone = xp.maximum(safe_threshold - eig, 0.0)
+    distance_from_collapse = xp.maximum(eig - collapse_threshold, 0.0)
+    ratio = distance_into_zone / (distance_from_collapse + epsilon)
+    penalty = -weight * xp.power(ratio, power)
+    penalty = xp.maximum(penalty, -max_penalty)
+    return xp.where(eig >= safe_threshold, 0.0, penalty)
+
+
 class WorstCaseRigidityRewardMixin:
     """Use mujoco-truss-gen's raw WCRM rigidity value for graph rewards."""
 
@@ -52,8 +85,19 @@ class WorstCaseRigidityRewardMixin:
             / max(float(self.mj_model.initial_bounding_box_diagonal), 1e-8)
         )
         energy_reward = -self.config.energy_weight * energy_penalty
-        rigidity_reward = self.config.rigidity_weight * critical_eig
-        if terminated and self.config.zero_rigidity_reward_on_termination:
+        source_config = self.source_config
+        rigidity_reward = float(
+            danger_zone_rigidity_penalty(
+                critical_eig,
+                collapse_threshold=float(self.config.critical_eig_threshold),
+                safe_threshold=float(source_config.rigidity_safe_threshold),
+                weight=float(source_config.rigidity_barrier_weight),
+                power=float(source_config.rigidity_barrier_power),
+                epsilon=float(source_config.rigidity_barrier_epsilon),
+                max_penalty=float(source_config.rigidity_barrier_max_penalty),
+            )
+        )
+        if terminated:
             rigidity_reward = 0.0
         slip_reward = -self.config.slip_weight * slip_penalty
         alive_reward = float(self.config.alive_bonus)
@@ -77,6 +121,7 @@ class WorstCaseRigidityRewardMixin:
             "alive": alive_reward,
             "energy": energy_reward,
             "rigidity": rigidity_reward,
+            "rigidity_barrier": rigidity_reward,
             "slip": slip_reward,
             "critical_eig": critical_eig,
             "critical_eig_raw": critical_eig_raw,
