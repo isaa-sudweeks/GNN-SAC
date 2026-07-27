@@ -14,6 +14,23 @@ except ImportError:
     Data = ()
 
 REWARD_INFO_EXCLUDE_KEYS = {"success", "terminated", "truncated"}
+REWARD_MINIMUM_KEYS = {"critical_eig", "critical_eig_raw"}
+REWARD_PER_STEP_KEYS = {
+    "forward",
+    "forward_velocity",
+    "forward_velocity_raw",
+    "com_delta_x",
+    "alive",
+    "energy",
+    "energy_penalty_raw",
+    "rigidity",
+    "rigidity_barrier",
+    "slip",
+    "slip_penalty_raw",
+    "critical_eig",
+    "critical_eig_raw",
+    "collapse_penalty",
+}
 
 
 class OnlineTrainer(Trainer):
@@ -170,12 +187,37 @@ class OnlineTrainer(Trainer):
                 continue
             if np.isfinite(value):
                 components[key] = value
+        for reward_key, raw_key, weight_name in (
+            ("energy", "energy_penalty_raw", "energy_weight"),
+            ("slip", "slip_penalty_raw", "slip_weight"),
+        ):
+            if raw_key in components or reward_key not in components:
+                continue
+            weight = float(getattr(self.cfg, weight_name, 0.0))
+            if weight > 0.0:
+                components[raw_key] = -components[reward_key] / weight
         return components
 
     def _accumulate_reward_components(self, info):
         for key, value in self._extract_reward_components(info).items():
             current_value = self._episode_reward_components.get(key, 0.0)
             self._episode_reward_components[key] = current_value + value
+            if key in REWARD_MINIMUM_KEYS:
+                minimum_key = f"episode_min_{key}"
+                self._episode_reward_components[minimum_key] = min(
+                    self._episode_reward_components.get(minimum_key, value),
+                    value,
+                )
+
+    @staticmethod
+    def _finalize_reward_components(components, episode_length):
+        metrics = dict(components)
+        if episode_length <= 0:
+            return metrics
+        for key in REWARD_PER_STEP_KEYS:
+            if key in components:
+                metrics[f"{key}_per_step"] = components[key] / episode_length
+        return metrics
 
     @staticmethod
     def _crossed_eval_interval(previous_step, current_step, eval_freq):
@@ -211,9 +253,12 @@ class OnlineTrainer(Trainer):
 
     def _eval_one(self, task_idx=None, video_key="videos/eval_video"):
         ep_rewards, ep_successes, ep_lengths = [], [], []
+        episode_component_metrics = []
         for i in range(self.cfg.eval_episodes):
             obs = self.eval_env.reset(task_idx=task_idx) if task_idx is not None else self.eval_env.reset()
             done, ep_reward, t = False, 0, 0
+            previous_components = self._episode_reward_components
+            self._episode_reward_components = {}
             if self.cfg.save_video:
                 self.logger.video.init(self.eval_env, enabled=(i==0))
             while not done:
@@ -223,22 +268,47 @@ class OnlineTrainer(Trainer):
                 obs, reward, done, info = self.eval_env.step(action)
                 ep_reward += reward
                 t += 1
+                self._accumulate_reward_components(info)
                 if self.cfg.save_video:
                     self.logger.video.record(self.eval_env)
+            episode_component_metrics.append(
+                self._finalize_reward_components(self._episode_reward_components, t)
+            )
+            self._episode_reward_components = previous_components
             ep_rewards.append(self._scalar_value(ep_reward))
             ep_successes.append(self._scalar_value(info['success']))
             ep_lengths.append(t)
             if self.cfg.save_video:
                 self.logger.video.save(self._step, key=video_key)
-        return dict(
+        metrics = dict(
             episode_reward=np.nanmean(ep_rewards),
             episode_success=np.nanmean(ep_successes),
             episode_length=np.nanmean(ep_lengths),
         )
+        component_keys = sorted(
+            {key for episode_metrics in episode_component_metrics for key in episode_metrics}
+        )
+        for key in component_keys:
+            values = [
+                episode_metrics[key]
+                for episode_metrics in episode_component_metrics
+                if key in episode_metrics
+            ]
+            metrics[f"reward/{key}"] = np.nanmean(values)
+        return metrics
+
+    @staticmethod
+    def _merge_grouped_eval_metrics(metrics, grouped_metrics, group_key, aggregate):
+        for key, value in grouped_metrics.items():
+            if key in {"episode_reward", "episode_success", "episode_length"}:
+                continue
+            metrics[f"{group_key}/{key}"] = value
+            aggregate.setdefault(key, []).append(value)
 
     def _eval_multitask(self):
         metrics = {}
         task_rewards, task_successes, task_lengths = [], [], []
+        aggregate = {}
         for task_idx in range(int(getattr(self.eval_env, "num_envs", 1))):
             task_name = self._eval_task_name(task_idx)
             task_key = self._metric_key(task_name)
@@ -249,6 +319,7 @@ class OnlineTrainer(Trainer):
             metrics[f"{task_key}_episode_reward"] = task_metrics["episode_reward"]
             metrics[f"{task_key}_episode_success"] = task_metrics["episode_success"]
             metrics[f"{task_key}_episode_length"] = task_metrics["episode_length"]
+            self._merge_grouped_eval_metrics(metrics, task_metrics, task_key, aggregate)
             task_rewards.append(task_metrics["episode_reward"])
             task_successes.append(task_metrics["episode_success"])
             task_lengths.append(task_metrics["episode_length"])
@@ -257,6 +328,7 @@ class OnlineTrainer(Trainer):
             episode_success=np.nanmean(task_successes),
             episode_length=np.nanmean(task_lengths),
         )
+        metrics.update({key: np.nanmean(values) for key, values in aggregate.items()})
         return metrics
 
     def _eval_topology_buckets(self):
@@ -266,6 +338,7 @@ class OnlineTrainer(Trainer):
     def _eval_topologies(self, topology_indices):
         metrics = {}
         topology_rewards, topology_successes, topology_lengths = [], [], []
+        aggregate = {}
         for topology, env_idx in topology_indices.items():
             topology_key = self._metric_key(topology)
             topology_metrics = self._eval_one(
@@ -275,6 +348,9 @@ class OnlineTrainer(Trainer):
             metrics[f"{topology_key}_episode_reward"] = topology_metrics["episode_reward"]
             metrics[f"{topology_key}_episode_success"] = topology_metrics["episode_success"]
             metrics[f"{topology_key}_episode_length"] = topology_metrics["episode_length"]
+            self._merge_grouped_eval_metrics(
+                metrics, topology_metrics, topology_key, aggregate
+            )
             topology_rewards.append(topology_metrics["episode_reward"])
             topology_successes.append(topology_metrics["episode_success"])
             topology_lengths.append(topology_metrics["episode_length"])
@@ -283,6 +359,7 @@ class OnlineTrainer(Trainer):
             episode_success=np.nanmean(topology_successes),
             episode_length=np.nanmean(topology_lengths),
         )
+        metrics.update({key: np.nanmean(values) for key, values in aggregate.items()})
         return metrics
 
     def _activate_shared_eval_env(self, env_idx):
@@ -630,7 +707,12 @@ class OnlineTrainer(Trainer):
                             episode=self._ep_idx,
                             episode_length=len(self._tds) - 1,
                         )
-                        reward_metrics.update(self._episode_reward_components)
+                        reward_metrics.update(
+                            self._finalize_reward_components(
+                                self._episode_reward_components,
+                                len(self._tds) - 1,
+                            )
+                        )
                         self.logger.log(reward_metrics, 'training_rewards')
                 obs = self._apply_observation_noise(self.env.reset())
                 self._tds = [self.to_td(obs)]
@@ -729,7 +811,12 @@ class OnlineTrainer(Trainer):
                                 episode_length=len(episode_tds[env_idx]) - 1,
                                 episode_env_idx=env_idx,
                             )
-                            reward_metrics.update(reward_components[env_idx])
+                            reward_metrics.update(
+                                self._finalize_reward_components(
+                                    reward_components[env_idx],
+                                    len(episode_tds[env_idx]) - 1,
+                                )
+                            )
                             self.logger.log(reward_metrics, 'training_rewards')
                 self._episode_reward_components = previous_components
 

@@ -221,6 +221,12 @@ class MjxVectorGraphEnv(gym.Env):
         reward = reward - old_rigidity_reward + rigidity_reward
         info["rigidity"] = rigidity_reward
         info["rigidity_barrier"] = rigidity_reward
+        info["energy_penalty_raw"] = self._jnp.sum(
+            self._jnp.square(jax_actions), axis=-1
+        )
+        slip_weight = float(cfg_value(self.cfg, "slip_weight"))
+        if slip_weight > 0.0:
+            info["slip_penalty_raw"] = -info["slip"] / slip_weight
 
         observations = self._graph_observations(flat_obs, indices)
         rewards = self._to_torch(reward)
