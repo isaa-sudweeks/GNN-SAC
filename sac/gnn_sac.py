@@ -1,3 +1,4 @@
+import contextlib
 from collections.abc import Sequence
 import re
 
@@ -406,43 +407,55 @@ class GNNSAC(torch.nn.Module):
             task_gradients,
         )
 
-    def update(self, buffer, compute_diagnostics=False):
+    def update(self, buffer, compute_diagnostics=False, performance_profiler=None):
         pcgrad_enabled = bool(getattr(self.cfg, "pcgrad", False))
-        if hasattr(buffer, "sample_with_tasks"):
-            replay_batch = buffer.sample_with_tasks()
-            obs, action, reward, terminated, next_obs = replay_batch.combined
-            task_batches = replay_batch.by_task
-        else:
-            if pcgrad_enabled:
-                raise ValueError(
-                    "pcgrad=true requires replay batches grouped by task via sample_with_tasks()."
-                )
-            obs, action, reward, terminated, next_obs = buffer.sample()
-            task_batches = None
+        sampling_phase = (
+            performance_profiler.phase("replay_sampling")
+            if performance_profiler is not None
+            else contextlib.nullcontext()
+        )
+        with sampling_phase:
+            if hasattr(buffer, "sample_with_tasks"):
+                replay_batch = buffer.sample_with_tasks()
+                obs, action, reward, terminated, next_obs = replay_batch.combined
+                task_batches = replay_batch.by_task
+            else:
+                if pcgrad_enabled:
+                    raise ValueError(
+                        "pcgrad=true requires replay batches grouped by task via sample_with_tasks()."
+                    )
+                obs, action, reward, terminated, next_obs = buffer.sample()
+                task_batches = None
        # if self.device.type == 'cuda':
        #     torch.compiler.cudagraph_mark_step_begin()
         
-        self.model.train()
-        if pcgrad_enabled:
-            q_loss, q_grad_norm, q_task_gradients = self._pcgrad_q_update(task_batches)
-            pi_info, pi_task_gradients = self._pcgrad_pi_and_alpha_update(task_batches)
-            diagnostics = (
-                self._gradient_metrics(
-                    {"critic": q_task_gradients, "actor": pi_task_gradients}
+        optimization_phase = (
+            performance_profiler.phase("optimization")
+            if performance_profiler is not None
+            else contextlib.nullcontext()
+        )
+        with optimization_phase:
+            self.model.train()
+            if pcgrad_enabled:
+                q_loss, q_grad_norm, q_task_gradients = self._pcgrad_q_update(task_batches)
+                pi_info, pi_task_gradients = self._pcgrad_pi_and_alpha_update(task_batches)
+                diagnostics = (
+                    self._gradient_metrics(
+                        {"critic": q_task_gradients, "actor": pi_task_gradients}
+                    )
+                    if compute_diagnostics
+                    else None
                 )
-                if compute_diagnostics
-                else None
-            )
-        else:
-            diagnostics = (
-                self._gradient_diagnostics(task_batches)
-                if compute_diagnostics and task_batches is not None
-                else None
-            )
-            q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
-            pi_info = self.update_pi_and_alpha(obs)
-        self.model.soft_update_target_Q()
-        self.model.eval()
+            else:
+                diagnostics = (
+                    self._gradient_diagnostics(task_batches)
+                    if compute_diagnostics and task_batches is not None
+                    else None
+                )
+                q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
+                pi_info = self.update_pi_and_alpha(obs)
+            self.model.soft_update_target_Q()
+            self.model.eval()
 
         info = {
             "value_loss": q_loss,

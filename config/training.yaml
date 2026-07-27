@@ -39,3 +39,11 @@ wandb_entity: null # Optional W&B entity/team; null uses the local default.
 wandb_name: ${exp_name}-${seed} # W&B run name.
 wandb_silent: true # Whether to silence W&B console output.
 set_wandb_offline: false # Whether to force W&B into offline mode for this run.
+
+# Bounded performance profiling
+profiling:
+  enabled: false # Enable synchronized phase timing over a bounded vector-step window.
+  warmup_vector_steps: 10 # Vector steps to skip before measurement; independent of seed_steps.
+  active_vector_steps: 100 # Number of vector steps to measure before writing the summary.
+  trace_enabled: false # Also export a detailed PyTorch Chrome trace for policy/learner work.
+  output_dir: profiling # Profiling artifact directory, relative to work_dir unless absolute.
