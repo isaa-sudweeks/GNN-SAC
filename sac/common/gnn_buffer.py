@@ -1,3 +1,4 @@
+import contextlib
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Mapping
@@ -91,21 +92,53 @@ class _GNNTaskBuffer:
         self._num_eps += int(bool(count_episode))
         return self._num_eps
 
-    def sample(self):
+    def sample(self, performance_profiler=None):
         if self._size < self._batch_size:
             raise ValueError(f"Replay buffer has {self._size} transitions, need batch_size={self._batch_size}.")
 
-        idx = torch.randint(self._size, (self._batch_size,), device=self._storage_device).tolist()
-        use_virtual_node = bool(getattr(self.cfg, "use_virtual_node", False))
-        obs = Batch.from_data_list([
-            prepare_graph(self._obs[i], use_virtual_node=use_virtual_node) for i in idx
-        ]).to(self._device, non_blocking=True)
-        next_obs = Batch.from_data_list([
-            prepare_graph(self._next_obs[i], use_virtual_node=use_virtual_node) for i in idx
-        ]).to(self._device, non_blocking=True)
-        action = torch.cat([self._action[i] for i in idx], dim=0).to(self._device, non_blocking=True)
-        reward = torch.stack([self._reward[i] for i in idx], dim=0).to(self._device, non_blocking=True)
-        terminated = torch.stack([self._terminated[i] for i in idx], dim=0).to(self._device, non_blocking=True)
+        subphase = (
+            performance_profiler.subphase
+            if performance_profiler is not None
+            else lambda _name: contextlib.nullcontext()
+        )
+        with subphase("balanced_gather"):
+            idx = torch.randint(
+                self._size,
+                (self._batch_size,),
+                device=self._storage_device,
+            ).tolist()
+            raw_obs = [self._obs[i] for i in idx]
+            raw_next_obs = [self._next_obs[i] for i in idx]
+            actions = [self._action[i] for i in idx]
+            rewards = [self._reward[i] for i in idx]
+            terminations = [self._terminated[i] for i in idx]
+
+        with subphase("graph_preparation"):
+            use_virtual_node = bool(getattr(self.cfg, "use_virtual_node", False))
+            prepared_obs = [
+                prepare_graph(graph, use_virtual_node=use_virtual_node)
+                for graph in raw_obs
+            ]
+            prepared_next_obs = [
+                prepare_graph(graph, use_virtual_node=use_virtual_node)
+                for graph in raw_next_obs
+            ]
+
+        with subphase("task_collation_transfer"):
+            obs = Batch.from_data_list(prepared_obs).to(
+                self._device,
+                non_blocking=True,
+            )
+            next_obs = Batch.from_data_list(prepared_next_obs).to(
+                self._device,
+                non_blocking=True,
+            )
+            action = torch.cat(actions, dim=0).to(self._device, non_blocking=True)
+            reward = torch.stack(rewards, dim=0).to(self._device, non_blocking=True)
+            terminated = torch.stack(terminations, dim=0).to(
+                self._device,
+                non_blocking=True,
+            )
         return obs, action, reward, terminated, next_obs
 
     def _graph_sequence(self, obs):
@@ -260,13 +293,20 @@ class GNNBuffer:
         self._buffers[task].add(td, count_episode=count_episode)
         return self.num_eps
 
-    def sample_task_batches(self):
+    supports_replay_profiling = True
+
+    def sample_task_batches(self, performance_profiler=None):
         if not self.ready:
             sizes = ", ".join(f"{task}={size}" for task, size in self.sizes_by_task.items())
             raise ValueError(
                 f"Every task replay buffer needs {self._batch_size_per_task} transitions; got {sizes}."
             )
-        return {task: self._buffers[task].sample() for task in self.task_names}
+        return {
+            task: self._buffers[task].sample(
+                performance_profiler=performance_profiler
+            )
+            for task in self.task_names
+        }
 
     @staticmethod
     def combine_task_batches(by_task):
@@ -284,9 +324,18 @@ class GNNBuffer:
         terminated = torch.cat([batch[3] for batch in batches], dim=0)
         return observations, actions, rewards, terminated, next_observations
 
-    def sample_with_tasks(self):
-        by_task = self.sample_task_batches()
-        return ReplayBatch(combined=self.combine_task_batches(by_task), by_task=by_task)
+    def sample_with_tasks(self, performance_profiler=None):
+        by_task = self.sample_task_batches(
+            performance_profiler=performance_profiler
+        )
+        subphase = (
+            performance_profiler.subphase("combined_reconstruction")
+            if performance_profiler is not None
+            else contextlib.nullcontext()
+        )
+        with subphase:
+            combined = self.combine_task_batches(by_task)
+        return ReplayBatch(combined=combined, by_task=by_task)
 
     def sample(self):
         return self.sample_with_tasks().combined

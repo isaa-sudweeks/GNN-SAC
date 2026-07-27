@@ -416,7 +416,12 @@ class GNNSAC(torch.nn.Module):
         )
         with sampling_phase:
             if hasattr(buffer, "sample_with_tasks"):
-                replay_batch = buffer.sample_with_tasks()
+                if getattr(buffer, "supports_replay_profiling", False):
+                    replay_batch = buffer.sample_with_tasks(
+                        performance_profiler=performance_profiler
+                    )
+                else:
+                    replay_batch = buffer.sample_with_tasks()
                 obs, action, reward, terminated, next_obs = replay_batch.combined
                 task_batches = replay_batch.by_task
             else:

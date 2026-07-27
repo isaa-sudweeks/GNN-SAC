@@ -55,6 +55,7 @@ class TrainingProfiler:
         self.synchronize = synchronize or self._default_synchronize
 
         self._samples: dict[str, list[float]] = defaultdict(list)
+        self._subsamples: dict[str, list[float]] = defaultdict(list)
         self._vector_steps_seen = 0
         self._measured_vector_steps = 0
         self._measured_transitions = 0
@@ -75,6 +76,18 @@ class TrainingProfiler:
         output_dir = Path(output_dir)
         if not output_dir.is_absolute():
             output_dir = Path(_get(cfg, "work_dir", ".")) / output_dir
+        backend = str(_get(cfg, "mujoco_backend", "mujoco"))
+        task = str(_get(cfg, "task", ""))
+        multitask = bool(_get(cfg, "multitask", False))
+        truss_topologies = list(_get(cfg, "truss_topologies", None) or [])
+        if backend.lower() == "mjx" and len(truss_topologies) > 1:
+            base_task = task.split(":", 1)[0]
+            task_names = [f"{base_task}:{topology}" for topology in truss_topologies]
+        elif multitask:
+            task_names = [str(name) for name in (_get(cfg, "tasks", None) or [])]
+        else:
+            task_names = [task]
+        task_names = list(dict.fromkeys(task_names))
         return cls(
             enabled=bool(_get(profile_cfg, "enabled", False)),
             warmup_vector_steps=int(_get(profile_cfg, "warmup_vector_steps", 10)),
@@ -84,15 +97,18 @@ class TrainingProfiler:
             logger=logger,
             metadata={
                 "device": str(_get(cfg, "device", "cpu")),
-                "backend": str(_get(cfg, "mujoco_backend", "mujoco")),
+                "backend": backend,
                 "num_envs": int(_get(cfg, "num_envs", 1)),
                 "batch_size": int(_get(cfg, "batch_size", 0)),
                 "replay_ratio": float(_get(cfg, "replay_ratio", 0.0)),
                 "update_every_vector_steps": int(
                     _get(cfg, "update_every_vector_steps", 1)
                 ),
-                "task": str(_get(cfg, "task", "")),
-                "truss_topologies": list(_get(cfg, "truss_topologies", None) or []),
+                "task": task,
+                "multitask": multitask,
+                "task_count": len(task_names),
+                "task_names": task_names,
+                "truss_topologies": truss_topologies,
             },
             device=_get(cfg, "device", "cpu"),
         )
@@ -163,6 +179,25 @@ class TrainingProfiler:
                 self.synchronize()
                 self._samples[name].append(self.clock() - started_at)
 
+    @contextmanager
+    def subphase(self, name: str) -> Iterator[None]:
+        """Time a replay subphase without double-counting the hot path."""
+        if not self._active:
+            yield
+            return
+        with ExitStack() as stack:
+            if self._torch_profiler is not None:
+                stack.enter_context(
+                    torch.profiler.record_function(f"training/replay_sampling/{name}")
+                )
+            self.synchronize()
+            started_at = self.clock()
+            try:
+                yield
+            finally:
+                self.synchronize()
+                self._subsamples[name].append(self.clock() - started_at)
+
     def _start_trace(self) -> None:
         activities = [torch.profiler.ProfilerActivity.CPU]
         if self.device.type == "cuda" and torch.cuda.is_available():
@@ -217,6 +252,21 @@ class TrainingProfiler:
             for name, samples in sorted(self._samples.items())
             if samples
         }
+        replay_sampling_total = sum(self._samples.get("replay_sampling", ()))
+        replay_subphases = {
+            name: {
+                **self._phase_statistics(
+                    samples,
+                    replay_sampling_total,
+                    included_in_hot_path=True,
+                ),
+                "parent_phase": "replay_sampling",
+            }
+            for name, samples in sorted(self._subsamples.items())
+            if samples
+        }
+        for stats in replay_subphases.values():
+            stats["parent_phase_percent"] = stats.pop("hot_path_percent")
         throughput = {
             "environment_transitions_per_second": (
                 self._measured_transitions / hot_path_total if hot_path_total > 0.0 else 0.0
@@ -264,6 +314,7 @@ class TrainingProfiler:
                 0.0,
             ),
             "phases": phases,
+            "replay_subphases": replay_subphases,
             "throughput": throughput,
             "trace_path": str(self._trace_path) if self._trace_path is not None else None,
         }
@@ -282,6 +333,10 @@ class TrainingProfiler:
         for name, stats in summary["phases"].items():
             for key, value in stats.items():
                 metrics[f"phase/{name}/{key}"] = value
+        for name, stats in summary["replay_subphases"].items():
+            for key, value in stats.items():
+                if isinstance(value, (float, int)):
+                    metrics[f"replay_subphase/{name}/{key}"] = value
         for key, value in summary["throughput"].items():
             metrics[f"throughput/{key}"] = value
         return metrics

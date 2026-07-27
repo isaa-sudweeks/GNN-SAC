@@ -153,6 +153,57 @@ class TrainingProfilerTest(unittest.TestCase):
             profiler = TrainingProfiler.from_config(cfg, RecordingLogger())
             self.assertEqual(profiler.output_dir, Path(tmp) / "baseline")
 
+    def test_from_config_records_multitask_metadata(self):
+        cfg = SimpleNamespace(
+            work_dir=".",
+            device="cpu",
+            mujoco_backend="mjx",
+            task="truss-graph",
+            multitask=True,
+            tasks=["legacy-a", "legacy-b"],
+            truss_topologies=["tetrahedron", "octahedron"],
+            profiling=SimpleNamespace(
+                enabled=True,
+                warmup_vector_steps=0,
+                active_vector_steps=1,
+                trace_enabled=False,
+                output_dir="profiling",
+            ),
+        )
+
+        profiler = TrainingProfiler.from_config(cfg, RecordingLogger())
+
+        self.assertTrue(profiler.metadata["multitask"])
+        self.assertEqual(profiler.metadata["task_count"], 2)
+        self.assertEqual(
+            profiler.metadata["task_names"],
+            ["truss-graph:tetrahedron", "truss-graph:octahedron"],
+        )
+
+    def test_replay_subphases_do_not_double_count_hot_path(self):
+        with TemporaryDirectory() as tmp:
+            profiler = self.make_profiler(
+                tmp,
+                warmup=0,
+                active=1,
+                clock=SequenceClock([0.0, 0.0, 2.0, 5.0]),
+            )
+
+            profiler.begin_vector_step(global_step=0)
+            with profiler.subphase("balanced_gather"):
+                pass
+            profiler.end_vector_step(
+                transitions=1,
+                optimizer_updates=0,
+                global_step=1,
+            )
+
+            summary = profiler.summary(global_step=1)
+            stats = summary["replay_subphases"]["balanced_gather"]
+            self.assertEqual(stats["total_seconds"], 2.0)
+            self.assertEqual(stats["parent_phase"], "replay_sampling")
+            self.assertEqual(summary["unattributed_hot_path_seconds"], 5.0)
+
     def test_optional_trace_is_exported(self):
         with TemporaryDirectory() as tmp:
             profiler = TrainingProfiler(

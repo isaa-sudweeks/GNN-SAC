@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -102,6 +103,40 @@ class TaskBalancedReplayTest(unittest.TestCase):
         self.assertEqual(list(replay_batch.by_task), ["truss-graph:a", "truss-graph:b"])
         self.assertEqual([batch[2].shape[0] for batch in replay_batch.by_task.values()], [2, 2])
         self.assertEqual(replay_batch.combined[2].shape[0], 4)
+
+    def test_reports_multitask_replay_subphases(self):
+        class PhaseRecorder:
+            def __init__(self):
+                self.names = []
+
+            @contextmanager
+            def subphase(self, name):
+                self.names.append(name)
+                yield
+
+        buffer = GNNBuffer(cfg())
+        for task, markers in (
+            ("truss-graph:a", (1, 2)),
+            ("truss-graph:b", (11, 12)),
+        ):
+            for marker in markers:
+                buffer.add(transition(marker), task=task)
+        profiler = PhaseRecorder()
+
+        buffer.sample_with_tasks(performance_profiler=profiler)
+
+        self.assertEqual(
+            profiler.names,
+            [
+                "balanced_gather",
+                "graph_preparation",
+                "task_collation_transfer",
+                "balanced_gather",
+                "graph_preparation",
+                "task_collation_transfer",
+                "combined_reconstruction",
+            ],
+        )
 
     def test_multi_task_insert_requires_task(self):
         with self.assertRaisesRegex(ValueError, "explicit task"):
