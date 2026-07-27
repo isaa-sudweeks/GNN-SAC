@@ -175,6 +175,31 @@ class VirtualNodeTest(unittest.TestCase):
         )
         self.assertTrue(torch.allclose(captured_pool[0], expected_pool))
 
+    def test_critic_accepts_physical_node_replay_actions_with_virtual_nodes(self):
+        first = graph(3)
+        first.action_mask = torch.tensor([True, False, True])
+        second = graph(4)
+        second.action_mask = torch.tensor([False, True, True, True])
+        batch = Batch.from_data_list([
+            prepare_graph(first, use_virtual_node=True),
+            prepare_graph(second, use_virtual_node=True),
+        ])
+        model = GNNActorCritic(cfg())
+        action = torch.arange(1, 8, dtype=torch.float32).unsqueeze(-1)
+        captured_input = []
+        critic = model._Qs.modules_list[0]
+        input_hook = critic.register_forward_pre_hook(
+            lambda module, args: captured_input.append(args[0].detach().clone())
+        )
+        try:
+            values = model.Q(batch, action, return_type="all")
+        finally:
+            input_hook.remove()
+
+        self.assertEqual(values.shape, (2, 2))
+        expected = torch.tensor([1, 0, 3, 0, 0, 5, 6, 7, 0], dtype=torch.float32)
+        self.assertTrue(torch.equal(captured_input[0][:, -1], expected))
+
     def test_two_layers_create_physical_virtual_physical_dependency(self):
         base = Data(
             x=torch.randn(2, 3),

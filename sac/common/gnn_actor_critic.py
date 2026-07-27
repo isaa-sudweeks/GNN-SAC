@@ -130,6 +130,8 @@ class GNNActorCritic(nn.Module):
         node_action = action.new_zeros((obs.x.size(0), action.size(-1)))
         if action.size(0) == obs.x.size(0):
             node_action[action_mask] = action[action_mask]
+        elif action.size(0) == int(pool_mask.sum()):
+            node_action[action_mask] = action[action_mask[pool_mask]]
         elif action.size(0) == int(action_mask.sum()):
             node_action[action_mask] = action
         else:
