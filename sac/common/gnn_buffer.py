@@ -16,6 +16,17 @@ class ReplayBatch:
     by_task: Mapping[str, tuple]
 
 
+@dataclass(frozen=True)
+class _RawReplaySample:
+    """Prepared CPU replay values awaiting PyG collation and device transfer."""
+
+    observations: list[Data]
+    actions: list[torch.Tensor]
+    rewards: list[torch.Tensor]
+    terminated: list[torch.Tensor]
+    next_observations: list[Data]
+
+
 class _GNNTaskBuffer:
     """Circular replay buffer for graph observations and node-aligned actions."""
 
@@ -92,7 +103,7 @@ class _GNNTaskBuffer:
         self._num_eps += int(bool(count_episode))
         return self._num_eps
 
-    def sample(self, performance_profiler=None):
+    def sample_raw(self, performance_profiler=None):
         if self._size < self._batch_size:
             raise ValueError(f"Replay buffer has {self._size} transitions, need batch_size={self._batch_size}.")
 
@@ -124,22 +135,44 @@ class _GNNTaskBuffer:
                 for graph in raw_next_obs
             ]
 
-        with subphase("task_collation_transfer"):
-            obs = Batch.from_data_list(prepared_obs).to(
+        return _RawReplaySample(
+            observations=prepared_obs,
+            actions=actions,
+            rewards=rewards,
+            terminated=terminations,
+            next_observations=prepared_next_obs,
+        )
+
+    def sample(self, performance_profiler=None):
+        """Preserve direct task-buffer sampling for compatibility."""
+        raw = self.sample_raw(performance_profiler=performance_profiler)
+        subphase = (
+            performance_profiler.subphase("task_collation_transfer")
+            if performance_profiler is not None
+            else contextlib.nullcontext()
+        )
+        with subphase:
+            observations = Batch.from_data_list(raw.observations).to(
                 self._device,
                 non_blocking=True,
             )
-            next_obs = Batch.from_data_list(prepared_next_obs).to(
+            next_observations = Batch.from_data_list(raw.next_observations).to(
                 self._device,
                 non_blocking=True,
             )
-            action = torch.cat(actions, dim=0).to(self._device, non_blocking=True)
-            reward = torch.stack(rewards, dim=0).to(self._device, non_blocking=True)
-            terminated = torch.stack(terminations, dim=0).to(
+            actions = torch.cat(raw.actions, dim=0).to(
                 self._device,
                 non_blocking=True,
             )
-        return obs, action, reward, terminated, next_obs
+            rewards = torch.stack(raw.rewards, dim=0).to(
+                self._device,
+                non_blocking=True,
+            )
+            terminated = torch.stack(raw.terminated, dim=0).to(
+                self._device,
+                non_blocking=True,
+            )
+        return observations, actions, rewards, terminated, next_observations
 
     def _graph_sequence(self, obs):
         if isinstance(obs, Batch):
@@ -295,17 +328,78 @@ class GNNBuffer:
 
     supports_replay_profiling = True
 
-    def sample_task_batches(self, performance_profiler=None):
+    def _sample_raw_by_task(self, performance_profiler=None):
         if not self.ready:
             sizes = ", ".join(f"{task}={size}" for task, size in self.sizes_by_task.items())
             raise ValueError(
                 f"Every task replay buffer needs {self._batch_size_per_task} transitions; got {sizes}."
             )
         return {
-            task: self._buffers[task].sample(
+            task: self._buffers[task].sample_raw(
                 performance_profiler=performance_profiler
             )
             for task in self.task_names
+        }
+
+    def _collate_raw_samples(
+        self,
+        samples,
+        *,
+        performance_profiler=None,
+        subphase_name,
+    ):
+        samples = list(samples)
+        if not samples:
+            raise ValueError("Cannot collate an empty set of replay samples.")
+        subphase = (
+            performance_profiler.subphase(subphase_name)
+            if performance_profiler is not None
+            else contextlib.nullcontext()
+        )
+        with subphase:
+            observations = Batch.from_data_list(
+                [
+                    graph
+                    for sample in samples
+                    for graph in sample.observations
+                ]
+            ).to(self.cfg.device, non_blocking=True)
+            next_observations = Batch.from_data_list(
+                [
+                    graph
+                    for sample in samples
+                    for graph in sample.next_observations
+                ]
+            ).to(self.cfg.device, non_blocking=True)
+            actions = torch.cat(
+                [action for sample in samples for action in sample.actions],
+                dim=0,
+            ).to(self.cfg.device, non_blocking=True)
+            rewards = torch.stack(
+                [reward for sample in samples for reward in sample.rewards],
+                dim=0,
+            ).to(self.cfg.device, non_blocking=True)
+            terminated = torch.stack(
+                [
+                    value
+                    for sample in samples
+                    for value in sample.terminated
+                ],
+                dim=0,
+            ).to(self.cfg.device, non_blocking=True)
+        return observations, actions, rewards, terminated, next_observations
+
+    def sample_task_batches(self, performance_profiler=None):
+        raw_by_task = self._sample_raw_by_task(
+            performance_profiler=performance_profiler
+        )
+        return {
+            task: self._collate_raw_samples(
+                [sample],
+                performance_profiler=performance_profiler,
+                subphase_name="task_collation_transfer",
+            )
+            for task, sample in raw_by_task.items()
         }
 
     @staticmethod
@@ -325,20 +419,33 @@ class GNNBuffer:
         return observations, actions, rewards, terminated, next_observations
 
     def sample_with_tasks(self, performance_profiler=None):
-        by_task = self.sample_task_batches(
+        raw_by_task = self._sample_raw_by_task(
             performance_profiler=performance_profiler
         )
-        subphase = (
-            performance_profiler.subphase("combined_reconstruction")
-            if performance_profiler is not None
-            else contextlib.nullcontext()
+        combined = self._collate_raw_samples(
+            raw_by_task.values(),
+            performance_profiler=performance_profiler,
+            subphase_name="combined_collation_transfer",
         )
-        with subphase:
-            combined = self.combine_task_batches(by_task)
+        by_task = {
+            task: self._collate_raw_samples(
+                [sample],
+                performance_profiler=performance_profiler,
+                subphase_name="task_collation_transfer",
+            )
+            for task, sample in raw_by_task.items()
+        }
         return ReplayBatch(combined=combined, by_task=by_task)
 
-    def sample(self):
-        return self.sample_with_tasks().combined
+    def sample(self, performance_profiler=None):
+        raw_by_task = self._sample_raw_by_task(
+            performance_profiler=performance_profiler
+        )
+        return self._collate_raw_samples(
+            raw_by_task.values(),
+            performance_profiler=performance_profiler,
+            subphase_name="combined_collation_transfer",
+        )
 
     def state_dict(self):
         return {

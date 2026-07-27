@@ -14,14 +14,21 @@ for path in (ROOT, SAC_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from common.gnn_buffer import GNNBuffer
+from common.gnn_buffer import GNNBuffer, ReplayBatch
 from gnn_sac import GNNSAC
 from trainer.online_trainer import OnlineTrainer
 
 
-def graph(marker):
-    x = torch.full((3, 3), float(marker))
-    edge_index = torch.tensor([[0, 1, 2, 1], [1, 2, 1, 0]], dtype=torch.long)
+def graph(marker, node_count=3):
+    x = torch.full((node_count, 3), float(marker))
+    nodes = torch.arange(node_count, dtype=torch.long)
+    edge_index = torch.stack(
+        [
+            torch.cat([nodes, nodes.roll(-1)]),
+            torch.cat([nodes.roll(-1), nodes]),
+        ],
+        dim=0,
+    )
     return Data(x=x, edge_index=edge_index)
 
 
@@ -41,22 +48,85 @@ def cfg(**overrides):
     return SimpleNamespace(**values)
 
 
-def transition(marker):
-    action = torch.full((1, 3, 1), float(marker))
+def transition(marker, node_count=3):
+    action = torch.full((1, node_count, 1), float(marker))
     return [
         {
-            "obs": graph(marker),
+            "obs": graph(marker, node_count),
             "action": action,
             "reward": torch.tensor([float(marker)]),
             "terminated": torch.tensor([0.0]),
         },
         {
-            "obs": graph(marker + 0.5),
+            "obs": graph(marker + 0.5, node_count),
             "action": action,
             "reward": torch.tensor([float(marker)]),
             "terminated": torch.tensor([0.0]),
         },
     ]
+
+
+def assert_batches_equal(test_case, first, second):
+    for first_value, second_value in zip(first, second):
+        if hasattr(first_value, "to_dict"):
+            first_values = first_value.to_dict()
+            second_values = second_value.to_dict()
+            test_case.assertEqual(first_values.keys(), second_values.keys())
+            for key in first_values:
+                torch.testing.assert_close(
+                    first_values[key],
+                    second_values[key],
+                    rtol=0.0,
+                    atol=0.0,
+                )
+        else:
+            torch.testing.assert_close(
+                first_value,
+                second_value,
+                rtol=0.0,
+                atol=0.0,
+            )
+
+
+def assert_nested_equal(test_case, first, second):
+    test_case.assertEqual(type(first), type(second))
+    if isinstance(first, torch.Tensor):
+        torch.testing.assert_close(first, second, rtol=0.0, atol=0.0)
+    elif isinstance(first, dict):
+        test_case.assertEqual(first.keys(), second.keys())
+        for key in first:
+            assert_nested_equal(test_case, first[key], second[key])
+    elif isinstance(first, (list, tuple)):
+        test_case.assertEqual(len(first), len(second))
+        for first_value, second_value in zip(first, second):
+            assert_nested_equal(test_case, first_value, second_value)
+    else:
+        test_case.assertEqual(first, second)
+
+
+def populate_buffer(config):
+    buffer = GNNBuffer(config)
+    for task, markers in (
+        (config.tasks[0], (1, 2, 3, 4)),
+        (config.tasks[1], (11, 12, 13, 14)),
+    ):
+        for marker in markers:
+            buffer.add(transition(marker), task=task)
+    return buffer
+
+
+class LegacyReplayAdapter:
+    """Exercise the pre-optimization sampling composition in equivalence tests."""
+
+    def __init__(self, buffer):
+        self.buffer = buffer
+
+    def sample_with_tasks(self):
+        by_task = self.buffer.sample_task_batches()
+        return ReplayBatch(
+            combined=GNNBuffer.combine_task_batches(by_task),
+            by_task=by_task,
+        )
 
 
 def agent_cfg(**overrides):
@@ -130,13 +200,79 @@ class TaskBalancedReplayTest(unittest.TestCase):
             [
                 "balanced_gather",
                 "graph_preparation",
-                "task_collation_transfer",
                 "balanced_gather",
                 "graph_preparation",
+                "combined_collation_transfer",
                 "task_collation_transfer",
-                "combined_reconstruction",
+                "task_collation_transfer",
             ],
         )
+
+    def test_direct_combined_sample_matches_legacy_rebatching_exactly(self):
+        config = cfg(buffer_size=16)
+        optimized = populate_buffer(config)
+        legacy = populate_buffer(config)
+
+        torch.manual_seed(91)
+        optimized_batch = optimized.sample()
+        torch.manual_seed(91)
+        task_batches = legacy.sample_task_batches()
+        legacy_batch = GNNBuffer.combine_task_batches(task_batches)
+
+        assert_batches_equal(self, optimized_batch, legacy_batch)
+
+    def test_direct_sample_preserves_virtual_node_batching(self):
+        config = cfg(buffer_size=16, use_virtual_node=True)
+        optimized = populate_buffer(config)
+        legacy = populate_buffer(config)
+
+        torch.manual_seed(17)
+        optimized_batch = optimized.sample()
+        torch.manual_seed(17)
+        legacy_batch = GNNBuffer.combine_task_batches(
+            legacy.sample_task_batches()
+        )
+
+        assert_batches_equal(self, optimized_batch, legacy_batch)
+        self.assertEqual(int(optimized_batch[0].physical_node_mask.sum()), 12)
+        self.assertEqual(optimized_batch[0].num_nodes, 16)
+
+    def test_direct_sample_matches_legacy_for_mixed_graph_sizes(self):
+        config = cfg(buffer_size=16)
+        optimized = GNNBuffer(config)
+        legacy = GNNBuffer(config)
+        for buffer in (optimized, legacy):
+            for marker in (1, 2, 3, 4):
+                buffer.add(
+                    transition(marker, node_count=3),
+                    task="truss-graph:a",
+                )
+            for marker in (11, 12, 13, 14):
+                buffer.add(
+                    transition(marker, node_count=5),
+                    task="truss-graph:b",
+                )
+
+        torch.manual_seed(31)
+        optimized_batch = optimized.sample_with_tasks()
+        torch.manual_seed(31)
+        legacy_by_task = legacy.sample_task_batches()
+        legacy_batch = ReplayBatch(
+            combined=GNNBuffer.combine_task_batches(legacy_by_task),
+            by_task=legacy_by_task,
+        )
+
+        assert_batches_equal(
+            self,
+            optimized_batch.combined,
+            legacy_batch.combined,
+        )
+        for task in config.tasks:
+            assert_batches_equal(
+                self,
+                optimized_batch.by_task[task],
+                legacy_batch.by_task[task],
+            )
 
     def test_multi_task_insert_requires_task(self):
         with self.assertRaisesRegex(ValueError, "explicit task"):
@@ -209,6 +345,105 @@ class GradientMetricTest(unittest.TestCase):
             plain_agent.parameters(), diagnostic_agent.parameters()
         ):
             torch.testing.assert_close(plain_parameter, diagnostic_parameter)
+
+    def test_repeated_normal_updates_match_legacy_rebatching_exactly(self):
+        config = agent_cfg(buffer_size=16)
+        optimized_agent = GNNSAC(config)
+        legacy_agent = GNNSAC(config)
+        legacy_agent.load_training_state_dict(
+            optimized_agent.training_state_dict()
+        )
+        optimized_buffer = populate_buffer(config)
+        legacy_buffer = LegacyReplayAdapter(populate_buffer(config))
+
+        torch.manual_seed(123)
+        for _ in range(3):
+            rng_state = torch.random.get_rng_state()
+            legacy_metrics = legacy_agent.update(legacy_buffer)
+            next_rng_state = torch.random.get_rng_state()
+            torch.random.set_rng_state(rng_state)
+            optimized_metrics = optimized_agent.update(optimized_buffer)
+            for key in legacy_metrics:
+                torch.testing.assert_close(
+                    legacy_metrics[key],
+                    optimized_metrics[key],
+                    rtol=0.0,
+                    atol=0.0,
+                )
+            assert_nested_equal(
+                self,
+                legacy_agent.training_state_dict(),
+                optimized_agent.training_state_dict(),
+            )
+            torch.random.set_rng_state(next_rng_state)
+
+
+class ReplayRoutingTest(unittest.TestCase):
+    class RecordingBuffer:
+        supports_replay_profiling = True
+
+        def __init__(self):
+            self.calls = []
+            self.batch = (None, None, None, None, None)
+
+        def sample(self, performance_profiler=None):
+            self.calls.append("combined")
+            return self.batch
+
+        def sample_with_tasks(self, performance_profiler=None):
+            self.calls.append("combined_and_tasks")
+            return ReplayBatch(
+                combined=self.batch,
+                by_task={"task": self.batch},
+            )
+
+        def sample_task_batches(self, performance_profiler=None):
+            self.calls.append("tasks")
+            return {"task": self.batch}
+
+    class Model:
+        def train(self):
+            return
+
+        def soft_update_target_Q(self):
+            return
+
+        def eval(self):
+            return
+
+    def test_normal_diagnostics_and_pcgrad_request_only_needed_batches(self):
+        buffer = self.RecordingBuffer()
+        agent = SimpleNamespace(
+            cfg=SimpleNamespace(pcgrad=False),
+            model=self.Model(),
+            update_q=lambda *args: (torch.tensor(1.0), torch.tensor(2.0)),
+            update_pi_and_alpha=lambda obs: {"pi_loss": torch.tensor(3.0)},
+            _gradient_diagnostics=lambda batches: {"metric": torch.tensor(4.0)},
+        )
+
+        GNNSAC.update(agent, buffer, compute_diagnostics=False)
+        GNNSAC.update(agent, buffer, compute_diagnostics=True)
+
+        pcgrad_agent = SimpleNamespace(
+            cfg=SimpleNamespace(pcgrad=True),
+            model=self.Model(),
+            _pcgrad_q_update=lambda batches: (
+                torch.tensor(1.0),
+                torch.tensor(2.0),
+                {"task": (torch.tensor(1.0),)},
+            ),
+            _pcgrad_pi_and_alpha_update=lambda batches: (
+                {"pi_loss": torch.tensor(3.0)},
+                {"task": (torch.tensor(1.0),)},
+            ),
+            _gradient_metrics=lambda gradients: {"metric": torch.tensor(4.0)},
+        )
+        GNNSAC.update(pcgrad_agent, buffer, compute_diagnostics=False)
+
+        self.assertEqual(
+            buffer.calls,
+            ["combined", "combined_and_tasks", "tasks"],
+        )
 
 
 class PCGradTest(unittest.TestCase):
@@ -309,6 +544,35 @@ class PCGradTest(unittest.TestCase):
         self.assertIn(
             "critic/cosine/truss-graph_a__truss-graph_b",
             info["gradient_diagnostics"],
+        )
+
+    def test_pcgrad_update_matches_legacy_rebatching_exactly(self):
+        config = agent_cfg(pcgrad=True, buffer_size=16)
+        optimized_agent = GNNSAC(config)
+        legacy_agent = GNNSAC(config)
+        legacy_agent.load_training_state_dict(
+            optimized_agent.training_state_dict()
+        )
+        optimized_buffer = populate_buffer(config)
+        legacy_buffer = LegacyReplayAdapter(populate_buffer(config))
+
+        torch.manual_seed(43)
+        rng_state = torch.random.get_rng_state()
+        legacy_metrics = legacy_agent.update(legacy_buffer)
+        torch.random.set_rng_state(rng_state)
+        optimized_metrics = optimized_agent.update(optimized_buffer)
+
+        for key in legacy_metrics:
+            torch.testing.assert_close(
+                legacy_metrics[key],
+                optimized_metrics[key],
+                rtol=0.0,
+                atol=0.0,
+            )
+        assert_nested_equal(
+            self,
+            legacy_agent.training_state_dict(),
+            optimized_agent.training_state_dict(),
         )
 
     def test_pcgrad_requires_task_aware_batches(self):

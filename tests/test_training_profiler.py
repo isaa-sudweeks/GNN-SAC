@@ -159,7 +159,7 @@ class TrainingProfilerTest(unittest.TestCase):
             device="cpu",
             mujoco_backend="mjx",
             task="truss-graph",
-            multitask=True,
+            multitask=False,
             tasks=["legacy-a", "legacy-b"],
             truss_topologies=["tetrahedron", "octahedron"],
             profiling=SimpleNamespace(
@@ -173,11 +173,18 @@ class TrainingProfilerTest(unittest.TestCase):
 
         profiler = TrainingProfiler.from_config(cfg, RecordingLogger())
 
-        self.assertTrue(profiler.metadata["multitask"])
+        self.assertFalse(profiler.metadata["multitask"])
+        self.assertTrue(profiler.metadata["effective_multitask"])
         self.assertEqual(profiler.metadata["task_count"], 2)
         self.assertEqual(
             profiler.metadata["task_names"],
             ["truss-graph:tetrahedron", "truss-graph:octahedron"],
+        )
+        self.assertFalse(profiler.metadata["pcgrad"])
+        self.assertFalse(profiler.metadata["gradient_diagnostics"])
+        self.assertEqual(
+            profiler.metadata["replay_batching_strategy"],
+            "direct_balanced_collation",
         )
 
     def test_replay_subphases_do_not_double_count_hot_path(self):

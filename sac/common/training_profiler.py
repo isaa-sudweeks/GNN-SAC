@@ -106,9 +106,15 @@ class TrainingProfiler:
                 ),
                 "task": task,
                 "multitask": multitask,
+                "effective_multitask": len(task_names) > 1,
                 "task_count": len(task_names),
                 "task_names": task_names,
                 "truss_topologies": truss_topologies,
+                "pcgrad": bool(_get(cfg, "pcgrad", False)),
+                "gradient_diagnostics": bool(
+                    _get(cfg, "gradient_diagnostics", False)
+                ),
+                "replay_batching_strategy": "direct_balanced_collation",
             },
             device=_get(cfg, "device", "cpu"),
         )
