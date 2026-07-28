@@ -6,6 +6,7 @@ import re
 import torch 
 from tensordict.tensordict import TensorDict 
 from common.reward_normalizer import TaskRewardNormalizer
+from common.training_profiler import TrainingProfiler
 from trainer.base import Trainer 
 
 try:
@@ -35,6 +36,7 @@ class OnlineTrainer(Trainer):
         self._optimizer_updates = 0
         self._last_eval_step = None
         self.reward_normalizer = self._make_reward_normalizer()
+        self.performance_profiler = TrainingProfiler.from_config(self.cfg, self.logger)
         
         self.eval_env = self.env
         eval_task = getattr(self.cfg, "eval_task", None)
@@ -329,6 +331,7 @@ class OnlineTrainer(Trainer):
         return self._scheduled_updates(collected_transitions)
 
     def _run_agent_updates(self, num_updates):
+        self._ensure_performance_profiler()
         update_metrics = {}
         for _ in range(int(num_updates)):
             next_update = self._optimizer_updates + 1
@@ -338,13 +341,15 @@ class OnlineTrainer(Trainer):
                 raise ValueError("gradient_diagnostics_freq must be positive")
             run_diagnostics = diagnostics_enabled and next_update % diagnostics_freq == 0
             update_parameters = inspect.signature(self.agent.update).parameters
+            update_kwargs = {}
             if "compute_diagnostics" in update_parameters:
-                update_metrics = self.agent.update(
-                    self.buffer,
-                    compute_diagnostics=run_diagnostics,
-                )
+                update_kwargs["compute_diagnostics"] = run_diagnostics
+            if "performance_profiler" in update_parameters:
+                update_kwargs["performance_profiler"] = self.performance_profiler
+                update_metrics = self.agent.update(self.buffer, **update_kwargs)
             else:
-                update_metrics = self.agent.update(self.buffer)
+                with self.performance_profiler.phase("optimization"):
+                    update_metrics = self.agent.update(self.buffer, **update_kwargs)
             self._optimizer_updates = next_update
             diagnostics = update_metrics.pop("gradient_diagnostics", None)
             if diagnostics:
@@ -414,6 +419,12 @@ class OnlineTrainer(Trainer):
             should_log = self._crossed_eval_interval(previous_step, self._step, progress_freq)
         if should_log:
             self.logger.log(self.common_metrics(), 'train')
+
+    def _ensure_performance_profiler(self):
+        """Initialize lazily for lightweight trainer fixtures and restored callers."""
+        if not hasattr(self, "performance_profiler"):
+            self.performance_profiler = TrainingProfiler.from_config(self.cfg, self.logger)
+        return self.performance_profiler
 
     @staticmethod
     def _scalar_value(value):
@@ -597,6 +608,7 @@ class OnlineTrainer(Trainer):
         """
         Train the SAC agent.
         """
+        self._ensure_performance_profiler()
         num_envs = int(getattr(self.env, "num_envs", getattr(self.cfg, "num_envs", 1)))
         if num_envs > 1:
             return self._train_multi_env(num_envs)
@@ -604,6 +616,8 @@ class OnlineTrainer(Trainer):
         train_metrics, done, eval_next = {}, True, False 
         pretrain_steps = int(getattr(self.cfg, 'pretrain_steps', min(self.cfg.seed_steps, 1000)))
         while self._step < self.cfg.steps:
+            self.performance_profiler.begin_vector_step(global_step=self._step)
+            updates_before_step = self._optimizer_updates
             inserted_transitions = 0
             # Evaluate agent periodically 
             if self._step % self.cfg.eval_freq == 0:
@@ -612,73 +626,88 @@ class OnlineTrainer(Trainer):
             # Reset environment
             if done:
                 if eval_next:
-                    self._evaluate_and_log()
+                    with self.performance_profiler.phase("evaluation"):
+                        self._evaluate_and_log()
                     eval_next = False
-                if self._step > 0:
-                    train_metrics.update(
-                        episode_reward=torch.stack([td["raw_reward"].view(()) for td in self._tds[1:]]).sum(),
-                        episode_success=info["success"],
-                        episode_length=len(self._tds) - 1,
-                        episode_terminated=info["terminated"],
-                        episode_truncated=info["truncated"],
-                    )
-                    train_metrics.update(self.common_metrics())
-                    self.logger.log(train_metrics, 'train')
-                    if self._episode_reward_components:
-                        reward_metrics = dict(
-                            step=self._step,
-                            episode=self._ep_idx,
+                with self.performance_profiler.phase("episode_reset"):
+                    if self._step > 0:
+                        train_metrics.update(
+                            episode_reward=torch.stack([td["raw_reward"].view(()) for td in self._tds[1:]]).sum(),
+                            episode_success=info["success"],
                             episode_length=len(self._tds) - 1,
+                            episode_terminated=info["terminated"],
+                            episode_truncated=info["truncated"],
                         )
-                        reward_metrics.update(self._episode_reward_components)
-                        self.logger.log(reward_metrics, 'training_rewards')
-                obs = self._apply_observation_noise(self.env.reset())
-                self._tds = [self.to_td(obs)]
-                self._episode_reward_components = {}
+                        train_metrics.update(self.common_metrics())
+                        self.logger.log(train_metrics, 'train')
+                        if self._episode_reward_components:
+                            reward_metrics = dict(
+                                step=self._step,
+                                episode=self._ep_idx,
+                                episode_length=len(self._tds) - 1,
+                            )
+                            reward_metrics.update(self._episode_reward_components)
+                            self.logger.log(reward_metrics, 'training_rewards')
+                    obs = self._apply_observation_noise(self.env.reset())
+                    self._tds = [self.to_td(obs)]
+                    self._episode_reward_components = {}
             
             # Collect experience 
-            if self._step > self.cfg.seed_steps:
-                action = self.agent.act(obs, t0=len(self._tds)==1)
-            else:
-                action = self.env.rand_act()
-            action = self._apply_action_noise(action, seed_action=self._step <= self.cfg.seed_steps)
-            obs, reward, done, info = self.env.step(action)
-            obs = self._apply_observation_noise(obs)
-            self._accumulate_reward_components(info)
-            terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
-            previous_td = self._tds[-1]
-            normalized_reward = self._normalize_reward(reward, info, stream=0, done=bool(done))
-            current_td = self.to_td(
-                obs,
-                action,
-                normalized_reward,
-                terminated,
-                raw_reward=reward,
-            )
-            self._tds.append(current_td)
-            inserted_transitions += self._add_transition_to_buffer(
-                previous_td,
-                current_td,
-                completed=bool(done),
-                task=info.get("task"),
-            )
+            with self.performance_profiler.phase("action_selection"):
+                if self._step > self.cfg.seed_steps:
+                    action = self.agent.act(obs, t0=len(self._tds)==1)
+                else:
+                    action = self.env.rand_act()
+                action = self._apply_action_noise(action, seed_action=self._step <= self.cfg.seed_steps)
+            with self.performance_profiler.phase("environment_step"):
+                obs, reward, done, info = self.env.step(action)
+            with self.performance_profiler.phase("transition_processing"):
+                obs = self._apply_observation_noise(obs)
+                self._accumulate_reward_components(info)
+                terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
+                previous_td = self._tds[-1]
+                normalized_reward = self._normalize_reward(reward, info, stream=0, done=bool(done))
+                current_td = self.to_td(
+                    obs,
+                    action,
+                    normalized_reward,
+                    terminated,
+                    raw_reward=reward,
+                )
+                self._tds.append(current_td)
+            with self.performance_profiler.phase("replay_insertion"):
+                inserted_transitions += self._add_transition_to_buffer(
+                    previous_td,
+                    current_td,
+                    completed=bool(done),
+                    task=info.get("task"),
+                )
             self._queue_collected_transitions(inserted_transitions)
 
             # Update agent 
             previous_step = self._step
             self._step += 1
-            num_updates = self._updates_due(pretrain_steps)
+            with self.performance_profiler.phase("update_scheduling"):
+                num_updates = self._updates_due(pretrain_steps)
             if num_updates > 0:
                 train_metrics.update(self._run_agent_updates(num_updates))
             if self._step < self.cfg.steps:
-                self._log_collection_progress(previous_step)
-            self.maybe_save_checkpoint(previous_step)
+                with self.performance_profiler.phase("progress_logging"):
+                    self._log_collection_progress(previous_step)
+            with self.performance_profiler.phase("checkpoint_dispatch"):
+                self.maybe_save_checkpoint(previous_step)
+            self.performance_profiler.end_vector_step(
+                transitions=inserted_transitions,
+                optimizer_updates=self._optimizer_updates - updates_before_step,
+                global_step=self._step,
+            )
         num_updates = self._updates_due(pretrain_steps, force=True)
         if num_updates > 0:
             train_metrics.update(self._run_agent_updates(num_updates))
         self._log_collection_progress(force=True)
         self._evaluate_final_policy()
         self.maybe_save_checkpoint(force=True)
+        self.performance_profiler.finalize(global_step=self._step)
         self.logger.finish(self.agent)
         if self.eval_env is not self.env:
             self.eval_env.close()
@@ -688,6 +717,7 @@ class OnlineTrainer(Trainer):
         """
         Train from multiple independent copies of the same task.
         """
+        self._ensure_performance_profiler()
         train_metrics, eval_next = {}, False
         done = [True] * num_envs
         infos = [None] * num_envs
@@ -697,94 +727,106 @@ class OnlineTrainer(Trainer):
         pretrain_steps = int(getattr(self.cfg, 'pretrain_steps', min(self.cfg.seed_steps, 1000)))
 
         while self._step < self.cfg.steps:
+            self.performance_profiler.begin_vector_step(global_step=self._step)
+            updates_before_step = self._optimizer_updates
             inserted_transitions = 0
             if self._step % self.cfg.eval_freq == 0:
                 eval_next = True
 
             done_indices = [env_idx for env_idx, is_done in enumerate(done) if is_done]
             if done_indices:
-                previous_components = self._episode_reward_components
-                for env_idx in done_indices:
-                    if eval_next:
-                        self._activate_shared_eval_env(env_idx)
+                if eval_next:
+                    with self.performance_profiler.phase("evaluation"):
+                        self._activate_shared_eval_env(done_indices[0])
                         self._evaluate_and_log()
-                        eval_next = False
-
-                    if episode_tds[env_idx] is not None and len(episode_tds[env_idx]) > 1:
-                        info = infos[env_idx]
-                        train_metrics.update(
-                            episode_reward=torch.stack([td["raw_reward"].view(()) for td in episode_tds[env_idx][1:]]).sum(),
-                            episode_success=info["success"],
-                            episode_length=len(episode_tds[env_idx]) - 1,
-                            episode_terminated=info["terminated"],
-                            episode_truncated=info["truncated"],
-                            episode_env_idx=env_idx,
-                        )
-                        train_metrics.update(self.common_metrics())
-                        self.logger.log(train_metrics, 'train')
-                        if reward_components[env_idx]:
-                            reward_metrics = dict(
-                                step=self._step,
-                                episode=self._ep_idx,
+                    eval_next = False
+                with self.performance_profiler.phase("episode_reset"):
+                    previous_components = self._episode_reward_components
+                    for env_idx in done_indices:
+                        if episode_tds[env_idx] is not None and len(episode_tds[env_idx]) > 1:
+                            info = infos[env_idx]
+                            train_metrics.update(
+                                episode_reward=torch.stack([td["raw_reward"].view(()) for td in episode_tds[env_idx][1:]]).sum(),
+                                episode_success=info["success"],
                                 episode_length=len(episode_tds[env_idx]) - 1,
+                                episode_terminated=info["terminated"],
+                                episode_truncated=info["truncated"],
                                 episode_env_idx=env_idx,
                             )
-                            reward_metrics.update(reward_components[env_idx])
-                            self.logger.log(reward_metrics, 'training_rewards')
-                self._episode_reward_components = previous_components
+                            train_metrics.update(self.common_metrics())
+                            self.logger.log(train_metrics, 'train')
+                            if reward_components[env_idx]:
+                                reward_metrics = dict(
+                                    step=self._step,
+                                    episode=self._ep_idx,
+                                    episode_length=len(episode_tds[env_idx]) - 1,
+                                    episode_env_idx=env_idx,
+                                )
+                                reward_metrics.update(reward_components[env_idx])
+                                self.logger.log(reward_metrics, 'training_rewards')
+                    self._episode_reward_components = previous_components
 
-                reset_obs = [
-                    self._apply_observation_noise(obs)
-                    for obs in self.env.reset_many(env_indices=done_indices)
-                ]
-                for env_idx, obs in zip(done_indices, reset_obs):
-                    observations[env_idx] = obs
-                    episode_tds[env_idx] = [self.to_td(obs)]
-                    reward_components[env_idx] = {}
-                    done[env_idx] = False
+                    reset_obs = [
+                        self._apply_observation_noise(obs)
+                        for obs in self.env.reset_many(env_indices=done_indices)
+                    ]
+                    for env_idx, obs in zip(done_indices, reset_obs):
+                        observations[env_idx] = obs
+                        episode_tds[env_idx] = [self.to_td(obs)]
+                        reward_components[env_idx] = {}
+                        done[env_idx] = False
 
             remaining_steps = self.cfg.steps - self._step
             env_indices = list(range(min(num_envs, remaining_steps)))
             if not env_indices:
                 break
 
-            actions = self._select_multi_env_actions(observations, episode_tds, env_indices)
+            with self.performance_profiler.phase("action_selection"):
+                actions = self._select_multi_env_actions(observations, episode_tds, env_indices)
 
-            results = self.env.step_many(actions, env_indices=env_indices)
-            for env_idx, action, (obs, reward, is_done, info) in zip(env_indices, actions, results):
-                obs = self._apply_observation_noise(obs)
-                observations[env_idx] = obs
-                done[env_idx] = is_done
-                infos[env_idx] = info
+            with self.performance_profiler.phase("environment_step"):
+                results = self.env.step_many(actions, env_indices=env_indices)
+            with self.performance_profiler.phase("transition_processing"):
+                pending_insertions = []
+                for env_idx, action, (obs, reward, is_done, info) in zip(env_indices, actions, results):
+                    obs = self._apply_observation_noise(obs)
+                    observations[env_idx] = obs
+                    done[env_idx] = is_done
+                    infos[env_idx] = info
 
-                previous_components = self._episode_reward_components
-                self._episode_reward_components = reward_components[env_idx]
-                self._accumulate_reward_components(info)
-                reward_components[env_idx] = self._episode_reward_components
-                self._episode_reward_components = previous_components
+                    previous_components = self._episode_reward_components
+                    self._episode_reward_components = reward_components[env_idx]
+                    self._accumulate_reward_components(info)
+                    reward_components[env_idx] = self._episode_reward_components
+                    self._episode_reward_components = previous_components
 
-                terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
-                previous_td = episode_tds[env_idx][-1]
-                normalized_reward = self._normalize_reward(
-                    reward,
-                    info,
-                    stream=env_idx,
-                    done=bool(is_done),
-                )
-                current_td = self.to_td(
-                    obs,
-                    action,
-                    normalized_reward,
-                    terminated,
-                    raw_reward=reward,
-                )
-                episode_tds[env_idx].append(current_td)
-                inserted_transitions += self._add_transition_to_buffer(
-                    previous_td,
-                    current_td,
-                    completed=bool(is_done),
-                    task=info.get("task"),
-                )
+                    terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
+                    previous_td = episode_tds[env_idx][-1]
+                    normalized_reward = self._normalize_reward(
+                        reward,
+                        info,
+                        stream=env_idx,
+                        done=bool(is_done),
+                    )
+                    current_td = self.to_td(
+                        obs,
+                        action,
+                        normalized_reward,
+                        terminated,
+                        raw_reward=reward,
+                    )
+                    episode_tds[env_idx].append(current_td)
+                    pending_insertions.append(
+                        (previous_td, current_td, bool(is_done), info.get("task"))
+                    )
+            with self.performance_profiler.phase("replay_insertion"):
+                for previous_td, current_td, is_done, task in pending_insertions:
+                    inserted_transitions += self._add_transition_to_buffer(
+                        previous_td,
+                        current_td,
+                        completed=is_done,
+                        task=task,
+                    )
 
             previous_step = self._step
             self._step += len(env_indices)
@@ -792,12 +834,20 @@ class OnlineTrainer(Trainer):
             if self._crossed_eval_interval(previous_step, self._step, self.cfg.eval_freq):
                 eval_next = True
 
-            num_updates = self._updates_due(pretrain_steps)
+            with self.performance_profiler.phase("update_scheduling"):
+                num_updates = self._updates_due(pretrain_steps)
             if num_updates > 0:
                 train_metrics.update(self._run_agent_updates(num_updates))
             if self._step < self.cfg.steps:
-                self._log_collection_progress(previous_step)
-            self.maybe_save_checkpoint(previous_step)
+                with self.performance_profiler.phase("progress_logging"):
+                    self._log_collection_progress(previous_step)
+            with self.performance_profiler.phase("checkpoint_dispatch"):
+                self.maybe_save_checkpoint(previous_step)
+            self.performance_profiler.end_vector_step(
+                transitions=inserted_transitions,
+                optimizer_updates=self._optimizer_updates - updates_before_step,
+                global_step=self._step,
+            )
 
         num_updates = self._updates_due(pretrain_steps, force=True)
         if num_updates > 0:
@@ -805,6 +855,7 @@ class OnlineTrainer(Trainer):
         self._log_collection_progress(force=True)
         self._evaluate_final_policy()
         self.maybe_save_checkpoint(force=True)
+        self.performance_profiler.finalize(global_step=self._step)
         self.logger.finish(self.agent)
         if self.eval_env is not self.env:
             self.eval_env.close()
