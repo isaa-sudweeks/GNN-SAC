@@ -584,13 +584,21 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             env.unwrapped._node_action_to_actuator_action = fail_legacy_node_sum
             next_obs, reward, done, info = env.step(action)
             self.assertIsInstance(next_obs, Data)
+            self.assertEqual(next_obs.rigidity.shape, (1,))
+            self.assertTrue(torch.isfinite(next_obs.rigidity).all())
+            self.assertGreaterEqual(float(next_obs.rigidity.item()), 0.0)
+            self.assertAlmostEqual(
+                float(next_obs.rigidity.item()),
+                float(info["critical_eig"]) / env.unwrapped._initial_critical_eig,
+                places=5,
+            )
             self.assertTrue(float(reward) == float(reward))
             self.assertIn("terminated", info)
             self.assertIn("truncated", info)
         finally:
             env.close()
 
-    def test_graph_rigidity_reward_uses_raw_wcrm_metric(self):
+    def test_graph_rigidity_reward_uses_first_non_rigid_eigenvalue(self):
         cfg = graph_test_cfg(
             rigidity_weight=2.5,
             forward_weight=0.0,
@@ -602,7 +610,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         env = make_env(cfg)
         try:
             unwrapped = env.unwrapped
-            self.assertTrue(getattr(unwrapped.mj_model, "wcrm", False))
+            self.assertFalse(getattr(unwrapped.mj_model, "wcrm", True))
 
             unwrapped.mj_model._critical_eig = lambda: 0.25
             unwrapped.mj_model.collapse_check = lambda: 99.0
