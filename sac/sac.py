@@ -1,3 +1,5 @@
+import contextlib
+
 import torch
 import torch.nn.functional as F
 
@@ -128,16 +130,28 @@ class SAC(torch.nn.Module):
             "entropy": info["entropy"].detach().mean(),
         }
 
-    def update(self, buffer):
-        obs, action, reward, terminated, next_obs = buffer.sample()
-        if self.device.type == "cuda":
-            torch.compiler.cudagraph_mark_step_begin()
+    def update(self, buffer, performance_profiler=None):
+        sampling_phase = (
+            performance_profiler.phase("replay_sampling")
+            if performance_profiler is not None
+            else contextlib.nullcontext()
+        )
+        with sampling_phase:
+            obs, action, reward, terminated, next_obs = buffer.sample()
 
-        self.model.train()
-        q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
-        pi_info = self.update_pi_and_alpha(obs)
-        self.model.soft_update_target_Q()
-        self.model.eval()
+        optimization_phase = (
+            performance_profiler.phase("optimization")
+            if performance_profiler is not None
+            else contextlib.nullcontext()
+        )
+        with optimization_phase:
+            if self.device.type == "cuda":
+                torch.compiler.cudagraph_mark_step_begin()
+            self.model.train()
+            q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
+            pi_info = self.update_pi_and_alpha(obs)
+            self.model.soft_update_target_Q()
+            self.model.eval()
 
         info = {
             "value_loss": q_loss,

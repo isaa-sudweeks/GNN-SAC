@@ -1,5 +1,6 @@
 import dataclasses
 import hashlib
+import os
 import re
 import shlex
 import sys
@@ -8,6 +9,21 @@ from typing import Any
 
 import hydra
 from omegaconf import OmegaConf, open_dict
+
+
+LAUNCH_COMMAND_ENV = "GNN_SAC_LAUNCH_COMMAND"
+
+
+def capture_launch_command(argv: list[str] | None = None) -> str:
+	"""Capture the user invocation before Hydra hands the job to Submitit."""
+	if argv is None:
+		argv = list(getattr(sys, "orig_argv", sys.argv))
+	command = shlex.join(argv)
+	if "submitit.core._submit" not in argv:
+		# Slurm inherits the submission environment, so every Submitit worker in
+		# a multirun receives the exact command that launched the whole sweep.
+		os.environ[LAUNCH_COMMAND_ENV] = command
+	return os.environ.get(LAUNCH_COMMAND_ENV, command)
 
 
 def _hydra_multirun_id() -> str | None:
@@ -84,7 +100,10 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 		if cfg.get("wandb_dir", None) in {None, "???"}:
 			# wandb appends its own `wandb/` directory to this storage parent.
 			cfg.wandb_dir = project_root
-		cfg.launch_command = shlex.join(getattr(sys, "orig_argv", sys.argv))
+		cfg.launch_command = os.environ.get(
+			LAUNCH_COMMAND_ENV,
+			shlex.join(getattr(sys, "orig_argv", sys.argv)),
+		)
 		topologies = cfg.get("topologies", None)
 		truss_topologies = cfg.get("truss_topologies", None)
 		if topologies is not None:

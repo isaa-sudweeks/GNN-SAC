@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -11,7 +12,7 @@ for path in (ROOT, SAC_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from common.parser import parse_cfg
+from common.parser import LAUNCH_COMMAND_ENV, capture_launch_command, parse_cfg
 
 
 def hydra_job(job_num: int, override_dirname: str):
@@ -85,13 +86,54 @@ class RunMetadataTest(unittest.TestCase):
 
     def test_records_shell_safe_original_launch_command(self):
         argv = [".venv/bin/python", "sac/gnn_train.py", "exp_name=my run", "steps=1000"]
-        with patch("common.parser.sys.orig_argv", argv):
+        with patch.dict(os.environ, {}, clear=True), patch("common.parser.sys.orig_argv", argv):
             cfg = parse_cfg(topology_cfg())
 
         self.assertEqual(
             cfg.launch_command,
             ".venv/bin/python sac/gnn_train.py 'exp_name=my run' steps=1000",
         )
+
+    def test_captured_sweep_command_survives_submitit_worker_argv(self):
+        sweep_argv = [
+            ".venv/bin/python",
+            "sac/gnn_train.py",
+            "-m",
+            "platform=supercomputer",
+            "seed=1,2,3",
+            "exp_name=everything",
+        ]
+        worker_argv = [
+            "/home/isuds/robotics/GNN-SAC/.venv/bin/python",
+            "-u",
+            "-m",
+            "submitit.core._submit",
+            "/runs/hydra/.submitit/%j",
+        ]
+        with patch.dict(os.environ, {}, clear=True):
+            expected = capture_launch_command(sweep_argv)
+            with patch("common.parser.sys.orig_argv", worker_argv):
+                cfg = parse_cfg(topology_cfg())
+
+        self.assertEqual(
+            expected,
+            ".venv/bin/python sac/gnn_train.py -m platform=supercomputer seed=1,2,3 "
+            "exp_name=everything",
+        )
+        self.assertEqual(cfg.launch_command, expected)
+
+    def test_submitit_import_does_not_overwrite_captured_sweep_command(self):
+        sweep_command = ".venv/bin/python sac/gnn_train.py -m seed=1,2,3"
+        worker_argv = [
+            ".venv/bin/python",
+            "-m",
+            "submitit.core._submit",
+            "/runs/.submitit/%j",
+        ]
+        with patch.dict(os.environ, {LAUNCH_COMMAND_ENV: sweep_command}, clear=True):
+            captured = capture_launch_command(worker_argv)
+
+        self.assertEqual(captured, sweep_command)
 
 
 class MultirunWorkDirTest(unittest.TestCase):

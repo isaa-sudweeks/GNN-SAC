@@ -27,7 +27,7 @@ tasks: # Task list used by multitask code paths and logging.
 save_csv: true # Whether to write evaluation metrics to eval.csv.
 save_agent: true # Whether to save final model weights at the end of training.
 checkpoint_freq: 50_000 # Save resumable training checkpoints every N environment steps; 0 disables.
-checkpoint_async: false # Write periodic checkpoints in a background thread; final forced checkpoint remains synchronous.
+checkpoint_async: true # Write periodic checkpoints in a background thread; final forced checkpoint remains synchronous.
 checkpoint_dir: checkpoints # Directory for resumable checkpoints, relative to work_dir unless absolute.
 checkpoint_keep_last: 3 # Number of numbered step checkpoints to keep; latest.pt is always retained.
 resume_from_checkpoint: null # Path to a checkpoint, or "latest" to load checkpoint_dir/latest.pt.
@@ -39,3 +39,11 @@ wandb_entity: null # Optional W&B entity/team; null uses the local default.
 wandb_name: ${exp_name}-${seed} # W&B run name.
 wandb_silent: true # Whether to silence W&B console output.
 set_wandb_offline: false # Whether to force W&B into offline mode for this run.
+
+# Bounded performance profiling
+profiling:
+  enabled: false # Enable synchronized phase timing over a bounded vector-step window.
+  warmup_vector_steps: 10 # Vector steps to skip before measurement; independent of seed_steps.
+  active_vector_steps: 100 # Number of vector steps to measure before writing the summary.
+  trace_enabled: false # Also export a detailed PyTorch Chrome trace for policy/learner work.
+  output_dir: profiling # Profiling artifact directory, relative to work_dir unless absolute.
