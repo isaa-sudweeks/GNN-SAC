@@ -18,7 +18,7 @@ from mujoco_truss_gen import (
     get_node_features,
 )
 
-from env.mujoco_gen.rigidity_reward import WorstCaseRigidityRewardMixin
+from env.mujoco_gen.rigidity_reward import FirstNonRigidEigenvalueRewardMixin
 
 
 def _safe_register(env_id, entry_point):
@@ -384,7 +384,7 @@ class MujocoPresetMLPEnv(MujocoRelativeObsEnv):
         super().__init__(make_truss_env_config(config), render_mode=render_mode, rank=rank)
 
 
-class MujocoPresetGraphEnv(WorstCaseRigidityRewardMixin, MujocoRelativeObsEnv):
+class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObsEnv):
     """Graph observation environment for any mujoco-truss-gen preset."""
 
     def __init__(self, config, render_mode=None, rank=0):

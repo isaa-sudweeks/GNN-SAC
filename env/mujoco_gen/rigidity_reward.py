@@ -1,15 +1,15 @@
 import numpy as np
 
 
-class WorstCaseRigidityRewardMixin:
-    """Use mujoco-truss-gen's raw WCRM rigidity value for graph rewards."""
+class FirstNonRigidEigenvalueRewardMixin:
+    """Use the first non-rigid eigenvalue for graph rewards and observations."""
 
     def _on_model_changed(self) -> None:
         if hasattr(self.mj_model, "set_wcrm"):
-            self.mj_model.set_wcrm(True)
+            self.mj_model.set_wcrm(False)
         elif hasattr(self.mj_model, "wcrm"):
-            self.mj_model.wcrm = True
-        self._initial_wcrm = max(float(self.mj_model._critical_eig()), 1e-8)
+            self.mj_model.wcrm = False
+        self._initial_critical_eig = max(float(self.mj_model._critical_eig()), 1e-8)
         self._observation_rigidity = None
         super()._on_model_changed()
 
@@ -22,7 +22,7 @@ class WorstCaseRigidityRewardMixin:
             critical_eig = float(self.mj_model._critical_eig())
         if not np.isfinite(critical_eig):
             return 0.0
-        return float(max(critical_eig, 0.0) / self._initial_wcrm)
+        return float(max(critical_eig, 0.0) / self._initial_critical_eig)
 
     def _current_observation_rigidity(self):
         if self._observation_rigidity is None:
