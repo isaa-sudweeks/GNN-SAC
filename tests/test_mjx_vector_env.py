@@ -61,12 +61,20 @@ class MjxVectorEnvTest(unittest.TestCase):
             self.assertEqual(len(observations), 2)
             self.assertTrue(all(isinstance(obs, Data) for obs in observations))
             self.assertTrue(all(obs.x.shape[1] == 6 for obs in observations))
+            self.assertTrue(all(obs.rigidity.shape == (1,) for obs in observations))
+            self.assertTrue(all(torch.isfinite(obs.rigidity).all() for obs in observations))
             self.assertEqual(cfg.num_policy_actions, int(observations[0].action_mask.sum()))
 
             action = env.rand_act(env_idx=1)
             results = env.step_many([action], env_indices=[1])
             self.assertEqual(len(results), 1)
             self.assertEqual(results[0][3]["env_idx"], 1)
+            self.assertTrue(
+                torch.allclose(
+                    results[0][0].rigidity,
+                    results[0][3]["critical_eig"].reshape(1),
+                )
+            )
             self.assertTrue(torch.isfinite(results[0][1]))
 
             step_count = env.env._jax.device_get(env.env._state.step_count)
@@ -161,6 +169,7 @@ class MjxVectorEnvTest(unittest.TestCase):
         cfg = mjx_cfg(
             num_envs=4,
             truss_topologies=["octahedron", "tetrahedron"],
+            use_virtual_node=True,
         )
         env = make_env(cfg)
         try:

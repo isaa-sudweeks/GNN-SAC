@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import mock
 import sys
@@ -259,6 +261,9 @@ class UpdateScheduleTest(unittest.TestCase):
 
 class VectorTrainingAccountingTest(unittest.TestCase):
     def test_exact_step_budget_flushes_partial_trajectories_and_logs_final_state(self):
+        profiling_dir = TemporaryDirectory()
+        self.addCleanup(profiling_dir.cleanup)
+
         class DummyVectorEnv:
             num_envs = 2
 
@@ -343,6 +348,15 @@ class VectorTrainingAccountingTest(unittest.TestCase):
             checkpoint_freq=0,
             progress_freq=1000,
             domain_randomization=False,
+            work_dir=profiling_dir.name,
+            device="cpu",
+            profiling=SimpleNamespace(
+                enabled=True,
+                warmup_vector_steps=1,
+                active_vector_steps=2,
+                trace_enabled=False,
+                output_dir="profiling",
+            ),
         )
         trainer.env = DummyVectorEnv()
         trainer.eval_env = trainer.env
@@ -390,6 +404,20 @@ class VectorTrainingAccountingTest(unittest.TestCase):
             if category == "eval"
         ]
         self.assertEqual(eval_steps, [0, 5])
+        profiling_summary = json.loads(
+            (Path(profiling_dir.name) / "profiling" / "profiling_summary.json").read_text()
+        )
+        self.assertEqual(profiling_summary["window"]["measured_vector_steps"], 2)
+        self.assertEqual(
+            profiling_summary["window"]["measured_environment_transitions"],
+            3,
+        )
+        self.assertIn("action_selection", profiling_summary["phases"])
+        self.assertIn("environment_step", profiling_summary["phases"])
+        self.assertIn("replay_insertion", profiling_summary["phases"])
+        self.assertFalse(
+            (Path(profiling_dir.name) / "profiling" / "training_trace.json").exists()
+        )
 
 
 class VectorizedInferenceTest(unittest.TestCase):

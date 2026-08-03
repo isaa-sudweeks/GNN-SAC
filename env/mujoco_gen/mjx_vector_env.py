@@ -104,6 +104,12 @@ class MjxVectorGraphEnv(gym.Env):
                     dtype=np.int64,
                 ),
                 "action_mask": spaces.MultiBinary(node_count),
+                "rigidity": spaces.Box(
+                    low=0.0,
+                    high=np.inf,
+                    shape=(1,),
+                    dtype=np.float32,
+                ),
             }
         )
         self.action_space = spaces.Box(
@@ -121,6 +127,7 @@ class MjxVectorGraphEnv(gym.Env):
         self._reset_where_compiled = jax.jit(self._core.reset_where)
         self._step_compiled = jax.jit(self._core.step)
         self._step_masked_compiled = jax.jit(self._step_masked)
+        self._rigidity_compiled = jax.jit(jax.vmap(self._core._critical_eig))
 
     @property
     def unwrapped(self):
@@ -162,7 +169,8 @@ class MjxVectorGraphEnv(gym.Env):
         else:
             mask = self._index_mask(indices)
             flat_obs, self._state = self._reset_where_compiled(keys, self._state, mask)
-        return self._graph_observations(flat_obs, indices)
+        rigidity = self._rigidity_compiled(self._state.data)
+        return self._graph_observations(flat_obs, indices, rigidity)
 
     def step(self, action):
         result = self.step_many([action], [self.active_env_idx])
@@ -228,7 +236,9 @@ class MjxVectorGraphEnv(gym.Env):
         if slip_weight > 0.0:
             info["slip_penalty_raw"] = -info["slip"] / slip_weight
 
-        observations = self._graph_observations(flat_obs, indices)
+        observations = self._graph_observations(
+            flat_obs, indices, info["critical_eig"]
+        )
         rewards = self._to_torch(reward)
         dones = np.asarray(self._jax.device_get(done), dtype=bool)
         torch_info = {key: self._to_torch(value) for key, value in info.items()}
@@ -263,8 +273,9 @@ class MjxVectorGraphEnv(gym.Env):
         info = {key: self._jnp.where(mask, value, 0) for key, value in info.items()}
         return flat_obs, merged_state, reward, done, info
 
-    def _graph_observations(self, flat_obs, indices: Sequence[int]):
+    def _graph_observations(self, flat_obs, indices: Sequence[int], rigidity):
         obs = self._to_torch(flat_obs)
+        rigidity = self._to_torch(rigidity)
         node_count = self._core.action_size
         positions = obs[:, : 3 * node_count].reshape(self.num_envs, node_count, 3)
         velocities = obs[:, 3 * node_count : 6 * node_count].reshape(
@@ -276,6 +287,7 @@ class MjxVectorGraphEnv(gym.Env):
                 "x": features[env_idx],
                 "edge_index": self._edge_index,
                 "action_mask": self._action_mask,
+                "rigidity": rigidity[env_idx].reshape(1),
             }
             for env_idx in indices
         ]
