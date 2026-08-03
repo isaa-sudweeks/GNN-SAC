@@ -9,6 +9,9 @@ env_name: ${task}
 use_graph_observations: true
 use_control_graph: true # Opt-in mujoco-truss-gen control graph and incidence-based node command mapping.
 use_virtual_node: false # Add a global PyG node carrying an is-virtual flag and normalized rigidity.
+# Critic graph readout: physical_mean, virtual_node, or physical_mean_virtual_node.
+# The virtual-node modes require use_virtual_node=true; the combined mode concatenates both embeddings.
+critic_readout: physical_mean
 truss_topology: octahedron
 topology_id: ${truss_topology}
 node_feature_dim: 6
