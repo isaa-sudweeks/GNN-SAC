@@ -2,7 +2,9 @@ from typing import Sequence
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch_geometric.nn import MessagePassing, global_mean_pool
+from torch_geometric.utils import softmax
 
 from common.mlp_layers import mlp
 
@@ -38,19 +40,42 @@ def _message_features(x_i, x_j, edge_attr, edge_channels: int):
 class _MessagePassingLayer(MessagePassing):
     """One independently parameterized message-and-update block."""
 
-    def __init__(self, in_channels: int, out_channels: int, hidden_channels: list[int], dropout: float, edge_channels: int):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        hidden_channels: list[int],
+        dropout: float,
+        edge_channels: int,
+        message_attention: bool,
+    ):
         super().__init__(aggr="add")
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.edge_channels = edge_channels
-        self.phi = mlp(in_channels * 2 + edge_channels, hidden_channels, out_channels, dropout=dropout)
+        self.message_attention = bool(message_attention)
+        self.phi = mlp(
+            in_channels * 2 + edge_channels,
+            hidden_channels,
+            out_channels,
+            dropout=dropout,
+        )
         self.gamma = mlp(in_channels + out_channels, hidden_channels, out_channels, dropout=dropout)
+        self.attention_score = (
+            nn.Linear(in_channels * 2, 1, bias=False) if self.message_attention else None
+        )
 
     def forward(self, x, edge_index, edge_attr=None):
         return self.propagate(edge_index, x=x, edge_attr=edge_attr)
 
-    def message(self, x_i, x_j, edge_attr):
-        return self.phi(_message_features(x_i, x_j, edge_attr, self.edge_channels))
+    def message(self, x_i, x_j, edge_attr, index, ptr, size_i):
+        pair = torch.cat([x_i, x_j], dim=1)
+        message = self.phi(_message_features(x_i, x_j, edge_attr, self.edge_channels))
+        if self.attention_score is None:
+            return message
+        logits = F.leaky_relu(self.attention_score(pair).squeeze(-1), negative_slope=0.2)
+        weights = softmax(logits, index, ptr, num_nodes=size_i)
+        return weights.unsqueeze(-1) * message
 
     def update(self, aggr_out, x):
         return self.gamma(torch.cat([x, aggr_out], dim=1))
@@ -67,6 +92,7 @@ class GNN(MessagePassing):
         mpl_dims: Sequence[int] | None = None,
         skip_connections: bool = True,
         edge_channels: int = 0,
+        message_attention: bool = False,
     ):
         super().__init__(aggr="add")
         if mpl_dims is None:
@@ -82,12 +108,23 @@ class GNN(MessagePassing):
         self.edge_channels = int(edge_channels)
         if self.edge_channels < 0:
             raise ValueError("edge_channels must be nonnegative")
+        self.message_attention = bool(message_attention)
 
         # Keep these names for compatibility with existing one-layer checkpoints.
         self.phi = mlp(in_channels * 2 + self.edge_channels, self.hidden_channels, self.mpl_dims[0], dropout=dropout)
         self.gamma = mlp(in_channels + self.mpl_dims[0], self.hidden_channels, self.mpl_dims[0], dropout=dropout)
+        self.attention_score = (
+            nn.Linear(in_channels * 2, 1, bias=False) if self.message_attention else None
+        )
         self.extra_mpls = nn.ModuleList(
-            _MessagePassingLayer(input_dim, output_dim, self.hidden_channels, dropout, self.edge_channels)
+            _MessagePassingLayer(
+                input_dim,
+                output_dim,
+                self.hidden_channels,
+                dropout,
+                self.edge_channels,
+                self.message_attention,
+            )
             for input_dim, output_dim in zip(self.mpl_dims, self.mpl_dims[1:])
         )
         self.skip_projections = nn.ModuleList()
@@ -104,8 +141,14 @@ class GNN(MessagePassing):
             x = updated + self.skip_projections[index](x) if self.skip_connections else updated
         return x
 
-    def message(self, x_i, x_j, edge_attr):
-        return self.phi(_message_features(x_i, x_j, edge_attr, self.edge_channels))
+    def message(self, x_i, x_j, edge_attr, index, ptr, size_i):
+        pair = torch.cat([x_i, x_j], dim=1)
+        message = self.phi(_message_features(x_i, x_j, edge_attr, self.edge_channels))
+        if self.attention_score is None:
+            return message
+        logits = F.leaky_relu(self.attention_score(pair).squeeze(-1), negative_slope=0.2)
+        weights = softmax(logits, index, ptr, num_nodes=size_i)
+        return weights.unsqueeze(-1) * message
 
     def update(self, aggr_out, x):
         return self.gamma(torch.cat([x, aggr_out], dim=1))
@@ -114,7 +157,9 @@ class GNN(MessagePassing):
         return (
             f"GNN(in_channels={self.in_channels}, mpl_dims={self.mpl_dims}, "
             f"message_hidden_dims={self.hidden_channels}, dropout={self.dropout}, "
-            f"skip_connections={self.skip_connections}, edge_channels={self.edge_channels})\n"
+            f"skip_connections={self.skip_connections}, "
+            f"edge_channels={self.edge_channels}, "
+            f"message_attention={self.message_attention})\n"
             f"Phi(Message Passing):\t{self.phi}\n"
             f"Gamma(Update):\t{self.gamma}\n"
             f"Additional MPLs:\t{self.extra_mpls}"
@@ -132,6 +177,7 @@ class Q_GNN(GNN):
         mpl_dims: Sequence[int] | None = None,
         skip_connections: bool = True,
         edge_channels: int = 0,
+        message_attention: bool = False,
     ):
         super().__init__(
             in_channels,
@@ -141,6 +187,7 @@ class Q_GNN(GNN):
             mpl_dims=mpl_dims,
             skip_connections=skip_connections,
             edge_channels=edge_channels,
+            message_attention=message_attention,
         )
         self.head_hidden_dims = _validate_dims("head_hidden_dims", head_hidden_dims, allow_empty=True)
         self.head = mlp(self.out_channels, self.head_hidden_dims, 1)

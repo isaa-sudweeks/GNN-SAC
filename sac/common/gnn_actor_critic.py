@@ -35,6 +35,7 @@ class GNNActorCritic(nn.Module):
         critic_mpl_dims = [cfg.Q_output_dim] if shared_mpl_dims is None else shared_mpl_dims
         skip_connections = getattr(cfg, "mpl_skip_connections", True)
         feature_flags = graph_feature_flags(cfg)
+        message_attention = bool(getattr(cfg, "message_attention", False))
         gnn_obs_dim = graph_input_dim(
             cfg.obs_dim,
             use_virtual_node=bool(getattr(cfg, "use_virtual_node", False)),
@@ -49,6 +50,7 @@ class GNNActorCritic(nn.Module):
             gnn_obs_dim, hidden_channels=message_hidden, mpl_dims=actor_mpl_dims,
             dropout=cfg.dropout, skip_connections=skip_connections,
             edge_channels=edge_channels,
+            message_attention=message_attention,
         )
 
         self._action_head = layers.mlp(
@@ -62,6 +64,7 @@ class GNNActorCritic(nn.Module):
                 head_hidden_dims=cfg.head_hidden_dims, mpl_dims=critic_mpl_dims,
                 dropout=cfg.dropout, skip_connections=skip_connections,
                 edge_channels=edge_channels,
+                message_attention=message_attention,
             ) for _ in range(int(cfg.num_q))]
         )
 

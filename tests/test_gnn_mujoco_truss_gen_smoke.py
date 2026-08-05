@@ -903,7 +903,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         self.assertEqual(metrics["episode_reward"], 1.5)
 
     def test_gnn_sac_update_smoke(self):
-        cfg = graph_test_cfg()
+        cfg = graph_test_cfg(message_attention=True)
         env = make_env(cfg)
         try:
             agent = GNNSAC(cfg)
@@ -933,6 +933,9 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             self.assertIn("value_loss", update_info)
             self.assertIn("pi_loss", update_info)
             self.assertIn("alpha", update_info)
+            self.assertIsNotNone(agent.model._pi.attention_score.weight.grad)
+            for critic in agent.model._Qs.modules_list:
+                self.assertIsNotNone(critic.attention_score.weight.grad)
         finally:
             env.close()
 

@@ -238,6 +238,37 @@ class GraphFeatureIntegrationTest(unittest.TestCase):
         gradient = torch.autograd.grad(output.sum(), edge_attr)[0]
         self.assertGreater(float(gradient.abs().sum()), 0.0)
 
+    def test_attention_and_edge_features_backpropagate_together(self):
+        prepared = prepare_graph(
+            graph(),
+            use_virtual_node=False,
+            use_node_roles=True,
+            use_edge_roles=True,
+            use_edge_distance=True,
+        )
+        config = agent_cfg(node_roles=True, edge_roles=True, edge_distance=True)
+        config.message_attention = True
+        model = GNNActorCritic(config)
+
+        actor_output = model._pi(
+            prepared.x,
+            prepared.edge_index,
+            prepared.edge_attr,
+        )
+        actor_output.sum().backward()
+        self.assertIsNotNone(model._pi.attention_score.weight.grad)
+
+        critic = model._Qs.modules_list[0]
+        critic_input = torch.cat(
+            [prepared.x, torch.zeros(prepared.num_nodes, 1)], dim=-1
+        )
+        critic(
+            critic_input,
+            prepared.edge_index,
+            edge_attr=prepared.edge_attr,
+        ).sum().backward()
+        self.assertIsNotNone(critic.attention_score.weight.grad)
+
     def test_actor_equivariance_and_critic_invariance_under_permutation(self):
         original = graph()
         original.action_mask = torch.ones(3, dtype=torch.bool)
