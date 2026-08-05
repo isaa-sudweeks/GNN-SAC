@@ -15,6 +15,10 @@ truss_graph_view: auto # Graph view for unified graph envs: auto, physical, or l
 mujoco_backend: mujoco # Backend: mjx selects batch-native fixed-topology graph simulation; mujoco uses Gym environments.
 eval_backend: mujoco # Evaluation backend. Native MuJoCo supports fast single-env evaluation and rendering during MJX training.
 mjx_zero_copy: true # Exchange MJX observations/actions with PyTorch through DLPack when both use the same device.
+mjx_impl: jax # MJX physics implementation: jax (default) or warp (NVIDIA CUDA only).
+warp_graph_mode: warp_staged # Fastest Warp mode in the matched A100 benchmark; alternatives: warp, warp_staged_ex.
+warp_naconmax: null # Optional fixed Warp contact capacity; null lets upstream choose.
+warp_njmax: null # Optional fixed Warp constraint capacity; null lets upstream choose.
 max_steps: 1_000 # Maximum simulator steps before the Timeout wrapper truncates an episode.
 episode_length: ${max_steps} # Nominal episode length used before make_env overwrites it from the wrapper.
 nsubsteps: 100 # Number of MuJoCo integration steps per environment step.

@@ -172,7 +172,7 @@ python sac/gnn_infer.py --config-name inference/gnn_mjx \
   model=/path/to/final.pt episodes=256 num_envs=256
 ```
 
-The MJX training path requires `mujoco-truss-gen>=0.11.0b0` and
+The MJX training path requires `mujoco-truss-gen>=0.11.2` and
 training-environment rendering disabled. Native MuJoCo evaluation can render
 and record videos. MJX owns one compiled model and one fixed environment batch
 per topology, so realistic models and fixed-shape runtime domain randomization
@@ -180,6 +180,20 @@ are supported, but model-changing randomization is not. Use
 `mujoco_backend=mujoco` for training-time rendering, length-scale
 randomization, or physical-parameter randomization that rebuilds the generated
 model.
+
+JAX remains the default MJX physics implementation. On an NVIDIA CUDA host,
+install the Warp extra and select the upstream Warp implementation explicitly:
+
+```bash
+python -m pip install 'mujoco-truss-gen[warp]>=0.11.2'
+python sac/gnn_train.py sim_backend=mjx mjx_impl=warp device=cuda
+```
+
+`warp_graph_mode` defaults to the benchmark-leading `warp_staged` and also
+accepts `warp` or `warp_staged_ex`.
+`warp_naconmax` and `warp_njmax` optionally set fixed contact and constraint
+capacities. Warp does not replace the `sim_backend=mjx` pipeline; it changes the
+physics implementation used inside that batch-native environment.
 
 ```yaml
 task: truss-graph

@@ -10,5 +10,5 @@ omegaconf
 termcolor
 optuna
 wandb[media]
-mujoco-truss-gen>=0.11.0rc0
+mujoco-truss-gen>=0.11.2
 torch_geometric
