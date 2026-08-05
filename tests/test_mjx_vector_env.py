@@ -57,6 +57,7 @@ class MjxVectorEnvTest(unittest.TestCase):
         cfg = mjx_cfg()
         env = make_env(cfg)
         try:
+            self.assertEqual(env.env._core.mjx_impl, "jax")
             observations = env.reset_many()
             self.assertEqual(len(observations), 2)
             self.assertTrue(all(isinstance(obs, Data) for obs in observations))
@@ -81,6 +82,10 @@ class MjxVectorEnvTest(unittest.TestCase):
             self.assertEqual(step_count.tolist(), [0, 1])
         finally:
             env.close()
+
+    def test_rejects_nonpositive_warp_capacities_before_upstream_construction(self):
+        with self.assertRaisesRegex(ValueError, "warp_naconmax must be a positive integer"):
+            make_env(mjx_cfg(mjx_impl="warp", warp_naconmax=0))
 
     def test_rejects_model_domain_randomization(self):
         with self.assertRaisesRegex(ValueError, "fixed-shape domain randomization"):

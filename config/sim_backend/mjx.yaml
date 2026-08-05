@@ -6,3 +6,7 @@ eval_backend: mujoco
 num_envs: 256 # Total environments; mixed-topology MJX runs split this evenly across truss_topologies.
 save_video: false
 mjx_zero_copy: true
+mjx_impl: jax # MJX physics implementation: jax (default) or warp (NVIDIA CUDA only).
+warp_graph_mode: warp_staged # Fastest Warp mode in the matched A100 benchmark; alternatives: warp, warp_staged_ex.
+warp_naconmax: null # Optional fixed Warp contact capacity; null lets upstream choose.
+warp_njmax: null # Optional fixed Warp constraint capacity; null lets upstream choose.
