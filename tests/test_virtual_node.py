@@ -99,7 +99,7 @@ class VirtualNodeTest(unittest.TestCase):
 
         self.assertEqual(replay._obs[0].num_nodes, 3)
         self.assertFalse(hasattr(replay._obs[0], "action_mask"))
-        sampled_obs, sampled_action, _, _, sampled_next_obs = replay.sample()
+        sampled_obs, sampled_action, _, _, _, _, sampled_next_obs = replay.sample()
         self.assertEqual(sampled_obs.num_nodes, 4)
         self.assertEqual(sampled_next_obs.num_nodes, 4)
         self.assertEqual(int(sampled_obs.action_mask.sum()), 3)

@@ -23,7 +23,9 @@ class _RawReplaySample:
     observations: list[Data]
     actions: list[torch.Tensor]
     rewards: list[torch.Tensor]
+    collapse_costs: list[torch.Tensor]
     terminated: list[torch.Tensor]
+    episode_ends: list[torch.Tensor]
     next_observations: list[Data]
 
 
@@ -44,7 +46,9 @@ class _GNNTaskBuffer:
         self._next_obs = [None] * self._capacity
         self._action = [None] * self._capacity
         self._reward = [None] * self._capacity
+        self._collapse_cost = [None] * self._capacity
         self._terminated = [None] * self._capacity
+        self._episode_end = [None] * self._capacity
 
     @property
     def capacity(self):
@@ -59,22 +63,62 @@ class _GNNTaskBuffer:
         return self._size
 
     def add(self, td, count_episode=True):
+        safety_cfg = getattr(self.cfg, "safety_constraint", None)
+        safety_enabled = bool(
+            safety_cfg.get("enabled", False)
+            if hasattr(safety_cfg, "get")
+            else getattr(safety_cfg, "enabled", False)
+        )
+        if safety_enabled:
+            records = td if isinstance(td, list) else [td]
+            for record in records:
+                missing = [
+                    field
+                    for field in ("collapse_cost", "episode_end")
+                    if field not in record
+                ]
+                if missing:
+                    raise ValueError(
+                        "Constrained replay insertion is missing required field(s): "
+                        + ", ".join(missing)
+                    )
         if isinstance(td, list):
             obs_seq = [step["obs"] for step in td]
             actions = [step["action"].squeeze(0) for step in td][1:]
             rewards = [step["reward"].squeeze(0) for step in td][1:]
             terminated = [step["terminated"].squeeze(0) for step in td][1:]
+            collapse_costs = [
+                step.get("collapse_cost", torch.zeros_like(step["terminated"])).squeeze(0)
+                for step in td
+            ][1:]
+            episode_ends = [
+                step.get("episode_end", step["terminated"]).squeeze(0)
+                for step in td
+            ][1:]
         else:
             obs_seq = self._graph_sequence(td["obs"])
             actions = self._transition_sequence(td["action"])[1:]
             rewards = self._transition_sequence(td["reward"])[1:]
             terminated = self._transition_sequence(td["terminated"])[1:]
+            collapse_costs = self._transition_sequence(
+                td.get("collapse_cost", torch.zeros_like(td["terminated"]))
+            )[1:]
+            episode_ends = self._transition_sequence(
+                td.get("episode_end", td["terminated"])
+            )[1:]
 
         obs = obs_seq[:-1]
         next_obs = obs_seq[1:]
         n = len(obs)
 
-        if not (len(actions) == len(rewards) == len(terminated) == n):
+        if not (
+            len(actions)
+            == len(rewards)
+            == len(collapse_costs)
+            == len(terminated)
+            == len(episode_ends)
+            == n
+        ):
             raise ValueError(
                 "Graph replay episode fields must contain one initial observation "
                 "and one action/reward/terminated entry per transition."
@@ -85,7 +129,9 @@ class _GNNTaskBuffer:
             next_obs = next_obs[-self._capacity:]
             actions = actions[-self._capacity:]
             rewards = rewards[-self._capacity:]
+            collapse_costs = collapse_costs[-self._capacity:]
             terminated = terminated[-self._capacity:]
+            episode_ends = episode_ends[-self._capacity:]
             n = self._capacity
 
         for i in range(n):
@@ -96,7 +142,9 @@ class _GNNTaskBuffer:
             self._next_obs[write_idx] = self._clone_graph(next_obs[i])
             self._action[write_idx] = action
             self._reward[write_idx] = self._scalar_tensor(rewards[i])
+            self._collapse_cost[write_idx] = self._scalar_tensor(collapse_costs[i])
             self._terminated[write_idx] = self._scalar_tensor(terminated[i])
+            self._episode_end[write_idx] = self._scalar_tensor(episode_ends[i])
 
         self._idx = (self._idx + n) % self._capacity
         self._size = min(self._size + n, self._capacity)
@@ -122,7 +170,9 @@ class _GNNTaskBuffer:
             raw_next_obs = [self._next_obs[i] for i in idx]
             actions = [self._action[i] for i in idx]
             rewards = [self._reward[i] for i in idx]
+            collapse_costs = [self._collapse_cost[i] for i in idx]
             terminations = [self._terminated[i] for i in idx]
+            episode_ends = [self._episode_end[i] for i in idx]
 
         with subphase("graph_preparation"):
             use_virtual_node = bool(getattr(self.cfg, "use_virtual_node", False))
@@ -139,7 +189,9 @@ class _GNNTaskBuffer:
             observations=prepared_obs,
             actions=actions,
             rewards=rewards,
+            collapse_costs=collapse_costs,
             terminated=terminations,
+            episode_ends=episode_ends,
             next_observations=prepared_next_obs,
         )
 
@@ -168,11 +220,27 @@ class _GNNTaskBuffer:
                 self._device,
                 non_blocking=True,
             )
+            collapse_costs = torch.stack(raw.collapse_costs, dim=0).to(
+                self._device,
+                non_blocking=True,
+            )
             terminated = torch.stack(raw.terminated, dim=0).to(
                 self._device,
                 non_blocking=True,
             )
-        return observations, actions, rewards, terminated, next_observations
+            episode_ends = torch.stack(raw.episode_ends, dim=0).to(
+                self._device,
+                non_blocking=True,
+            )
+        return (
+            observations,
+            actions,
+            rewards,
+            collapse_costs,
+            terminated,
+            episode_ends,
+            next_observations,
+        )
 
     def _graph_sequence(self, obs):
         if isinstance(obs, Batch):
@@ -210,6 +278,7 @@ class _GNNTaskBuffer:
 
     def state_dict(self):
         return {
+            "format_version": 2,
             "capacity": self._capacity,
             "batch_size": self._batch_size,
             "num_eps": self._num_eps,
@@ -219,10 +288,24 @@ class _GNNTaskBuffer:
             "next_obs": self._next_obs,
             "action": self._action,
             "reward": self._reward,
+            "collapse_cost": self._collapse_cost,
             "terminated": self._terminated,
+            "episode_end": self._episode_end,
         }
 
     def load_state_dict(self, state_dict):
+        saved_format = int(state_dict.get("format_version", 1))
+        safety_cfg = getattr(self.cfg, "safety_constraint", None)
+        safety_enabled = bool(
+            safety_cfg.get("enabled", False)
+            if hasattr(safety_cfg, "get")
+            else getattr(safety_cfg, "enabled", False)
+        )
+        if safety_enabled and saved_format < 2:
+            raise ValueError(
+                "Constrained safety requires replay collapse_cost and episode_end fields; "
+                "start a fresh constrained run instead of resuming this checkpoint."
+            )
         saved_capacity = int(state_dict["capacity"])
         if saved_capacity != self._capacity:
             raise ValueError(
@@ -237,7 +320,11 @@ class _GNNTaskBuffer:
         self._next_obs = state_dict["next_obs"]
         self._action = state_dict["action"]
         self._reward = state_dict["reward"]
+        self._collapse_cost = state_dict.get(
+            "collapse_cost", [torch.zeros(1) if value is not None else None for value in self._reward]
+        )
         self._terminated = state_dict["terminated"]
+        self._episode_end = state_dict.get("episode_end", self._terminated)
 
 
 class GNNBuffer:
@@ -379,6 +466,10 @@ class GNNBuffer:
                 [reward for sample in samples for reward in sample.rewards],
                 dim=0,
             ).to(self.cfg.device, non_blocking=True)
+            collapse_costs = torch.stack(
+                [value for sample in samples for value in sample.collapse_costs],
+                dim=0,
+            ).to(self.cfg.device, non_blocking=True)
             terminated = torch.stack(
                 [
                     value
@@ -387,7 +478,19 @@ class GNNBuffer:
                 ],
                 dim=0,
             ).to(self.cfg.device, non_blocking=True)
-        return observations, actions, rewards, terminated, next_observations
+            episode_ends = torch.stack(
+                [value for sample in samples for value in sample.episode_ends],
+                dim=0,
+            ).to(self.cfg.device, non_blocking=True)
+        return (
+            observations,
+            actions,
+            rewards,
+            collapse_costs,
+            terminated,
+            episode_ends,
+            next_observations,
+        )
 
     def sample_task_batches(self, performance_profiler=None):
         raw_by_task = self._sample_raw_by_task(
@@ -411,12 +514,22 @@ class GNNBuffer:
             [graph for batch in batches for graph in batch[0].to_data_list()]
         )
         next_observations = Batch.from_data_list(
-            [graph for batch in batches for graph in batch[4].to_data_list()]
+            [graph for batch in batches for graph in batch[6].to_data_list()]
         )
         actions = torch.cat([batch[1] for batch in batches], dim=0)
         rewards = torch.cat([batch[2] for batch in batches], dim=0)
-        terminated = torch.cat([batch[3] for batch in batches], dim=0)
-        return observations, actions, rewards, terminated, next_observations
+        collapse_costs = torch.cat([batch[3] for batch in batches], dim=0)
+        terminated = torch.cat([batch[4] for batch in batches], dim=0)
+        episode_ends = torch.cat([batch[5] for batch in batches], dim=0)
+        return (
+            observations,
+            actions,
+            rewards,
+            collapse_costs,
+            terminated,
+            episode_ends,
+            next_observations,
+        )
 
     def sample_with_tasks(self, performance_profiler=None):
         raw_by_task = self._sample_raw_by_task(
@@ -449,7 +562,7 @@ class GNNBuffer:
 
     def state_dict(self):
         return {
-            "format_version": 2,
+            "format_version": 3,
             "task_names": list(self.task_names),
             "batch_size": self._batch_size,
             "batch_size_per_task": self._batch_size_per_task,
@@ -460,6 +573,17 @@ class GNNBuffer:
         }
 
     def load_state_dict(self, state_dict):
+        saved_format = int(state_dict.get("format_version", 1))
+        safety_cfg = getattr(self.cfg, "safety_constraint", None)
+        safety_enabled = bool(
+            safety_cfg.get("enabled", False)
+            if hasattr(safety_cfg, "get")
+            else getattr(safety_cfg, "enabled", False)
+        )
+        if safety_enabled and saved_format < 3:
+            raise ValueError(
+                "Constrained safety requires replay format version 3; start a fresh constrained run."
+            )
         saved_tasks = list(state_dict.get("task_names", []))
         if saved_tasks != self.task_names:
             raise ValueError(

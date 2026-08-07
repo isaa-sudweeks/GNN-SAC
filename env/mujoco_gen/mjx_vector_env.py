@@ -243,6 +243,17 @@ class MjxVectorGraphEnv(gym.Env):
             env_info["task"] = self.task
             env_info["env_idx"] = env_idx
             env_info["success"] = float(env_info.get("success", 0.0))
+            env_info["locomotion_reward"] = sum(
+                env_info.get(key, 0.0) for key in ("forward", "alive", "energy", "slip")
+            )
+            env_info["collapse_cost"] = torch.as_tensor(
+                env_info.get("terminated_by_collapse", 0.0),
+                dtype=torch.float32,
+                device=rewards.device,
+            )
+            env_info["episode_end"] = torch.as_tensor(
+                dones[env_idx], dtype=torch.float32, device=env_info["collapse_cost"].device
+            )
             results.append(
                 (
                     observations[result_idx],

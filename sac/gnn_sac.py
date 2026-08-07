@@ -1,5 +1,6 @@
 import contextlib
 from collections.abc import Sequence
+import math
 import re
 
 import torch 
@@ -27,6 +28,42 @@ class GNNSAC(torch.nn.Module):
         init_alpha = float(getattr(self.cfg, "entropy_coef", 0.2))
         self.log_alpha = torch.nn.Parameter(torch.log(torch.tensor(init_alpha, device=self.device)))
         self.alpha_optim = torch.optim.Adam([self.log_alpha], lr=self.cfg.lr, capturable=capturable)
+        self.safety_enabled = bool(self._safety_cfg("enabled", False))
+        self.safety_horizon = int(self._safety_cfg("horizon", 250))
+        self._safety_tasks = self._configured_tasks()
+        self._safety_task_index = {
+            task: index for index, task in enumerate(self._safety_tasks)
+        }
+        self._pending_safety_outcomes = {task: [] for task in self._safety_tasks}
+        self._resolved_safety_counts = {task: 0 for task in self._safety_tasks}
+        self._last_safety_metrics = {}
+        if self.safety_enabled:
+            if self.safety_horizon <= 0:
+                raise ValueError("safety_constraint.horizon must be positive")
+            lambda_init = float(self._safety_cfg("lambda_init", 0.1))
+            lambda_max = float(self._safety_cfg("lambda_max", 100.0))
+            lambda_batch_size = int(self._safety_cfg("lambda_batch_size", 32))
+            if not (0.0 < lambda_init <= lambda_max):
+                raise ValueError("safety lambda_init must be positive and no larger than lambda_max")
+            if lambda_max <= 0.0 or lambda_batch_size <= 0:
+                raise ValueError("safety lambda_max and lambda_batch_size must be positive")
+            self.raw_lambdas = torch.nn.Parameter(
+                torch.full(
+                    (len(self._safety_tasks),),
+                    self._inverse_softplus(lambda_init),
+                    device=self.device,
+                )
+            )
+            self.cost_q_optim = torch.optim.Adam(
+                self.model._CostQs.parameters(),
+                lr=float(self._safety_cfg("cost_critic_lr", self.cfg.lr)),
+                capturable=capturable,
+            )
+            self.lambda_optim = torch.optim.Adam(
+                [self.raw_lambdas],
+                lr=float(self._safety_cfg("lambda_lr", 1e-3)),
+                capturable=capturable,
+            )
         target_entropy = getattr(self.cfg, "target_entropy", "auto")
         if target_entropy == "auto":
             entropy_dim = getattr(cfg, "num_policy_actions", cfg.action_dim)
@@ -40,6 +77,117 @@ class GNNSAC(torch.nn.Module):
         print("Episode length:", cfg.episode_length)
         print("Discount factor:", self.discount)
         print("Target entropy:", self.target_entropy)
+
+    def _safety_cfg(self, name, default=None):
+        safety_cfg = getattr(self.cfg, "safety_constraint", None)
+        if safety_cfg is None:
+            return default
+        if hasattr(safety_cfg, "get"):
+            return safety_cfg.get(name, default)
+        return getattr(safety_cfg, name, default)
+
+    def _configured_tasks(self):
+        backend = str(getattr(self.cfg, "mujoco_backend", "mujoco")).lower()
+        topologies = getattr(self.cfg, "truss_topologies", None)
+        if backend == "mjx" and topologies and len(topologies) > 1:
+            base_task = str(getattr(self.cfg, "task", "truss-graph")).split(":", 1)[0]
+            tasks = [f"{base_task}:{topology}" for topology in topologies]
+        elif bool(getattr(self.cfg, "multitask", False)):
+            tasks = [str(task) for task in getattr(self.cfg, "tasks", [])]
+        else:
+            tasks = [str(getattr(self.cfg, "task", "task"))]
+        return list(dict.fromkeys(tasks))
+
+    @staticmethod
+    def _inverse_softplus(value):
+        value = float(value)
+        return value if value > 20.0 else math.log(math.expm1(value))
+
+    def _budget(self, task):
+        overrides = self._safety_cfg("budgets_by_topology", {}) or {}
+        topology = str(task).split(":", 1)[1] if ":" in str(task) else str(task)
+        if hasattr(overrides, "get"):
+            value = overrides.get(topology, overrides.get(str(task), None))
+        else:
+            value = None
+        budget = float(self._safety_cfg("default_budget", 0.1) if value is None else value)
+        if not 0.0 <= budget <= 1.0:
+            raise ValueError(f"Safety budget for {task!r} must be in [0, 1]")
+        return budget
+
+    def safety_lambdas(self):
+        if not self.safety_enabled:
+            return torch.empty(0, device=self.device)
+        return F.softplus(self.raw_lambdas).clamp_max(
+            float(self._safety_cfg("lambda_max", 100.0))
+        )
+
+    def _safety_identity(self):
+        if not self.safety_enabled:
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            "horizon": self.safety_horizon,
+            "tasks": list(self._safety_tasks),
+            "budgets": {task: self._budget(task) for task in self._safety_tasks},
+            "cost_critic_lr": float(self._safety_cfg("cost_critic_lr", self.cfg.lr)),
+            "lambda_lr": float(self._safety_cfg("lambda_lr", 1e-3)),
+            "lambda_init": float(self._safety_cfg("lambda_init", 0.1)),
+            "lambda_max": float(self._safety_cfg("lambda_max", 100.0)),
+            "lambda_batch_size": int(self._safety_cfg("lambda_batch_size", 32)),
+        }
+
+    def safety_lambda(self, task):
+        try:
+            index = self._safety_task_index[str(task)]
+        except KeyError as exc:
+            raise KeyError(
+                f"Unknown safety task {task!r}; expected one of {self._safety_tasks!r}"
+            ) from exc
+        return self.safety_lambdas()[index]
+
+    def observe_safety_outcome(self, task, outcome):
+        """Consume one on-policy reset-window outcome and update its multiplier in batches."""
+        if not self.safety_enabled:
+            return {}
+        task = str(task)
+        if task not in self._pending_safety_outcomes:
+            raise KeyError(f"Unknown safety outcome task {task!r}")
+        outcome = float(outcome)
+        if outcome not in {0.0, 1.0}:
+            raise ValueError("Safety outcomes must be binary")
+        pending = self._pending_safety_outcomes[task]
+        pending.append(outcome)
+        batch_size = int(self._safety_cfg("lambda_batch_size", 32))
+        if len(pending) < batch_size:
+            return {}
+        batch = pending[:batch_size]
+        del pending[:batch_size]
+        self._resolved_safety_counts[task] += batch_size
+        rate = torch.tensor(batch, dtype=torch.float32, device=self.device).mean()
+        budget = self._budget(task)
+        multiplier = self.safety_lambda(task)
+        lambda_loss = -multiplier * (rate.detach() - budget)
+        self.lambda_optim.zero_grad(set_to_none=True)
+        lambda_loss.backward()
+        self.lambda_optim.step()
+        with torch.no_grad():
+            maximum_raw = self._inverse_softplus(float(self._safety_cfg("lambda_max", 100.0)))
+            self.raw_lambdas.clamp_(min=-20.0, max=maximum_raw)
+        multiplier = self.safety_lambda(task).detach()
+        key = self._diagnostic_key(task)
+        metrics = {
+            f"safety/lambda/{key}": multiplier,
+            f"safety/budget/{key}": budget,
+            f"safety/observed_horizon_collapse_rate/{key}": rate,
+            f"safety/violation/{key}": rate - budget,
+            f"safety/lambda_saturated/{key}": float(
+                multiplier >= float(self._safety_cfg("lambda_max", 100.0)) - 1e-6
+            ),
+            f"safety/resolved_window_count/{key}": self._resolved_safety_counts[task],
+        }
+        self._last_safety_metrics.update(metrics)
+        return metrics
 
     @property
     def alpha(self):
@@ -57,27 +205,65 @@ class GNNSAC(torch.nn.Module):
         return min(max((frac - 1) / frac, self.cfg.discount_min), self.cfg.discount_max)
 
     def save(self, fp):
-        torch.save(
-            {
-                "model": self.model.state_dict(),
-                "log_alpha": self.log_alpha.detach().cpu(),
-            },
-            fp,
-        )
+        state = {
+            "model": self.model.state_dict(),
+            "log_alpha": self.log_alpha.detach().cpu(),
+            "safety_enabled": self.safety_enabled,
+        }
+        if self.safety_enabled:
+            state.update(
+                raw_lambdas=self.raw_lambdas.detach().cpu(),
+                safety_tasks=list(self._safety_tasks),
+                safety_horizon=self.safety_horizon,
+                safety_identity=self._safety_identity(),
+            )
+        torch.save(state, fp)
     def load(self, fp):
         state_dict = fp if isinstance(fp, dict) else torch.load(fp, map_location=self.device, weights_only=False)
+        saved_safety = bool(state_dict.get("safety_enabled", False)) if isinstance(state_dict, dict) else False
+        if saved_safety != self.safety_enabled:
+            raise ValueError(
+                "Checkpoint constrained-safety setting does not match the current configuration; "
+                "start a fresh constrained run or load with safety_constraint.enabled=false."
+            )
         self.model.load_state_dict(state_dict["model"] if "model" in state_dict else state_dict)
         if isinstance(state_dict, dict) and "log_alpha" in state_dict:
             self.log_alpha.data.copy_(state_dict["log_alpha"].to(self.device))
+        if self.safety_enabled:
+            if state_dict.get("safety_identity") != self._safety_identity():
+                raise ValueError(
+                    "Checkpoint safety configuration does not match the current run configuration"
+                )
+            if list(state_dict.get("safety_tasks", [])) != self._safety_tasks:
+                raise ValueError("Checkpoint safety tasks do not match configured topology tasks")
+            if int(state_dict.get("safety_horizon", -1)) != self.safety_horizon:
+                raise ValueError("Checkpoint safety horizon does not match configured horizon")
+            self.raw_lambdas.data.copy_(state_dict["raw_lambdas"].to(self.device))
 
     def training_state_dict(self):
-        return {
+        state = {
             "model": self.model.state_dict(),
             "log_alpha": self.log_alpha.detach().cpu(),
             "q_optim": self.q_optim.state_dict(),
             "pi_optim": self.pi_optim.state_dict(),
             "alpha_optim": self.alpha_optim.state_dict(),
+            "safety_enabled": self.safety_enabled,
         }
+        if self.safety_enabled:
+            state.update(
+                raw_lambdas=self.raw_lambdas.detach().cpu(),
+                safety_tasks=list(self._safety_tasks),
+                safety_horizon=self.safety_horizon,
+                safety_identity=self._safety_identity(),
+                cost_q_optim=self.cost_q_optim.state_dict(),
+                lambda_optim=self.lambda_optim.state_dict(),
+                pending_safety_outcomes={
+                    task: list(values)
+                    for task, values in self._pending_safety_outcomes.items()
+                },
+                resolved_safety_counts=dict(self._resolved_safety_counts),
+            )
+        return state
 
     def load_training_state_dict(self, state_dict):
         self.load(state_dict)
@@ -87,6 +273,21 @@ class GNNSAC(torch.nn.Module):
             self.pi_optim.load_state_dict(state_dict["pi_optim"])
         if "alpha_optim" in state_dict:
             self.alpha_optim.load_state_dict(state_dict["alpha_optim"])
+        if self.safety_enabled:
+            if "cost_q_optim" not in state_dict or "lambda_optim" not in state_dict:
+                raise ValueError(
+                    "Constrained checkpoint is missing safety optimizer state; start a fresh run."
+                )
+            self.cost_q_optim.load_state_dict(state_dict["cost_q_optim"])
+            self.lambda_optim.load_state_dict(state_dict["lambda_optim"])
+            saved_pending = state_dict.get("pending_safety_outcomes", {})
+            self._pending_safety_outcomes = {
+                task: list(saved_pending.get(task, [])) for task in self._safety_tasks
+            }
+            saved_counts = state_dict.get("resolved_safety_counts", {})
+            self._resolved_safety_counts = {
+                task: int(saved_counts.get(task, 0)) for task in self._safety_tasks
+            }
 
     @torch.no_grad()
     def act(self, obs, t0 = False, eval_mode = False):
@@ -136,6 +337,24 @@ class GNNSAC(torch.nn.Module):
         return full_actions
 
     @torch.no_grad()
+    def predict_safety_risk(self, obs):
+        """Predict deterministic-policy H-step collapse risk for one graph."""
+        if not self.safety_enabled:
+            raise RuntimeError("Safety risk prediction requires constrained safety")
+        prepared = prepare_graph(
+            obs, use_virtual_node=bool(getattr(self.cfg, "use_virtual_node", False))
+        )
+        batch = Batch.from_data_list([prepared]).to(self.device)
+        action = self.model.pi_mean(batch)
+        risk = self.model.cost_Q(
+            batch,
+            action,
+            torch.tensor([self.safety_horizon], device=self.device),
+            return_type="max",
+        )
+        return float(risk.item())
+
+    @torch.no_grad()
     def _td_target(self, next_obs, reward, terminated):
         """
         Again this assumes that next_obs is coming in as a torch geometric Data object.
@@ -155,6 +374,94 @@ class GNNSAC(torch.nn.Module):
         q_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._Qs.parameters(), self.cfg.grad_clip_norm)
         self.q_optim.step()
         return q_loss.detach(), q_grad_norm.detach()
+
+    @staticmethod
+    def _unpack_batch(batch):
+        if len(batch) == 7:
+            return batch
+        if len(batch) == 5:
+            obs, action, reward, terminated, next_obs = batch
+            zeros = None if terminated is None else torch.zeros_like(terminated)
+            return obs, action, reward, zeros, terminated, terminated, next_obs
+        raise ValueError(f"Expected a 5- or 7-field replay batch, got {len(batch)} fields")
+
+    @torch.no_grad()
+    def _cost_td_target(self, next_obs, collapse_cost, episode_end, horizon):
+        collapse_cost = collapse_cost.view(-1).clamp(0.0, 1.0)
+        episode_end = episode_end.view(-1).clamp(0.0, 1.0)
+        horizon = horizon.view(-1).long()
+        next_action, _ = self.model.pi(next_obs)
+        continuation_horizon = torch.clamp(horizon - 1, min=1)
+        next_risk = self.model.cost_Q(
+            next_obs,
+            next_action,
+            continuation_horizon,
+            return_type="max",
+            target=True,
+        )
+        continuation = (horizon > 1).to(next_risk.dtype)
+        target = collapse_cost + (
+            (1.0 - collapse_cost)
+            * (1.0 - episode_end)
+            * continuation
+            * next_risk
+        )
+        return target.clamp(0.0, 1.0)
+
+    def _cost_q_loss(self, obs, action, collapse_cost, episode_end, next_obs, horizon=None):
+        batch_size = int(collapse_cost.numel())
+        if horizon is None:
+            horizon = torch.randint(
+                1,
+                self.safety_horizon + 1,
+                (batch_size,),
+                device=self.device,
+            )
+        target = self._cost_td_target(
+            next_obs, collapse_cost, episode_end, horizon
+        )
+        logits = self.model.cost_Q(
+            obs,
+            action,
+            horizon,
+            return_type="all",
+            logits=True,
+        )
+        return F.binary_cross_entropy_with_logits(
+            logits,
+            target.unsqueeze(0).expand_as(logits),
+        )
+
+    def update_cost_q(self, obs, action, collapse_cost, episode_end, next_obs):
+        cost_loss = self._cost_q_loss(
+            obs, action, collapse_cost, episode_end, next_obs
+        )
+        self.cost_q_optim.zero_grad(set_to_none=True)
+        cost_loss.backward()
+        parameters = self.model._CostQs.parameters()
+        grad_norm = torch.nn.utils.clip_grad_norm_(parameters, self.cfg.grad_clip_norm)
+        self.cost_q_optim.step()
+        return cost_loss.detach(), grad_norm.detach()
+
+    def update_cost_q_by_task(self, task_batches):
+        losses = {}
+        for task, batch in task_batches.items():
+            obs, action, _, collapse_cost, _, episode_end, next_obs = self._unpack_batch(batch)
+            losses[task] = self._cost_q_loss(
+                obs, action, collapse_cost, episode_end, next_obs
+            )
+        cost_loss = torch.stack(list(losses.values())).mean()
+        self.cost_q_optim.zero_grad(set_to_none=True)
+        cost_loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.model._CostQs.parameters(), self.cfg.grad_clip_norm
+        )
+        self.cost_q_optim.step()
+        return (
+            cost_loss.detach(),
+            grad_norm.detach(),
+            {task: loss.detach() for task, loss in losses.items()},
+        )
 
     def update_pi_and_alpha(self, obs):
         pi_loss, info = self._pi_loss(obs)
@@ -182,10 +489,73 @@ class GNNSAC(torch.nn.Module):
         qs = self.model.Q(obs, action, return_type="all")
         return F.mse_loss(qs, td_target.unsqueeze(0).expand_as(qs))
 
-    def _pi_loss(self, obs):
+    def _pi_loss(self, obs, task=None):
         action, info = self.model.pi(obs)
         q = self.model.Q(obs, action, return_type="min")
-        return (self.alpha.detach() * info["log_prob"] - q).mean(), info
+        objective = self.alpha.detach() * info["log_prob"] - q
+        if self.safety_enabled:
+            if task is None:
+                raise ValueError("Constrained actor loss requires an explicit topology task")
+            horizon = torch.full(
+                (q.numel(),), self.safety_horizon, dtype=torch.long, device=self.device
+            )
+            risk_all = self.model.cost_Q(
+                obs, action, horizon, return_type="all"
+            )
+            risk = risk_all.max(0).values
+            multiplier = self.safety_lambda(task).detach()
+            objective = objective + multiplier * risk
+            info = dict(info)
+            info.update(
+                safety_risk=risk,
+                safety_risk_all=risk_all,
+                safety_lambda=multiplier,
+            )
+        return objective.mean(), info
+
+    def _constrained_pi_and_alpha_update(self, task_batches):
+        losses = []
+        task_info = []
+        for task, batch in task_batches.items():
+            obs, *_ = self._unpack_batch(batch)
+            loss, info = self._pi_loss(obs, task=task)
+            losses.append(loss)
+            task_info.append((task, info))
+        pi_loss = torch.stack(losses).mean()
+        self.pi_optim.zero_grad(set_to_none=True)
+        pi_loss.backward()
+        pi_grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.model._pi.parameters(), self.cfg.grad_clip_norm
+        )
+        self.pi_optim.step()
+
+        log_prob = torch.cat([info["log_prob"].reshape(-1) for _, info in task_info])
+        alpha_loss = -(self.log_alpha * (log_prob.detach() + self.target_entropy)).mean()
+        self.alpha_optim.zero_grad(set_to_none=True)
+        alpha_loss.backward()
+        self.alpha_optim.step()
+
+        metrics = {
+            "pi_loss": pi_loss.detach(),
+            "pi_grad_norm": pi_grad_norm.detach(),
+            "alpha_loss": alpha_loss.detach(),
+            "alpha": self.alpha.detach(),
+            "entropy": torch.stack(
+                [info["entropy"].detach().mean() for _, info in task_info]
+            ).mean(),
+        }
+        for task, info in task_info:
+            key = self._diagnostic_key(task)
+            risks = info["safety_risk"].detach()
+            twin = info["safety_risk_all"].detach()
+            metrics[f"safety/predicted_risk_mean/{key}"] = risks.mean()
+            metrics[f"safety/predicted_risk_max/{key}"] = risks.max()
+            metrics[f"safety/twin_disagreement/{key}"] = (
+                twin.max(0).values - twin.min(0).values
+            ).mean()
+            metrics[f"safety/lambda/{key}"] = info["safety_lambda"]
+            metrics[f"safety/budget/{key}"] = self._budget(task)
+        return metrics
 
     @staticmethod
     def _parameter_gradients(loss, parameters):
@@ -305,15 +675,35 @@ class GNNSAC(torch.nn.Module):
         cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
         try:
             gradients = {"critic": {}, "actor": {}}
+            if self.safety_enabled:
+                gradients["cost_critic"] = {}
             q_parameters = tuple(self.model._Qs.parameters())
             pi_parameters = tuple(self.model._pi.parameters())
+            cost_parameters = tuple(self.model._CostQs.parameters()) if self.safety_enabled else ()
             for task, batch in task_batches.items():
-                obs, action, reward, terminated, next_obs = batch
+                (
+                    obs,
+                    action,
+                    reward,
+                    collapse_cost,
+                    terminated,
+                    episode_end,
+                    next_obs,
+                ) = self._unpack_batch(batch)
                 gradients["critic"][task] = self._parameter_gradients(
                     self._q_loss(obs, action, reward, terminated, next_obs),
                     q_parameters,
                 )
-                pi_loss, _ = self._pi_loss(obs)
+                if self.safety_enabled:
+                    gradients["cost_critic"][task] = self._parameter_gradients(
+                        self._cost_q_loss(
+                            obs, action, collapse_cost, episode_end, next_obs
+                        ),
+                        cost_parameters,
+                    )
+                pi_loss, _ = self._pi_loss(
+                    obs, task=task if self.safety_enabled else None
+                )
                 gradients["actor"][task] = self._parameter_gradients(pi_loss, pi_parameters)
         finally:
             torch.random.set_rng_state(cpu_rng)
@@ -350,7 +740,7 @@ class GNNSAC(torch.nn.Module):
         losses = []
         task_gradients = {}
         for task, batch in task_batches.items():
-            obs, action, reward, terminated, next_obs = batch
+            obs, action, reward, _, terminated, _, next_obs = self._unpack_batch(batch)
             loss = self._q_loss(obs, action, reward, terminated, next_obs)
             losses.append(loss)
             task_gradients[task] = self._parameter_gradients(loss, parameters)
@@ -368,13 +758,42 @@ class GNNSAC(torch.nn.Module):
             task_gradients,
         )
 
+    def _pcgrad_cost_q_update(self, task_batches):
+        parameters = tuple(self.model._CostQs.parameters())
+        losses = []
+        task_gradients = {}
+        for task, batch in task_batches.items():
+            obs, action, _, collapse_cost, _, episode_end, next_obs = self._unpack_batch(batch)
+            loss = self._cost_q_loss(
+                obs, action, collapse_cost, episode_end, next_obs
+            )
+            losses.append(loss)
+            task_gradients[task] = self._parameter_gradients(loss, parameters)
+        self.cost_q_optim.zero_grad(set_to_none=True)
+        self._set_parameter_gradients(
+            parameters, self.pcgrad_project(task_gradients.values())
+        )
+        grad_norm = torch.nn.utils.clip_grad_norm_(parameters, self.cfg.grad_clip_norm)
+        self.cost_q_optim.step()
+        return (
+            torch.stack([loss.detach() for loss in losses]).mean(),
+            grad_norm.detach(),
+            task_gradients,
+            {
+                task: loss.detach()
+                for task, loss in zip(task_batches, losses)
+            },
+        )
+
     def _pcgrad_pi_and_alpha_update(self, task_batches):
         parameters = tuple(self.model._pi.parameters())
         losses = []
         task_gradients = {}
         task_info = []
         for task, batch in task_batches.items():
-            pi_loss, info = self._pi_loss(batch[0])
+            pi_loss, info = self._pi_loss(
+                batch[0], task=task if self.safety_enabled else None
+            )
             losses.append(pi_loss)
             task_info.append(info)
             task_gradients[task] = self._parameter_gradients(pi_loss, parameters)
@@ -396,19 +815,32 @@ class GNNSAC(torch.nn.Module):
         entropy = torch.stack(
             [info["entropy"].detach().mean() for info in task_info]
         ).mean()
-        return (
-            {
+        metrics = {
                 "pi_loss": torch.stack([loss.detach() for loss in losses]).mean(),
                 "pi_grad_norm": pi_grad_norm.detach(),
                 "alpha_loss": alpha_loss.detach(),
                 "alpha": self.alpha.detach(),
                 "entropy": entropy,
-            },
-            task_gradients,
-        )
+            }
+        if self.safety_enabled:
+            for (task, _), info in zip(task_batches.items(), task_info):
+                key = self._diagnostic_key(task)
+                risks = info["safety_risk"].detach()
+                twin = info["safety_risk_all"].detach()
+                metrics[f"safety/predicted_risk_mean/{key}"] = risks.mean()
+                metrics[f"safety/predicted_risk_max/{key}"] = risks.max()
+                metrics[f"safety/twin_disagreement/{key}"] = (
+                    twin.max(0).values - twin.min(0).values
+                ).mean()
+                metrics[f"safety/lambda/{key}"] = info["safety_lambda"]
+                metrics[f"safety/budget/{key}"] = self._budget(task)
+        return metrics, task_gradients
 
     def update(self, buffer, compute_diagnostics=False, performance_profiler=None):
         pcgrad_enabled = bool(getattr(self.cfg, "pcgrad", False))
+        safety_enabled = bool(getattr(self, "safety_enabled", False))
+        combined_batch = None
+        task_batches = None
         sampling_phase = (
             performance_profiler.phase("replay_sampling")
             if performance_profiler is not None
@@ -420,29 +852,36 @@ class GNNSAC(torch.nn.Module):
                     task_batches = buffer.sample_task_batches(
                         performance_profiler=performance_profiler
                     )
-                    obs = action = reward = terminated = next_obs = None
-                elif compute_diagnostics:
+                elif compute_diagnostics or safety_enabled:
                     replay_batch = buffer.sample_with_tasks(
                         performance_profiler=performance_profiler
                     )
-                    obs, action, reward, terminated, next_obs = replay_batch.combined
+                    combined_batch = replay_batch.combined
                     task_batches = replay_batch.by_task
                 else:
-                    obs, action, reward, terminated, next_obs = buffer.sample(
+                    combined_batch = buffer.sample(
                         performance_profiler=performance_profiler
                     )
-                    task_batches = None
             elif hasattr(buffer, "sample_with_tasks"):
                 replay_batch = buffer.sample_with_tasks()
-                obs, action, reward, terminated, next_obs = replay_batch.combined
+                combined_batch = replay_batch.combined
                 task_batches = replay_batch.by_task
             else:
-                if pcgrad_enabled:
+                if pcgrad_enabled or safety_enabled:
                     raise ValueError(
-                        "pcgrad=true requires replay batches grouped by task via sample_with_tasks()."
+                        "PCGrad and constrained safety require replay batches grouped by task."
                     )
-                obs, action, reward, terminated, next_obs = buffer.sample()
-                task_batches = None
+                combined_batch = buffer.sample()
+        if combined_batch is not None:
+            (
+                obs,
+                action,
+                reward,
+                collapse_cost,
+                terminated,
+                episode_end,
+                next_obs,
+            ) = GNNSAC._unpack_batch(combined_batch)
        # if self.device.type == 'cuda':
        #     torch.compiler.cudagraph_mark_step_begin()
         
@@ -455,11 +894,22 @@ class GNNSAC(torch.nn.Module):
             self.model.train()
             if pcgrad_enabled:
                 q_loss, q_grad_norm, q_task_gradients = self._pcgrad_q_update(task_batches)
+                if safety_enabled:
+                    (
+                        cost_loss,
+                        cost_grad_norm,
+                        cost_task_gradients,
+                        cost_losses_by_task,
+                    ) = self._pcgrad_cost_q_update(task_batches)
                 pi_info, pi_task_gradients = self._pcgrad_pi_and_alpha_update(task_batches)
+                diagnostic_gradients = {
+                    "critic": q_task_gradients,
+                    "actor": pi_task_gradients,
+                }
+                if safety_enabled:
+                    diagnostic_gradients["cost_critic"] = cost_task_gradients
                 diagnostics = (
-                    self._gradient_metrics(
-                        {"critic": q_task_gradients, "actor": pi_task_gradients}
-                    )
+                    self._gradient_metrics(diagnostic_gradients)
                     if compute_diagnostics
                     else None
                 )
@@ -470,7 +920,17 @@ class GNNSAC(torch.nn.Module):
                     else None
                 )
                 q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
-                pi_info = self.update_pi_and_alpha(obs)
+                if safety_enabled:
+                    (
+                        cost_loss,
+                        cost_grad_norm,
+                        cost_losses_by_task,
+                    ) = self.update_cost_q_by_task(
+                        task_batches
+                    )
+                    pi_info = self._constrained_pi_and_alpha_update(task_batches)
+                else:
+                    pi_info = self.update_pi_and_alpha(obs)
             self.model.soft_update_target_Q()
             self.model.eval()
 
@@ -478,6 +938,13 @@ class GNNSAC(torch.nn.Module):
             "value_loss": q_loss,
             "q_grad_norm": q_grad_norm,
         }
+        if safety_enabled:
+            info.update(
+                cost_value_loss=cost_loss,
+                cost_q_grad_norm=cost_grad_norm,
+            )
+            for task, task_loss in cost_losses_by_task.items():
+                info[f"safety/cost_loss/{self._diagnostic_key(task)}"] = task_loss
         info.update(pi_info)
         if diagnostics is not None:
             info["gradient_diagnostics"] = diagnostics

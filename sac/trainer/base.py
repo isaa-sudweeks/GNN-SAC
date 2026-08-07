@@ -80,7 +80,7 @@ class Trainer:
 
     def checkpoint_state_dict(self):
         state = {
-            "format_version": 3,
+            "format_version": 4,
             "trainer": {
                 "step": getattr(self, "_step", 0),
                 "episode": getattr(self, "_ep_idx", 0),
@@ -181,8 +181,16 @@ class Trainer:
         agent_state = state_dict["agent"]
         if isinstance(agent_state, Mapping) and "model" in agent_state:
             checkpoint = {"model": agent_state["model"]}
-            if "log_alpha" in agent_state:
-                checkpoint["log_alpha"] = agent_state["log_alpha"]
+            for key in (
+                "log_alpha",
+                "safety_enabled",
+                "raw_lambdas",
+                "safety_tasks",
+                "safety_horizon",
+                "safety_identity",
+            ):
+                if key in agent_state:
+                    checkpoint[key] = agent_state[key]
             return checkpoint
         return agent_state
 

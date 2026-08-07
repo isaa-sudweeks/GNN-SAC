@@ -30,3 +30,15 @@ dropout: 0.0 # Dropout probability in critic MLP layers.
 num_q: 2 # Number of critic networks in the Q ensemble.
 log_std_min: -10.0 # Minimum actor log standard deviation before action sampling.
 log_std_max: 2.0 # Maximum actor log standard deviation before action sampling.
+
+# Optional finite-horizon collapse constraint
+safety_constraint:
+  enabled: false # Add twin collapse-probability critics and topology-specific Lagrange multipliers.
+  horizon: 250 # Number of future environment steps covered by the collapse probability.
+  default_budget: 0.10 # Default maximum H-step collapse probability for every topology.
+  budgets_by_topology: {} # Optional topology-name overrides, for example {henneberg_n6_1tube_2: 0.15}.
+  cost_critic_lr: 3e-4 # Adam learning rate for the twin cost critics.
+  lambda_lr: 1e-3 # Adam learning rate for topology-specific multipliers.
+  lambda_init: 0.1 # Initial nonnegative multiplier value.
+  lambda_max: 100.0 # Maximum multiplier value; saturation is logged.
+  lambda_batch_size: 32 # Resolved reset windows required for one multiplier update.

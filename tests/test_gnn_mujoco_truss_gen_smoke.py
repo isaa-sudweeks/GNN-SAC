@@ -625,6 +625,8 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             self.assertEqual(info["critical_eig_raw"], 0.25)
             self.assertAlmostEqual(info["rigidity"], 2.5 * 0.25)
             self.assertAlmostEqual(reward, 2.5 * 0.25)
+            self.assertEqual(info["locomotion_reward"], 0.0)
+            self.assertEqual(info["collapse_cost"], 0.0)
         finally:
             env.close()
 
@@ -665,6 +667,9 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
                     self.assertTrue(float(reward) == float(reward))
                     self.assertIn("terminated", info)
                     self.assertIn("truncated", info)
+                    self.assertIn("locomotion_reward", info)
+                    self.assertIn("collapse_cost", info)
+                    self.assertEqual(bool(info["episode_end"]), bool(done))
                 finally:
                     env.close()
 
@@ -896,7 +901,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
                 {"obs": obs2, "action": action1, "reward": reward2, "terminated": info2["terminated"]},
             ]
             buffer.add(episode)
-            obs, action, reward, terminated, next_obs = buffer.sample()
+            obs, action, reward, _, terminated, _, next_obs = buffer.sample()
 
             self.assertEqual(action.shape[1], 1)
             self.assertEqual(reward.shape[0], cfg.batch_size)

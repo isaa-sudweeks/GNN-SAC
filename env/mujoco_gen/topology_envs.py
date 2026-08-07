@@ -556,6 +556,7 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         self._advance(ctrl)
         reward, info, terminated = self._compute_reward(normalized_node_action, previous_com)
         truncated = self.steps >= self.max_steps
+        info["episode_end"] = bool(terminated or truncated)
         return self._get_obs(), reward, terminated, truncated, info
 
     def _control_graph_node_action_to_actuator_ctrl(self, action):
@@ -599,6 +600,7 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         self._advance(ctrl)
         reward, info, terminated = self._compute_reward(actuator_action, previous_com)
         truncated = self.steps >= self.max_steps
+        info["episode_end"] = bool(terminated or truncated)
         return self._get_obs(), reward, terminated, truncated, info
 
     @property

@@ -54,6 +54,36 @@ class GNNActorCritic(nn.Module):
         self._target_Qs = deepcopy(self._Qs)
         self._target_Qs.requires_grad_(False)
 
+        safety_cfg = getattr(cfg, "safety_constraint", None)
+        self.safety_enabled = bool(
+            safety_cfg.get("enabled", False)
+            if hasattr(safety_cfg, "get")
+            else getattr(safety_cfg, "enabled", False)
+        )
+        self.safety_horizon = int(
+            safety_cfg.get("horizon", 250)
+            if hasattr(safety_cfg, "get")
+            else getattr(safety_cfg, "horizon", 250)
+        )
+        if self.safety_enabled:
+            if self.safety_horizon <= 0:
+                raise ValueError("safety_constraint.horizon must be positive")
+            self._CostQs = layers.Ensemble(
+                [
+                    gnn_layers.Q_GNN(
+                        gnn_obs_dim + cfg.action_dim + 1,
+                        hidden_channels=message_hidden,
+                        head_hidden_dims=cfg.head_hidden_dims,
+                        mpl_dims=critic_mpl_dims,
+                        dropout=cfg.dropout,
+                        skip_connections=skip_connections,
+                    )
+                    for _ in range(2)
+                ]
+            )
+            self._target_CostQs = deepcopy(self._CostQs)
+            self._target_CostQs.requires_grad_(False)
+
         # Putting the log std min and log std diff in the buffer so that we can use them when updating without having to move stuff to devices
         self.register_buffer("log_std_min", torch.tensor(cfg.log_std_min))
         self.register_buffer("log_std_dif", torch.tensor(cfg.log_std_max - cfg.log_std_min))
@@ -72,12 +102,38 @@ class GNNActorCritic(nn.Module):
     def train(self, mode=True):
         super().train(mode)
         self._target_Qs.train(False)
+        if self.safety_enabled:
+            self._target_CostQs.train(False)
         return self
     
     @torch.no_grad()
     def soft_update_target_Q(self):
         for param, target_param in zip(self._Qs.parameters(), self._target_Qs.parameters()):
             target_param.data.lerp_(param.data, self.cfg.tau)
+        if self.safety_enabled:
+            for param, target_param in zip(
+                self._CostQs.parameters(), self._target_CostQs.parameters()
+            ):
+                target_param.data.lerp_(param.data, self.cfg.tau)
+
+    @staticmethod
+    def _node_actions(obs, action):
+        action_mask = policy_action_mask(obs)
+        pool_mask = physical_node_mask(obs)
+        node_action = action.new_zeros((obs.x.size(0), action.size(-1)))
+        if action.size(0) == obs.x.size(0):
+            node_action[action_mask] = action[action_mask]
+        elif action.size(0) == int(pool_mask.sum()):
+            node_action[action_mask] = action[action_mask[pool_mask]]
+        elif action.size(0) == int(action_mask.sum()):
+            node_action[action_mask] = action
+        else:
+            raise ValueError(
+                f"Got {action.size(0)} node actions for {int(action_mask.sum())} "
+                f"actuated nodes, {int(pool_mask.sum())} physical nodes, and "
+                f"{obs.x.size(0)} total nodes."
+            )
+        return node_action, pool_mask
 
     def pi(self, obs):
         """
@@ -129,21 +185,7 @@ class GNNActorCritic(nn.Module):
         """
         assert return_type in {"min", "avg", "all"}
         qnet = self._target_Qs if target else self._Qs
-        action_mask = policy_action_mask(obs)
-        pool_mask = physical_node_mask(obs)
-        node_action = action.new_zeros((obs.x.size(0), action.size(-1)))
-        if action.size(0) == obs.x.size(0):
-            node_action[action_mask] = action[action_mask]
-        elif action.size(0) == int(pool_mask.sum()):
-            node_action[action_mask] = action[action_mask[pool_mask]]
-        elif action.size(0) == int(action_mask.sum()):
-            node_action[action_mask] = action
-        else:
-            raise ValueError(
-                f"Got {action.size(0)} node actions for {int(action_mask.sum())} "
-                f"actuated nodes, {int(pool_mask.sum())} physical nodes, and "
-                f"{obs.x.size(0)} total nodes."
-            )
+        node_action, pool_mask = self._node_actions(obs, action)
         q_values = qnet(
             torch.cat([obs.x, node_action], dim=-1),
             obs.edge_index,
@@ -156,3 +198,43 @@ class GNNActorCritic(nn.Module):
         if return_type == "min":
             return q_values.min(0).values
         return q_values.mean(0)
+
+    def cost_Q(self, obs, action, horizon, return_type="max", target=False, logits=False):
+        """Return finite-horizon collapse probabilities from the twin cost critics."""
+        if not self.safety_enabled:
+            raise RuntimeError("Cost critics require safety_constraint.enabled=true")
+        if return_type not in {"min", "max", "avg", "all"}:
+            raise ValueError(f"Unsupported cost critic return_type: {return_type}")
+        node_action, pool_mask = self._node_actions(obs, action)
+        batch = getattr(obs, "batch", None)
+        if batch is None:
+            batch = obs.x.new_zeros(obs.x.size(0), dtype=torch.long)
+        num_graphs = int(batch.max().item()) + 1 if batch.numel() else 1
+        horizon = torch.as_tensor(horizon, dtype=obs.x.dtype, device=obs.x.device).reshape(-1)
+        if horizon.numel() == 1:
+            horizon = horizon.expand(num_graphs)
+        if horizon.numel() != num_graphs:
+            raise ValueError(
+                f"Got {horizon.numel()} horizons for a batch containing {num_graphs} graphs"
+            )
+        if torch.any(horizon < 1) or torch.any(horizon > self.safety_horizon):
+            raise ValueError(
+                f"Cost critic horizons must be in [1, {self.safety_horizon}]"
+            )
+        node_horizon = (horizon / float(self.safety_horizon))[batch].unsqueeze(-1)
+        qnet = self._target_CostQs if target else self._CostQs
+        values = qnet(
+            torch.cat([obs.x, node_action, node_horizon], dim=-1),
+            obs.edge_index,
+            getattr(obs, "batch", None),
+            pool_mask,
+        )
+        if not logits:
+            values = torch.sigmoid(values)
+        if return_type == "all":
+            return values
+        if return_type == "min":
+            return values.min(0).values
+        if return_type == "max":
+            return values.max(0).values
+        return values.mean(0)

@@ -37,6 +37,8 @@ class OnlineTrainer(Trainer):
         self._last_eval_step = None
         self.reward_normalizer = self._make_reward_normalizer()
         self.performance_profiler = TrainingProfiler.from_config(self.cfg, self.logger)
+        self._safety_window_steps = {}
+        self._safety_window_active = {}
         
         self.eval_env = self.env
         eval_task = getattr(self.cfg, "eval_task", None)
@@ -213,9 +215,13 @@ class OnlineTrainer(Trainer):
 
     def _eval_one(self, task_idx=None, video_key="videos/eval_video"):
         ep_rewards, ep_successes, ep_lengths = [], [], []
+        safety_predictions, safety_outcomes = [], []
         for i in range(self.cfg.eval_episodes):
             obs = self.eval_env.reset(task_idx=task_idx) if task_idx is not None else self.eval_env.reset()
             done, ep_reward, t = False, 0, 0
+            if self._safety_enabled():
+                safety_predictions.append(self.agent.predict_safety_risk(obs))
+            collapsed_within_horizon = False
             if self.cfg.save_video:
                 self.logger.video.init(self.eval_env, enabled=(i==0))
             while not done:
@@ -225,18 +231,33 @@ class OnlineTrainer(Trainer):
                 obs, reward, done, info = self.eval_env.step(action)
                 ep_reward += reward
                 t += 1
+                if self._safety_enabled() and t <= self._safety_horizon():
+                    collapsed_within_horizon = collapsed_within_horizon or bool(
+                        self._scalar_value(info.get("collapse_cost", 0.0))
+                    )
                 if self.cfg.save_video:
                     self.logger.video.record(self.eval_env)
             ep_rewards.append(self._scalar_value(ep_reward))
             ep_successes.append(self._scalar_value(info['success']))
             ep_lengths.append(t)
+            if self._safety_enabled():
+                safety_outcomes.append(float(collapsed_within_horizon))
             if self.cfg.save_video:
                 self.logger.video.save(self._step, key=video_key)
-        return dict(
+        metrics = dict(
             episode_reward=np.nanmean(ep_rewards),
             episode_success=np.nanmean(ep_successes),
             episode_length=np.nanmean(ep_lengths),
         )
+        if self._safety_enabled():
+            predictions = np.asarray(safety_predictions, dtype=np.float64)
+            outcomes = np.asarray(safety_outcomes, dtype=np.float64)
+            metrics.update(
+                safety_predicted_risk=np.mean(predictions),
+                safety_horizon_collapse_rate=np.mean(outcomes),
+                safety_brier_score=np.mean(np.square(predictions - outcomes)),
+            )
+        return metrics
 
     def _eval_multitask(self):
         metrics = {}
@@ -251,6 +272,10 @@ class OnlineTrainer(Trainer):
             metrics[f"{task_key}_episode_reward"] = task_metrics["episode_reward"]
             metrics[f"{task_key}_episode_success"] = task_metrics["episode_success"]
             metrics[f"{task_key}_episode_length"] = task_metrics["episode_length"]
+            if self._safety_enabled():
+                metrics[f"{task_key}_safety_predicted_risk"] = task_metrics["safety_predicted_risk"]
+                metrics[f"{task_key}_safety_horizon_collapse_rate"] = task_metrics["safety_horizon_collapse_rate"]
+                metrics[f"{task_key}_safety_brier_score"] = task_metrics["safety_brier_score"]
             task_rewards.append(task_metrics["episode_reward"])
             task_successes.append(task_metrics["episode_success"])
             task_lengths.append(task_metrics["episode_length"])
@@ -277,6 +302,10 @@ class OnlineTrainer(Trainer):
             metrics[f"{topology_key}_episode_reward"] = topology_metrics["episode_reward"]
             metrics[f"{topology_key}_episode_success"] = topology_metrics["episode_success"]
             metrics[f"{topology_key}_episode_length"] = topology_metrics["episode_length"]
+            if self._safety_enabled():
+                metrics[f"{topology_key}_safety_predicted_risk"] = topology_metrics["safety_predicted_risk"]
+                metrics[f"{topology_key}_safety_horizon_collapse_rate"] = topology_metrics["safety_horizon_collapse_rate"]
+                metrics[f"{topology_key}_safety_brier_score"] = topology_metrics["safety_brier_score"]
             topology_rewards.append(topology_metrics["episode_reward"])
             topology_successes.append(topology_metrics["episode_success"])
             topology_lengths.append(topology_metrics["episode_length"])
@@ -568,7 +597,70 @@ class OnlineTrainer(Trainer):
             for action in actions
         ]
     
-    def to_td(self, obs, action=None, reward=None, terminated=None, raw_reward=None):
+    def _safety_enabled(self):
+        safety_cfg = getattr(self.cfg, "safety_constraint", None)
+        if safety_cfg is None:
+            return False
+        if hasattr(safety_cfg, "get"):
+            return bool(safety_cfg.get("enabled", False))
+        return bool(getattr(safety_cfg, "enabled", False))
+
+    def _safety_horizon(self):
+        safety_cfg = getattr(self.cfg, "safety_constraint", None)
+        value = safety_cfg.get("horizon", 250) if hasattr(safety_cfg, "get") else getattr(safety_cfg, "horizon", 250)
+        return int(value)
+
+    def _learning_reward(self, reward, info):
+        if self._safety_enabled():
+            if "locomotion_reward" not in info:
+                raise KeyError(
+                    "Constrained safety requires info['locomotion_reward'] from the environment"
+                )
+            return info["locomotion_reward"]
+        return reward
+
+    def _start_safety_window(self, env_idx):
+        if not hasattr(self, "_safety_window_steps"):
+            self._safety_window_steps = {}
+            self._safety_window_active = {}
+        self._safety_window_steps[int(env_idx)] = 0
+        self._safety_window_active[int(env_idx)] = self._safety_enabled()
+
+    def _safety_task(self, info):
+        task = info.get("task")
+        if task is not None:
+            return str(task)
+        task_names = getattr(self.buffer, "task_names", None)
+        if task_names is not None and len(task_names) == 1:
+            return str(task_names[0])
+        return str(getattr(self.cfg, "task", "task"))
+
+    def _record_safety_transition(self, env_idx, info, done):
+        env_idx = int(env_idx)
+        if not self._safety_window_active.get(env_idx, False):
+            return {}
+        steps = self._safety_window_steps.get(env_idx, 0) + 1
+        self._safety_window_steps[env_idx] = steps
+        collapse = bool(self._scalar_value(info.get("collapse_cost", 0.0)))
+        if not (collapse or bool(done) or steps >= self._safety_horizon()):
+            return {}
+        self._safety_window_active[env_idx] = False
+        outcome = 1.0 if collapse and steps <= self._safety_horizon() else 0.0
+        observe = getattr(self.agent, "observe_safety_outcome", None)
+        if observe is None:
+            return {}
+        return observe(self._safety_task(info), outcome)
+
+    def to_td(
+        self,
+        obs,
+        action=None,
+        reward=None,
+        terminated=None,
+        raw_reward=None,
+        collapse_cost=None,
+        episode_end=None,
+    ):
         """
         Creates a TensorDict for a new episode.
         """
@@ -591,12 +683,22 @@ class OnlineTrainer(Trainer):
             raw_reward = torch.as_tensor(raw_reward, dtype=torch.float32)
         if terminated is None:
             terminated = torch.tensor(float('nan'))
+        if collapse_cost is None:
+            collapse_cost = torch.tensor(float('nan'))
+        elif not isinstance(collapse_cost, torch.Tensor):
+            collapse_cost = torch.as_tensor(collapse_cost, dtype=torch.float32)
+        if episode_end is None:
+            episode_end = torch.tensor(float('nan'))
+        elif not isinstance(episode_end, torch.Tensor):
+            episode_end = torch.as_tensor(episode_end, dtype=torch.float32)
         fields = {
             "obs": obs,
             "action": action.unsqueeze(0),
             "reward": reward.unsqueeze(0),
             "raw_reward": raw_reward.unsqueeze(0),
             "terminated": terminated.unsqueeze(0),
+            "collapse_cost": collapse_cost.reshape(()).unsqueeze(0),
+            "episode_end": episode_end.reshape(()).unsqueeze(0),
         }
         if is_graph_obs:
             td = fields
@@ -651,6 +753,7 @@ class OnlineTrainer(Trainer):
                     obs = self._apply_observation_noise(self.env.reset())
                     self._tds = [self.to_td(obs)]
                     self._episode_reward_components = {}
+                    self._start_safety_window(0)
             
             # Collect experience 
             with self.performance_profiler.phase("action_selection"):
@@ -666,15 +769,19 @@ class OnlineTrainer(Trainer):
                 self._accumulate_reward_components(info)
                 terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
                 previous_td = self._tds[-1]
-                normalized_reward = self._normalize_reward(reward, info, stream=0, done=bool(done))
+                learning_reward = self._learning_reward(reward, info)
+                normalized_reward = self._normalize_reward(learning_reward, info, stream=0, done=bool(done))
                 current_td = self.to_td(
                     obs,
                     action,
                     normalized_reward,
                     terminated,
                     raw_reward=reward,
+                    collapse_cost=info.get("collapse_cost", 0.0),
+                    episode_end=float(bool(done)),
                 )
                 self._tds.append(current_td)
+                train_metrics.update(self._record_safety_transition(0, info, done))
             with self.performance_profiler.phase("replay_insertion"):
                 inserted_transitions += self._add_transition_to_buffer(
                     previous_td,
@@ -775,6 +882,7 @@ class OnlineTrainer(Trainer):
                         episode_tds[env_idx] = [self.to_td(obs)]
                         reward_components[env_idx] = {}
                         done[env_idx] = False
+                        self._start_safety_window(env_idx)
 
             remaining_steps = self.cfg.steps - self._step
             env_indices = list(range(min(num_envs, remaining_steps)))
@@ -802,8 +910,9 @@ class OnlineTrainer(Trainer):
 
                     terminated = info['terminated'] if self.cfg.episodic else torch.tensor(0.0)
                     previous_td = episode_tds[env_idx][-1]
+                    learning_reward = self._learning_reward(reward, info)
                     normalized_reward = self._normalize_reward(
-                        reward,
+                        learning_reward,
                         info,
                         stream=env_idx,
                         done=bool(is_done),
@@ -814,8 +923,13 @@ class OnlineTrainer(Trainer):
                         normalized_reward,
                         terminated,
                         raw_reward=reward,
+                        collapse_cost=info.get("collapse_cost", 0.0),
+                        episode_end=float(bool(is_done)),
                     )
                     episode_tds[env_idx].append(current_td)
+                    train_metrics.update(
+                        self._record_safety_transition(env_idx, info, is_done)
+                    )
                     pending_insertions.append(
                         (previous_td, current_td, bool(is_done), info.get("task"))
                     )

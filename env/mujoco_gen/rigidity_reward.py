@@ -90,6 +90,7 @@ class FirstNonRigidEigenvalueRewardMixin:
             + slip_reward
             + collapse_penalty
         )
+        locomotion_reward = forward_reward + alive_reward + energy_reward + slip_reward
         info = {
             "forward": forward_reward,
             "forward_velocity": forward_vel,
@@ -103,6 +104,8 @@ class FirstNonRigidEigenvalueRewardMixin:
             "critical_eig_raw": critical_eig_raw,
             "collapse_penalty": collapse_penalty,
             "terminated_by_collapse": terminated,
+            "locomotion_reward": locomotion_reward,
+            "collapse_cost": float(terminated),
         }
 
         return float(total_reward), info, terminated

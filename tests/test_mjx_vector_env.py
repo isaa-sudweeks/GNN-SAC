@@ -156,6 +156,15 @@ class MjxVectorEnvTest(unittest.TestCase):
             result = env.step_many([env.rand_act(env_idx=0)], env_indices=[0])[0]
             self.assertEqual(result[0].num_nodes, observations[0].num_nodes)
             self.assertTrue(torch.isfinite(result[1]))
+            info = result[3]
+            expected_locomotion = sum(
+                info[key] for key in ("forward", "alive", "energy", "slip")
+            )
+            torch.testing.assert_close(info["locomotion_reward"], expected_locomotion)
+            torch.testing.assert_close(
+                info["collapse_cost"], info["terminated_by_collapse"].float()
+            )
+            self.assertEqual(bool(info["episode_end"]), bool(result[2]))
         finally:
             env.close()
 
