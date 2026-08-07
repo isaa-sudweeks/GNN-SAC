@@ -2,6 +2,20 @@
 > **Big Idea**:
 > By using GNNs there is a way to formulate learned control algorithms to be topologically generalizable, thus allowing the network to potentially learn how to move many different structures using the same network. It might even be able to extend to the point where it could control robots to both roll and walk.
 
+# Setup with uv
+
+The checked-in `uv.lock` provides a reproducible environment. On Linux, uv
+installs the CUDA 13.0 (`cu130`) PyTorch build; on macOS it uses PyTorch's
+native wheel instead.
+
+```bash
+uv sync --frozen
+uv run python sac/gnn_train.py device=cpu steps=1000 enable_wandb=false
+```
+
+On a CUDA training machine, omit `device=cpu` (or set `device=cuda`). Commands
+run through `uv run` automatically use the locked project environment.
+
 # Thesis Claim
 - A graph-structured SAC policy can learn tendon-level control for compliant or tensegrity robots in a way that generalizes across robot topologies better than fixed-size MLP policies.
 - The important property is not that the controller is fully topologically invariant. It should be permutation equivariant to node and edge ordering while still using the robot topology to produce useful actions.
