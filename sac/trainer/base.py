@@ -188,6 +188,10 @@ class Trainer:
                 "safety_tasks",
                 "safety_horizon",
                 "safety_identity",
+                "active_horizon_by_task",
+                "curriculum_pass_streaks",
+                "curriculum_promotion_counts",
+                "curriculum_stale_outcomes",
             ):
                 if key in agent_state:
                     checkpoint[key] = agent_state[key]

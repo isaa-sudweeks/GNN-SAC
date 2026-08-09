@@ -76,6 +76,23 @@ def config(**overrides):
     return SimpleNamespace(**values)
 
 
+def curriculum_config(**overrides):
+    safety = dict(config().safety_constraint)
+    safety["horizon"] = 1000
+    curriculum = {
+        "enabled": True,
+        "initial_horizon": 50,
+        "promotion_factor": 1.5,
+        "consecutive_success_windows": 3,
+        "boundary_sample_probability": 0.5,
+        "upper_half_sample_probability": 0.25,
+    }
+    curriculum.update(overrides.pop("curriculum", {}))
+    safety["curriculum"] = curriculum
+    safety.update(overrides)
+    return config(safety_constraint=safety)
+
+
 def graph(marker, node_count=3):
     nodes = torch.arange(node_count, dtype=torch.long)
     return Data(
@@ -151,6 +168,57 @@ class FiniteHorizonCostTest(unittest.TestCase):
 
         torch.testing.assert_close(target, torch.tensor([1.0, 0.0, 0.0, 0.6]))
 
+    def test_curriculum_sampling_is_bounded_and_boundary_weighted(self):
+        agent = GNNSAC(curriculum_config())
+        torch.manual_seed(7)
+        horizons = agent._sample_cost_horizons(TASKS[0], 20000)
+
+        self.assertEqual(int(horizons.min()), 1)
+        self.assertEqual(int(horizons.max()), 50)
+        boundary_fraction = float((horizons == 50).float().mean())
+        self.assertGreater(boundary_fraction, 0.49)
+        self.assertLess(boundary_fraction, 0.55)
+
+    def test_fixed_horizon_sampling_remains_uniform_and_seed_compatible(self):
+        agent = GNNSAC(config())
+        torch.manual_seed(19)
+        expected = torch.randint(1, 251, (64,))
+        torch.manual_seed(19)
+        actual = agent._sample_cost_horizons(None, 64)
+        torch.testing.assert_close(actual, expected)
+
+    def test_curriculum_critic_normalizes_by_immutable_maximum(self):
+        agent = GNNSAC(curriculum_config())
+        obs = Batch.from_data_list([graph(1)])
+        action = torch.zeros(3, 1)
+        with patch.object(
+            agent.model._CostQs,
+            "forward",
+            return_value=torch.zeros(2, 1),
+        ) as cost_critics:
+            agent.model.cost_Q(obs, action, torch.tensor([50]), return_type="all")
+
+        critic_input = cost_critics.call_args.args[0]
+        torch.testing.assert_close(
+            critic_input[:, -1], torch.full((3,), 0.05)
+        )
+
+    def test_curriculum_configuration_is_validated(self):
+        invalid = (
+            {"initial_horizon": 0},
+            {"initial_horizon": 1001},
+            {"promotion_factor": 1.0},
+            {"consecutive_success_windows": 0},
+            {"boundary_sample_probability": -0.1},
+            {
+                "boundary_sample_probability": 0.8,
+                "upper_half_sample_probability": 0.3,
+            },
+        )
+        for curriculum in invalid:
+            with self.subTest(curriculum=curriculum), self.assertRaises(ValueError):
+                GNNSAC(curriculum_config(curriculum=curriculum))
+
 
 class MultiplierTest(unittest.TestCase):
     def test_updates_only_matching_topology_and_moves_with_violation(self):
@@ -201,6 +269,93 @@ class MultiplierTest(unittest.TestCase):
 
         self.assertAlmostEqual(float(high_loss - low_loss), 0.36, places=5)
 
+    def test_curriculum_promotes_monotonically_and_independently(self):
+        cfg = curriculum_config(
+            lambda_batch_size=1,
+            curriculum={"consecutive_success_windows": 1},
+        )
+        agent = GNNSAC(cfg)
+        expected = [75, 113, 170, 255, 383, 575, 863, 1000]
+        for horizon in expected:
+            old_horizon = agent.active_safety_horizon(TASKS[0])
+            metrics = agent.observe_safety_outcome(TASKS[0], 0.0, horizon=old_horizon)
+            self.assertEqual(agent.active_safety_horizon(TASKS[0]), horizon)
+            self.assertEqual(agent.active_safety_horizon(TASKS[1]), 50)
+            self.assertEqual(
+                metrics["safety/curriculum_promoted/truss-graph_octahedron"],
+                float(horizon > old_horizon),
+            )
+        agent.observe_safety_outcome(TASKS[0], 0.0, horizon=1000)
+        self.assertEqual(agent.active_safety_horizon(TASKS[0]), 1000)
+
+    def test_curriculum_streak_resets_and_stale_outcomes_are_discarded(self):
+        cfg = curriculum_config(lambda_batch_size=1)
+        agent = GNNSAC(cfg)
+        for outcome in (0.0, 0.0, 1.0, 0.0, 0.0, 0.0):
+            agent.observe_safety_outcome(TASKS[0], outcome, horizon=50)
+        self.assertEqual(agent.active_safety_horizon(TASKS[0]), 75)
+        before_lambda = agent.safety_lambda(TASKS[0]).detach().clone()
+        metrics = agent.observe_safety_outcome(TASKS[0], 1.0, horizon=50)
+        torch.testing.assert_close(agent.safety_lambda(TASKS[0]), before_lambda)
+        self.assertEqual(agent._pending_safety_outcomes[TASKS[0]], [])
+        self.assertEqual(
+            metrics["safety/curriculum_stale_outcomes/truss-graph_octahedron"], 1
+        )
+
+    def test_curriculum_training_and_agent_state_round_trip(self):
+        cfg = curriculum_config(
+            lambda_batch_size=1,
+            curriculum={"consecutive_success_windows": 1},
+        )
+        first = GNNSAC(cfg)
+        first.observe_safety_outcome(TASKS[0], 0.0, horizon=50)
+        first.observe_safety_outcome(TASKS[1], 1.0, horizon=50)
+        state = first.training_state_dict()
+        second = GNNSAC(cfg)
+        second.load_training_state_dict(state)
+
+        self.assertEqual(second.active_horizon_by_task, first.active_horizon_by_task)
+        self.assertEqual(second._curriculum_pass_streaks, first._curriculum_pass_streaks)
+        self.assertEqual(
+            second._curriculum_promotion_counts, first._curriculum_promotion_counts
+        )
+        agent_only = Trainer._agent_checkpoint_state_dict({"agent": state})
+        self.assertIn("active_horizon_by_task", agent_only)
+        third = GNNSAC(cfg)
+        third.load(agent_only)
+        self.assertEqual(third.active_horizon_by_task, first.active_horizon_by_task)
+
+    def test_checkpoint_compatibility_distinguishes_fixed_and_curriculum_runs(self):
+        fixed = GNNSAC(config())
+        old_fixed_state = fixed.training_state_dict()
+        fixed.load_training_state_dict(old_fixed_state)
+
+        curriculum = GNNSAC(curriculum_config())
+        incompatible = dict(curriculum.training_state_dict())
+        incompatible.pop("active_horizon_by_task")
+        with self.assertRaisesRegex(ValueError, "missing safety curriculum state"):
+            curriculum.load_training_state_dict(incompatible)
+
+    def test_actor_and_risk_prediction_use_task_active_horizon(self):
+        agent = GNNSAC(curriculum_config())
+        agent.active_horizon_by_task[TASKS[0]] = 113
+        info = {"log_prob": torch.zeros(1), "entropy": torch.zeros(1)}
+        with patch.object(agent.model, "pi", return_value=(torch.zeros(3, 1), info)), patch.object(
+            agent.model, "Q", return_value=torch.zeros(1)
+        ), patch.object(
+            agent.model, "cost_Q", return_value=torch.full((2, 1), 0.4)
+        ) as cost_q:
+            agent._pi_loss(graph(1), task=TASKS[0])
+            torch.testing.assert_close(
+                cost_q.call_args.args[2], torch.tensor([113], dtype=torch.long)
+            )
+
+        with patch.object(agent.model, "pi_mean", return_value=torch.zeros(3, 1)), patch.object(
+            agent.model, "cost_Q", return_value=torch.tensor([0.25])
+        ) as cost_q:
+            self.assertEqual(agent.predict_safety_risk(graph(1), task=TASKS[0]), 0.25)
+            self.assertEqual(int(cost_q.call_args.args[2].item()), 113)
+
 
 class TrainerContractTest(unittest.TestCase):
     def test_constrained_learning_uses_locomotion_reward_only(self):
@@ -224,7 +379,9 @@ class TrainerContractTest(unittest.TestCase):
         trainer.cfg = config(safety_constraint=safety_cfg)
         trainer.buffer = SimpleNamespace(task_names=[TASKS[0]])
         trainer.agent = SimpleNamespace(
-            observe_safety_outcome=lambda task, outcome: outcomes.append((task, outcome)) or {}
+            observe_safety_outcome=lambda task, outcome, horizon: outcomes.append(
+                (task, outcome, horizon)
+            ) or {}
         )
         trainer._safety_window_steps = {}
         trainer._safety_window_active = {}
@@ -236,7 +393,57 @@ class TrainerContractTest(unittest.TestCase):
         trainer._start_safety_window(0)
         trainer._record_safety_transition(0, {"collapse_cost": 1.0}, True)
 
-        self.assertEqual(outcomes, [(TASKS[0], 0.0), (TASKS[0], 1.0)])
+        self.assertEqual(outcomes, [(TASKS[0], 0.0, 3), (TASKS[0], 1.0, 3)])
+
+    def test_in_flight_window_keeps_horizon_captured_at_start(self):
+        outcomes = []
+        active = {TASKS[0]: 3}
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        trainer.cfg = config()
+        trainer.buffer = SimpleNamespace(task_names=[TASKS[0]])
+        trainer.agent = SimpleNamespace(
+            active_safety_horizon=lambda task: active[task],
+            observe_safety_outcome=lambda task, outcome, horizon: outcomes.append(
+                (task, outcome, horizon)
+            ) or {},
+        )
+        trainer._start_safety_window(0)
+        trainer._record_safety_transition(0, {"collapse_cost": 0.0}, False)
+        active[TASKS[0]] = 5
+        trainer._record_safety_transition(0, {"collapse_cost": 0.0}, False)
+        trainer._record_safety_transition(0, {"collapse_cost": 0.0}, False)
+
+        self.assertEqual(outcomes, [(TASKS[0], 0.0, 3)])
+
+    def test_evaluation_uses_task_active_horizon_without_promoting(self):
+        class EvalEnv:
+            def reset(self, task_idx=None):
+                self.step_count = 0
+                return graph(1)
+
+            def step(self, action):
+                self.step_count += 1
+                done = self.step_count == 2
+                return graph(1), 1.0, done, {
+                    "collapse_cost": float(done),
+                    "success": 0.0,
+                }
+
+        predicted_tasks = []
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        trainer.cfg = config(eval_episodes=1, save_video=False)
+        trainer.eval_env = EvalEnv()
+        trainer.agent = SimpleNamespace(
+            active_safety_horizon=lambda task: 1,
+            predict_safety_risk=lambda obs, task: predicted_tasks.append(task) or 0.25,
+            act=lambda obs, t0, eval_mode: torch.zeros(3, 1),
+        )
+
+        metrics = trainer._eval_one(task_name=TASKS[0])
+
+        self.assertEqual(predicted_tasks, [TASKS[0]])
+        self.assertEqual(metrics["safety_active_horizon"], 1)
+        self.assertEqual(metrics["safety_horizon_collapse_rate"], 0.0)
 
 
 class ReplayAndUpdateTest(unittest.TestCase):

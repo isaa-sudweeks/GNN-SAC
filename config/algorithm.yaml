@@ -34,7 +34,7 @@ log_std_max: 2.0 # Maximum actor log standard deviation before action sampling.
 # Optional finite-horizon collapse constraint
 safety_constraint:
   enabled: false # Add twin collapse-probability critics and topology-specific Lagrange multipliers.
-  horizon: 250 # Number of future environment steps covered by the collapse probability.
+  horizon: 250 # Immutable maximum number of future steps represented by the cost critic.
   default_budget: 0.10 # Default maximum H-step collapse probability for every topology.
   budgets_by_topology: {} # Optional topology-name overrides, for example {henneberg_n6_1tube_2: 0.15}.
   cost_critic_lr: 3e-4 # Adam learning rate for the twin cost critics.
@@ -42,3 +42,10 @@ safety_constraint:
   lambda_init: 0.1 # Initial nonnegative multiplier value.
   lambda_max: 100.0 # Maximum multiplier value; saturation is logged.
   lambda_batch_size: 32 # Resolved reset windows required for one multiplier update.
+  curriculum:
+    enabled: false # Grow a separate active safety horizon for each topology.
+    initial_horizon: 50 # Starting actor, critic-sampling, evaluation, and multiplier horizon.
+    promotion_factor: 1.5 # Monotonic multiplicative horizon increase after sustained success.
+    consecutive_success_windows: 3 # Passing multiplier batches required before promotion.
+    boundary_sample_probability: 0.50 # Cost-critic samples placed exactly at the active horizon.
+    upper_half_sample_probability: 0.25 # Additional samples drawn from the active range's upper half.

@@ -195,7 +195,12 @@ class OnlineTrainer(Trainer):
             return self._eval_topology_buckets()
         if bool(getattr(self.cfg, "multitask", False)) and int(getattr(self.eval_env, "num_envs", 1)) > 1:
             return self._eval_multitask()
-        return self._eval_one()
+        task_name = getattr(self.cfg, "eval_task", None)
+        if task_name is None and self._safety_enabled():
+            safety_tasks = list(getattr(self.agent, "_safety_tasks", []))
+            if len(safety_tasks) == 1:
+                task_name = safety_tasks[0]
+        return self._eval_one(task_name=task_name)
 
     def _evaluate_and_log(self):
         eval_metrics = self.eval()
@@ -213,14 +218,15 @@ class OnlineTrainer(Trainer):
         self._activate_shared_eval_env(0)
         return self._evaluate_and_log()
 
-    def _eval_one(self, task_idx=None, video_key="videos/eval_video"):
+    def _eval_one(self, task_idx=None, task_name=None, video_key="videos/eval_video"):
         ep_rewards, ep_successes, ep_lengths = [], [], []
         safety_predictions, safety_outcomes = [], []
         for i in range(self.cfg.eval_episodes):
             obs = self.eval_env.reset(task_idx=task_idx) if task_idx is not None else self.eval_env.reset()
             done, ep_reward, t = False, 0, 0
+            safety_horizon = self._safety_horizon(task_name) if self._safety_enabled() else None
             if self._safety_enabled():
-                safety_predictions.append(self.agent.predict_safety_risk(obs))
+                safety_predictions.append(self.agent.predict_safety_risk(obs, task=task_name))
             collapsed_within_horizon = False
             if self.cfg.save_video:
                 self.logger.video.init(self.eval_env, enabled=(i==0))
@@ -231,7 +237,7 @@ class OnlineTrainer(Trainer):
                 obs, reward, done, info = self.eval_env.step(action)
                 ep_reward += reward
                 t += 1
-                if self._safety_enabled() and t <= self._safety_horizon():
+                if self._safety_enabled() and t <= safety_horizon:
                     collapsed_within_horizon = collapsed_within_horizon or bool(
                         self._scalar_value(info.get("collapse_cost", 0.0))
                     )
@@ -256,6 +262,8 @@ class OnlineTrainer(Trainer):
                 safety_predicted_risk=np.mean(predictions),
                 safety_horizon_collapse_rate=np.mean(outcomes),
                 safety_brier_score=np.mean(np.square(predictions - outcomes)),
+                safety_active_horizon=safety_horizon,
+                safety_max_horizon=int(self._safety_horizon()),
             )
         return metrics
 
@@ -267,6 +275,7 @@ class OnlineTrainer(Trainer):
             task_key = self._metric_key(task_name)
             task_metrics = self._eval_one(
                 task_idx=task_idx,
+                task_name=task_name,
                 video_key=f"videos/eval_video/{task_key}",
             )
             metrics[f"{task_key}_episode_reward"] = task_metrics["episode_reward"]
@@ -276,6 +285,8 @@ class OnlineTrainer(Trainer):
                 metrics[f"{task_key}_safety_predicted_risk"] = task_metrics["safety_predicted_risk"]
                 metrics[f"{task_key}_safety_horizon_collapse_rate"] = task_metrics["safety_horizon_collapse_rate"]
                 metrics[f"{task_key}_safety_brier_score"] = task_metrics["safety_brier_score"]
+                metrics[f"{task_key}_safety_active_horizon"] = task_metrics["safety_active_horizon"]
+                metrics[f"{task_key}_safety_max_horizon"] = task_metrics["safety_max_horizon"]
             task_rewards.append(task_metrics["episode_reward"])
             task_successes.append(task_metrics["episode_success"])
             task_lengths.append(task_metrics["episode_length"])
@@ -295,8 +306,10 @@ class OnlineTrainer(Trainer):
         topology_rewards, topology_successes, topology_lengths = [], [], []
         for topology, env_idx in topology_indices.items():
             topology_key = self._metric_key(topology)
+            task_name = f"{str(getattr(self.cfg, 'task', 'truss-graph')).split(':', 1)[0]}:{topology}"
             topology_metrics = self._eval_one(
                 task_idx=env_idx,
+                task_name=task_name,
                 video_key=f"videos/eval_video/{topology_key}",
             )
             metrics[f"{topology_key}_episode_reward"] = topology_metrics["episode_reward"]
@@ -306,6 +319,8 @@ class OnlineTrainer(Trainer):
                 metrics[f"{topology_key}_safety_predicted_risk"] = topology_metrics["safety_predicted_risk"]
                 metrics[f"{topology_key}_safety_horizon_collapse_rate"] = topology_metrics["safety_horizon_collapse_rate"]
                 metrics[f"{topology_key}_safety_brier_score"] = topology_metrics["safety_brier_score"]
+                metrics[f"{topology_key}_safety_active_horizon"] = topology_metrics["safety_active_horizon"]
+                metrics[f"{topology_key}_safety_max_horizon"] = topology_metrics["safety_max_horizon"]
             topology_rewards.append(topology_metrics["episode_reward"])
             topology_successes.append(topology_metrics["episode_success"])
             topology_lengths.append(topology_metrics["episode_length"])
@@ -605,7 +620,10 @@ class OnlineTrainer(Trainer):
             return bool(safety_cfg.get("enabled", False))
         return bool(getattr(safety_cfg, "enabled", False))
 
-    def _safety_horizon(self):
+    def _safety_horizon(self, task=None):
+        active_horizon = getattr(self.agent, "active_safety_horizon", None)
+        if task is not None and callable(active_horizon):
+            return int(active_horizon(task))
         safety_cfg = getattr(self.cfg, "safety_constraint", None)
         value = safety_cfg.get("horizon", 250) if hasattr(safety_cfg, "get") else getattr(safety_cfg, "horizon", 250)
         return int(value)
@@ -622,9 +640,16 @@ class OnlineTrainer(Trainer):
     def _start_safety_window(self, env_idx):
         if not hasattr(self, "_safety_window_steps"):
             self._safety_window_steps = {}
+        if not hasattr(self, "_safety_window_active"):
             self._safety_window_active = {}
+        if not hasattr(self, "_safety_window_tasks"):
+            self._safety_window_tasks = {}
+        if not hasattr(self, "_safety_window_horizons"):
+            self._safety_window_horizons = {}
         self._safety_window_steps[int(env_idx)] = 0
         self._safety_window_active[int(env_idx)] = self._safety_enabled()
+        self._safety_window_tasks.pop(int(env_idx), None)
+        self._safety_window_horizons.pop(int(env_idx), None)
 
     def _safety_task(self, info):
         task = info.get("task")
@@ -639,17 +664,24 @@ class OnlineTrainer(Trainer):
         env_idx = int(env_idx)
         if not self._safety_window_active.get(env_idx, False):
             return {}
+        task = self._safety_task(info)
+        if env_idx not in self._safety_window_horizons:
+            self._safety_window_tasks[env_idx] = task
+            self._safety_window_horizons[env_idx] = self._safety_horizon(task)
+        elif self._safety_window_tasks[env_idx] != task:
+            raise ValueError("Safety task changed within an active reset window")
+        horizon = self._safety_window_horizons[env_idx]
         steps = self._safety_window_steps.get(env_idx, 0) + 1
         self._safety_window_steps[env_idx] = steps
         collapse = bool(self._scalar_value(info.get("collapse_cost", 0.0)))
-        if not (collapse or bool(done) or steps >= self._safety_horizon()):
+        if not (collapse or bool(done) or steps >= horizon):
             return {}
         self._safety_window_active[env_idx] = False
-        outcome = 1.0 if collapse and steps <= self._safety_horizon() else 0.0
+        outcome = 1.0 if collapse and steps <= horizon else 0.0
         observe = getattr(self.agent, "observe_safety_outcome", None)
         if observe is None:
             return {}
-        return observe(self._safety_task(info), outcome)
+        return observe(task, outcome, horizon=horizon)
 
     def to_td(
         self,

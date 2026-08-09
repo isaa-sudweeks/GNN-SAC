@@ -37,9 +37,20 @@ class GNNSAC(torch.nn.Module):
         self._pending_safety_outcomes = {task: [] for task in self._safety_tasks}
         self._resolved_safety_counts = {task: 0 for task in self._safety_tasks}
         self._last_safety_metrics = {}
+        self.curriculum_enabled = bool(self._curriculum_cfg("enabled", False))
+        initial_horizon = int(self._curriculum_cfg("initial_horizon", 50))
+        self.active_horizon_by_task = {
+            task: initial_horizon if self.curriculum_enabled else self.safety_horizon
+            for task in self._safety_tasks
+        }
+        self._curriculum_pass_streaks = {task: 0 for task in self._safety_tasks}
+        self._curriculum_promotion_counts = {task: 0 for task in self._safety_tasks}
+        self._curriculum_stale_outcomes = {task: 0 for task in self._safety_tasks}
+        self._last_cost_horizon_metrics = {}
         if self.safety_enabled:
             if self.safety_horizon <= 0:
                 raise ValueError("safety_constraint.horizon must be positive")
+            self._validate_curriculum_config()
             lambda_init = float(self._safety_cfg("lambda_init", 0.1))
             lambda_max = float(self._safety_cfg("lambda_max", 100.0))
             lambda_batch_size = int(self._safety_cfg("lambda_batch_size", 32))
@@ -86,6 +97,36 @@ class GNNSAC(torch.nn.Module):
             return safety_cfg.get(name, default)
         return getattr(safety_cfg, name, default)
 
+    def _curriculum_cfg(self, name, default=None):
+        curriculum = self._safety_cfg("curriculum", None)
+        if curriculum is None:
+            return default
+        if hasattr(curriculum, "get"):
+            return curriculum.get(name, default)
+        return getattr(curriculum, name, default)
+
+    def _validate_curriculum_config(self):
+        if not self.curriculum_enabled:
+            return
+        initial = int(self._curriculum_cfg("initial_horizon", 50))
+        factor = float(self._curriculum_cfg("promotion_factor", 1.5))
+        successes = int(self._curriculum_cfg("consecutive_success_windows", 3))
+        boundary = float(self._curriculum_cfg("boundary_sample_probability", 0.5))
+        upper = float(self._curriculum_cfg("upper_half_sample_probability", 0.25))
+        if not 1 <= initial <= self.safety_horizon:
+            raise ValueError(
+                "safety curriculum initial_horizon must be in "
+                f"[1, {self.safety_horizon}]"
+            )
+        if not math.isfinite(factor) or factor <= 1.0:
+            raise ValueError("safety curriculum promotion_factor must be finite and greater than 1")
+        if successes <= 0:
+            raise ValueError("safety curriculum consecutive_success_windows must be positive")
+        if not 0.0 <= boundary <= 1.0 or not 0.0 <= upper <= 1.0:
+            raise ValueError("safety curriculum sampling probabilities must be in [0, 1]")
+        if boundary + upper > 1.0:
+            raise ValueError("safety curriculum sampling probabilities must sum to at most 1")
+
     def _configured_tasks(self):
         backend = str(getattr(self.cfg, "mujoco_backend", "mujoco")).lower()
         topologies = getattr(self.cfg, "truss_topologies", None)
@@ -125,7 +166,7 @@ class GNNSAC(torch.nn.Module):
     def _safety_identity(self):
         if not self.safety_enabled:
             return {"enabled": False}
-        return {
+        identity = {
             "enabled": True,
             "horizon": self.safety_horizon,
             "tasks": list(self._safety_tasks),
@@ -136,6 +177,35 @@ class GNNSAC(torch.nn.Module):
             "lambda_max": float(self._safety_cfg("lambda_max", 100.0)),
             "lambda_batch_size": int(self._safety_cfg("lambda_batch_size", 32)),
         }
+        if self.curriculum_enabled:
+            identity["curriculum"] = {
+                "enabled": True,
+                "initial_horizon": int(self._curriculum_cfg("initial_horizon", 50)),
+                "promotion_factor": float(self._curriculum_cfg("promotion_factor", 1.5)),
+                "consecutive_success_windows": int(
+                    self._curriculum_cfg("consecutive_success_windows", 3)
+                ),
+                "boundary_sample_probability": float(
+                    self._curriculum_cfg("boundary_sample_probability", 0.5)
+                ),
+                "upper_half_sample_probability": float(
+                    self._curriculum_cfg("upper_half_sample_probability", 0.25)
+                ),
+            }
+        return identity
+
+    def active_safety_horizon(self, task=None):
+        if task is None:
+            if len(self._safety_tasks) != 1:
+                raise ValueError("A safety task is required for a multitask constrained run")
+            task = self._safety_tasks[0]
+        task = str(task)
+        try:
+            return int(self.active_horizon_by_task[task])
+        except KeyError as exc:
+            raise KeyError(
+                f"Unknown safety task {task!r}; expected one of {self._safety_tasks!r}"
+            ) from exc
 
     def safety_lambda(self, task):
         try:
@@ -146,7 +216,7 @@ class GNNSAC(torch.nn.Module):
             ) from exc
         return self.safety_lambdas()[index]
 
-    def observe_safety_outcome(self, task, outcome):
+    def observe_safety_outcome(self, task, outcome, horizon=None):
         """Consume one on-policy reset-window outcome and update its multiplier in batches."""
         if not self.safety_enabled:
             return {}
@@ -156,6 +226,14 @@ class GNNSAC(torch.nn.Module):
         outcome = float(outcome)
         if outcome not in {0.0, 1.0}:
             raise ValueError("Safety outcomes must be binary")
+        active_horizon = self.active_safety_horizon(task)
+        horizon = active_horizon if horizon is None else int(horizon)
+        key = self._diagnostic_key(task)
+        if horizon != active_horizon:
+            self._curriculum_stale_outcomes[task] += 1
+            metrics = self._curriculum_metrics(task, promoted=False)
+            self._last_safety_metrics.update(metrics)
+            return metrics
         pending = self._pending_safety_outcomes[task]
         pending.append(outcome)
         batch_size = int(self._safety_cfg("lambda_batch_size", 32))
@@ -175,7 +253,6 @@ class GNNSAC(torch.nn.Module):
             maximum_raw = self._inverse_softplus(float(self._safety_cfg("lambda_max", 100.0)))
             self.raw_lambdas.clamp_(min=-20.0, max=maximum_raw)
         multiplier = self.safety_lambda(task).detach()
-        key = self._diagnostic_key(task)
         metrics = {
             f"safety/lambda/{key}": multiplier,
             f"safety/budget/{key}": budget,
@@ -186,7 +263,43 @@ class GNNSAC(torch.nn.Module):
             ),
             f"safety/resolved_window_count/{key}": self._resolved_safety_counts[task],
         }
+        promoted = False
+        if self.curriculum_enabled:
+            if float(rate) <= budget:
+                self._curriculum_pass_streaks[task] += 1
+            else:
+                self._curriculum_pass_streaks[task] = 0
+            required = int(self._curriculum_cfg("consecutive_success_windows", 3))
+            if (
+                self._curriculum_pass_streaks[task] >= required
+                and active_horizon < self.safety_horizon
+            ):
+                factor = float(self._curriculum_cfg("promotion_factor", 1.5))
+                promoted_horizon = min(
+                    self.safety_horizon,
+                    int(math.ceil(active_horizon * factor)),
+                )
+                if promoted_horizon > active_horizon:
+                    self.active_horizon_by_task[task] = promoted_horizon
+                    self._curriculum_promotion_counts[task] += 1
+                    self._curriculum_pass_streaks[task] = 0
+                    self._pending_safety_outcomes[task].clear()
+                    promoted = True
+        metrics.update(self._curriculum_metrics(task, promoted=promoted))
         self._last_safety_metrics.update(metrics)
+        return metrics
+
+    def _curriculum_metrics(self, task, *, promoted):
+        key = self._diagnostic_key(task)
+        metrics = {
+            f"safety/active_horizon/{key}": self.active_safety_horizon(task),
+            f"safety/max_horizon/{key}": self.safety_horizon,
+            f"safety/curriculum_pass_streak/{key}": self._curriculum_pass_streaks[task],
+            f"safety/curriculum_promotion_count/{key}": self._curriculum_promotion_counts[task],
+            f"safety/curriculum_stale_outcomes/{key}": self._curriculum_stale_outcomes[task],
+        }
+        if promoted:
+            metrics[f"safety/curriculum_promoted/{key}"] = 1.0
         return metrics
 
     @property
@@ -217,6 +330,8 @@ class GNNSAC(torch.nn.Module):
                 safety_horizon=self.safety_horizon,
                 safety_identity=self._safety_identity(),
             )
+            if self.curriculum_enabled:
+                state.update(self._curriculum_state_dict())
         torch.save(state, fp)
     def load(self, fp):
         state_dict = fp if isinstance(fp, dict) else torch.load(fp, map_location=self.device, weights_only=False)
@@ -230,6 +345,10 @@ class GNNSAC(torch.nn.Module):
         if isinstance(state_dict, dict) and "log_alpha" in state_dict:
             self.log_alpha.data.copy_(state_dict["log_alpha"].to(self.device))
         if self.safety_enabled:
+            if self.curriculum_enabled and "active_horizon_by_task" not in state_dict:
+                raise ValueError(
+                    "Checkpoint is missing safety curriculum state; start a fresh curriculum run."
+                )
             if state_dict.get("safety_identity") != self._safety_identity():
                 raise ValueError(
                     "Checkpoint safety configuration does not match the current run configuration"
@@ -239,6 +358,8 @@ class GNNSAC(torch.nn.Module):
             if int(state_dict.get("safety_horizon", -1)) != self.safety_horizon:
                 raise ValueError("Checkpoint safety horizon does not match configured horizon")
             self.raw_lambdas.data.copy_(state_dict["raw_lambdas"].to(self.device))
+            if self.curriculum_enabled:
+                self._load_curriculum_state_dict(state_dict)
 
     def training_state_dict(self):
         state = {
@@ -263,7 +384,38 @@ class GNNSAC(torch.nn.Module):
                 },
                 resolved_safety_counts=dict(self._resolved_safety_counts),
             )
+            if self.curriculum_enabled:
+                state.update(self._curriculum_state_dict())
         return state
+
+    def _curriculum_state_dict(self):
+        return {
+            "active_horizon_by_task": dict(self.active_horizon_by_task),
+            "curriculum_pass_streaks": dict(self._curriculum_pass_streaks),
+            "curriculum_promotion_counts": dict(self._curriculum_promotion_counts),
+            "curriculum_stale_outcomes": dict(self._curriculum_stale_outcomes),
+        }
+
+    def _load_curriculum_state_dict(self, state_dict):
+        saved_horizons = state_dict.get("active_horizon_by_task", {})
+        if list(saved_horizons) != self._safety_tasks:
+            raise ValueError("Checkpoint curriculum tasks do not match configured topology tasks")
+        horizons = {task: int(saved_horizons[task]) for task in self._safety_tasks}
+        if any(not 1 <= horizon <= self.safety_horizon for horizon in horizons.values()):
+            raise ValueError("Checkpoint contains an invalid active safety horizon")
+        self.active_horizon_by_task = horizons
+        self._curriculum_pass_streaks = {
+            task: int(state_dict.get("curriculum_pass_streaks", {}).get(task, 0))
+            for task in self._safety_tasks
+        }
+        self._curriculum_promotion_counts = {
+            task: int(state_dict.get("curriculum_promotion_counts", {}).get(task, 0))
+            for task in self._safety_tasks
+        }
+        self._curriculum_stale_outcomes = {
+            task: int(state_dict.get("curriculum_stale_outcomes", {}).get(task, 0))
+            for task in self._safety_tasks
+        }
 
     def load_training_state_dict(self, state_dict):
         self.load(state_dict)
@@ -337,7 +489,7 @@ class GNNSAC(torch.nn.Module):
         return full_actions
 
     @torch.no_grad()
-    def predict_safety_risk(self, obs):
+    def predict_safety_risk(self, obs, task=None):
         """Predict deterministic-policy H-step collapse risk for one graph."""
         if not self.safety_enabled:
             raise RuntimeError("Safety risk prediction requires constrained safety")
@@ -349,7 +501,7 @@ class GNNSAC(torch.nn.Module):
         risk = self.model.cost_Q(
             batch,
             action,
-            torch.tensor([self.safety_horizon], device=self.device),
+            torch.tensor([self.active_safety_horizon(task)], device=self.device),
             return_type="max",
         )
         return float(risk.item())
@@ -408,15 +560,65 @@ class GNNSAC(torch.nn.Module):
         )
         return target.clamp(0.0, 1.0)
 
-    def _cost_q_loss(self, obs, action, collapse_cost, episode_end, next_obs, horizon=None):
-        batch_size = int(collapse_cost.numel())
-        if horizon is None:
-            horizon = torch.randint(
+    def _sample_cost_horizons(self, task, batch_size):
+        if not self.curriculum_enabled:
+            return torch.randint(
                 1,
                 self.safety_horizon + 1,
                 (batch_size,),
                 device=self.device,
             )
+        active_horizon = self.active_safety_horizon(task)
+        boundary_probability = float(
+            self._curriculum_cfg("boundary_sample_probability", 0.5)
+        )
+        upper_probability = float(
+            self._curriculum_cfg("upper_half_sample_probability", 0.25)
+        )
+        categories = torch.rand(batch_size, device=self.device)
+        horizons = torch.randint(
+            1,
+            active_horizon + 1,
+            (batch_size,),
+            device=self.device,
+        )
+        upper_start = max(1, int(math.ceil(active_horizon / 2.0)))
+        upper_mask = (
+            (categories >= boundary_probability)
+            & (categories < boundary_probability + upper_probability)
+        )
+        upper_count = int(upper_mask.sum().item())
+        if upper_count:
+            horizons[upper_mask] = torch.randint(
+                upper_start,
+                active_horizon + 1,
+                (upper_count,),
+                device=self.device,
+            )
+        horizons[categories < boundary_probability] = active_horizon
+        return horizons
+
+    def _record_cost_horizon_metrics(self, task, horizons):
+        key = self._diagnostic_key(task)
+        active_horizon = self.active_safety_horizon(task)
+        self._last_cost_horizon_metrics.update(
+            {
+                f"safety/critic_sampled_horizon_mean/{key}": horizons.float().mean(),
+                f"safety/critic_sampled_horizon_max/{key}": horizons.max(),
+                f"safety/critic_sampled_boundary_fraction/{key}": (
+                    horizons == active_horizon
+                ).float().mean(),
+            }
+        )
+
+    def _cost_q_loss(
+        self, obs, action, collapse_cost, episode_end, next_obs, horizon=None, task=None
+    ):
+        batch_size = int(collapse_cost.numel())
+        if horizon is None:
+            horizon = self._sample_cost_horizons(task, batch_size)
+        if task is not None:
+            self._record_cost_horizon_metrics(task, horizon)
         target = self._cost_td_target(
             next_obs, collapse_cost, episode_end, horizon
         )
@@ -448,7 +650,7 @@ class GNNSAC(torch.nn.Module):
         for task, batch in task_batches.items():
             obs, action, _, collapse_cost, _, episode_end, next_obs = self._unpack_batch(batch)
             losses[task] = self._cost_q_loss(
-                obs, action, collapse_cost, episode_end, next_obs
+                obs, action, collapse_cost, episode_end, next_obs, task=task
             )
         cost_loss = torch.stack(list(losses.values())).mean()
         self.cost_q_optim.zero_grad(set_to_none=True)
@@ -497,7 +699,10 @@ class GNNSAC(torch.nn.Module):
             if task is None:
                 raise ValueError("Constrained actor loss requires an explicit topology task")
             horizon = torch.full(
-                (q.numel(),), self.safety_horizon, dtype=torch.long, device=self.device
+                (q.numel(),),
+                self.active_safety_horizon(task),
+                dtype=torch.long,
+                device=self.device,
             )
             risk_all = self.model.cost_Q(
                 obs, action, horizon, return_type="all"
@@ -550,11 +755,18 @@ class GNNSAC(torch.nn.Module):
             twin = info["safety_risk_all"].detach()
             metrics[f"safety/predicted_risk_mean/{key}"] = risks.mean()
             metrics[f"safety/predicted_risk_max/{key}"] = risks.max()
+            metrics[f"safety/predicted_risk_saturated_high_fraction/{key}"] = (
+                risks > 0.95
+            ).float().mean()
+            metrics[f"safety/predicted_risk_saturated_low_fraction/{key}"] = (
+                risks < 0.05
+            ).float().mean()
             metrics[f"safety/twin_disagreement/{key}"] = (
                 twin.max(0).values - twin.min(0).values
             ).mean()
             metrics[f"safety/lambda/{key}"] = info["safety_lambda"]
             metrics[f"safety/budget/{key}"] = self._budget(task)
+            metrics.update(self._curriculum_metrics(task, promoted=False))
         return metrics
 
     @staticmethod
@@ -697,7 +909,12 @@ class GNNSAC(torch.nn.Module):
                 if self.safety_enabled:
                     gradients["cost_critic"][task] = self._parameter_gradients(
                         self._cost_q_loss(
-                            obs, action, collapse_cost, episode_end, next_obs
+                            obs,
+                            action,
+                            collapse_cost,
+                            episode_end,
+                            next_obs,
+                            task=task,
                         ),
                         cost_parameters,
                     )
@@ -765,7 +982,7 @@ class GNNSAC(torch.nn.Module):
         for task, batch in task_batches.items():
             obs, action, _, collapse_cost, _, episode_end, next_obs = self._unpack_batch(batch)
             loss = self._cost_q_loss(
-                obs, action, collapse_cost, episode_end, next_obs
+                obs, action, collapse_cost, episode_end, next_obs, task=task
             )
             losses.append(loss)
             task_gradients[task] = self._parameter_gradients(loss, parameters)
@@ -829,11 +1046,18 @@ class GNNSAC(torch.nn.Module):
                 twin = info["safety_risk_all"].detach()
                 metrics[f"safety/predicted_risk_mean/{key}"] = risks.mean()
                 metrics[f"safety/predicted_risk_max/{key}"] = risks.max()
+                metrics[f"safety/predicted_risk_saturated_high_fraction/{key}"] = (
+                    risks > 0.95
+                ).float().mean()
+                metrics[f"safety/predicted_risk_saturated_low_fraction/{key}"] = (
+                    risks < 0.05
+                ).float().mean()
                 metrics[f"safety/twin_disagreement/{key}"] = (
                     twin.max(0).values - twin.min(0).values
                 ).mean()
                 metrics[f"safety/lambda/{key}"] = info["safety_lambda"]
                 metrics[f"safety/budget/{key}"] = self._budget(task)
+                metrics.update(self._curriculum_metrics(task, promoted=False))
         return metrics, task_gradients
 
     def update(self, buffer, compute_diagnostics=False, performance_profiler=None):
@@ -945,6 +1169,7 @@ class GNNSAC(torch.nn.Module):
             )
             for task, task_loss in cost_losses_by_task.items():
                 info[f"safety/cost_loss/{self._diagnostic_key(task)}"] = task_loss
+            info.update(self._last_cost_horizon_metrics)
         info.update(pi_info)
         if diagnostics is not None:
             info["gradient_diagnostics"] = diagnostics
