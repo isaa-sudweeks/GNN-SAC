@@ -42,6 +42,7 @@ safety_constraint:
   lambda_init: 0.1 # Initial nonnegative multiplier value.
   lambda_max: 100.0 # Maximum multiplier value; saturation is logged.
   lambda_batch_size: 32 # Resolved reset windows required for one multiplier update.
+  diagnostics_freq: 100 # Optimizer-update interval for bounded actor/critic safety diagnostics.
   curriculum:
     enabled: false # Grow a separate active safety horizon for each topology.
     initial_horizon: 50 # Starting actor, critic-sampling, evaluation, and multiplier horizon.

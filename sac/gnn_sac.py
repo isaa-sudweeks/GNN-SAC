@@ -47,6 +47,7 @@ class GNNSAC(torch.nn.Module):
         self._curriculum_promotion_counts = {task: 0 for task in self._safety_tasks}
         self._curriculum_stale_outcomes = {task: 0 for task in self._safety_tasks}
         self._last_cost_horizon_metrics = {}
+        self._last_cost_target_metrics = {}
         if self.safety_enabled:
             if self.safety_horizon <= 0:
                 raise ValueError("safety_constraint.horizon must be positive")
@@ -622,6 +623,18 @@ class GNNSAC(torch.nn.Module):
         target = self._cost_td_target(
             next_obs, collapse_cost, episode_end, horizon
         )
+        if task is not None:
+            key = self._diagnostic_key(task)
+            detached_target = target.detach()
+            self._last_cost_target_metrics.update(
+                {
+                    f"safety/cost_target_mean/{key}": detached_target.mean(),
+                    f"safety/cost_target_std/{key}": detached_target.std(unbiased=False),
+                    f"safety/cost_target_high_fraction/{key}": (
+                        detached_target > 0.95
+                    ).float().mean(),
+                }
+            )
         logits = self.model.cost_Q(
             obs,
             action,
@@ -767,6 +780,76 @@ class GNNSAC(torch.nn.Module):
             metrics[f"safety/lambda/{key}"] = info["safety_lambda"]
             metrics[f"safety/budget/{key}"] = self._budget(task)
             metrics.update(self._curriculum_metrics(task, promoted=False))
+        return metrics
+
+    def _safety_diagnostics(self, task_batches):
+        """Measure whether the cost critic can exert a useful actor gradient."""
+        if not self.safety_enabled:
+            return {}
+        cpu_rng = torch.random.get_rng_state()
+        cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        parameters = tuple(self.model._pi.parameters())
+        metrics = {}
+        try:
+            for task, batch in task_batches.items():
+                obs, *_ = self._unpack_batch(batch)
+                key = self._diagnostic_key(task)
+
+                reward_action, _ = self.model.pi(obs)
+                reward_term = -self.model.Q(obs, reward_action, return_type="min").mean()
+                reward_gradients = self._parameter_gradients(reward_term, parameters)
+
+                safety_action, _ = self.model.pi(obs)
+                horizon = torch.full(
+                    (int(getattr(obs, "num_graphs", 1)),),
+                    self.active_safety_horizon(task),
+                    dtype=torch.long,
+                    device=self.device,
+                )
+                risk = self.model.cost_Q(
+                    obs, safety_action, horizon, return_type="max"
+                )
+                action_gradient = torch.autograd.grad(
+                    risk.sum(),
+                    safety_action,
+                    retain_graph=True,
+                    allow_unused=True,
+                )[0]
+                weighted_constraint = self.safety_lambda(task).detach() * risk.mean()
+                constraint_gradients = self._parameter_gradients(
+                    weighted_constraint, parameters
+                )
+                pair = self.gradient_pair_metrics(
+                    reward_gradients, constraint_gradients
+                )
+                reward_norm = pair["first_norm"]
+                constraint_norm = pair["second_norm"]
+                metrics.update(
+                    {
+                        f"safety/actor_reward_grad_norm/{key}": reward_norm,
+                        f"safety/actor_weighted_constraint_grad_norm/{key}": constraint_norm,
+                        f"safety/constraint_to_reward_grad_ratio/{key}": (
+                            constraint_norm / (reward_norm + 1e-12)
+                        ),
+                        f"safety/reward_constraint_grad_cosine/{key}": pair["cosine"],
+                    }
+                )
+                if action_gradient is not None:
+                    per_action_norm = action_gradient.detach().reshape(
+                        action_gradient.shape[0], -1
+                    ).norm(dim=-1)
+                    metrics.update(
+                        {
+                            f"safety/risk_action_grad_norm_mean/{key}": per_action_norm.mean(),
+                            f"safety/risk_action_grad_near_zero_fraction/{key}": (
+                                per_action_norm < 1e-6
+                            ).float().mean(),
+                        }
+                    )
+        finally:
+            torch.random.set_rng_state(cpu_rng)
+            if cuda_rng is not None:
+                torch.cuda.set_rng_state_all(cuda_rng)
         return metrics
 
     @staticmethod
@@ -1060,7 +1143,13 @@ class GNNSAC(torch.nn.Module):
                 metrics.update(self._curriculum_metrics(task, promoted=False))
         return metrics, task_gradients
 
-    def update(self, buffer, compute_diagnostics=False, performance_profiler=None):
+    def update(
+        self,
+        buffer,
+        compute_diagnostics=False,
+        compute_safety_diagnostics=False,
+        performance_profiler=None,
+    ):
         pcgrad_enabled = bool(getattr(self.cfg, "pcgrad", False))
         safety_enabled = bool(getattr(self, "safety_enabled", False))
         combined_batch = None
@@ -1116,6 +1205,11 @@ class GNNSAC(torch.nn.Module):
         )
         with optimization_phase:
             self.model.train()
+            safety_diagnostics = (
+                self._safety_diagnostics(task_batches)
+                if compute_safety_diagnostics and safety_enabled
+                else None
+            )
             if pcgrad_enabled:
                 q_loss, q_grad_norm, q_task_gradients = self._pcgrad_q_update(task_batches)
                 if safety_enabled:
@@ -1164,12 +1258,17 @@ class GNNSAC(torch.nn.Module):
         }
         if safety_enabled:
             info.update(
-                cost_value_loss=cost_loss,
-                cost_q_grad_norm=cost_grad_norm,
+                **{
+                    "safety/cost_value_loss": cost_loss,
+                    "safety/cost_q_grad_norm": cost_grad_norm,
+                }
             )
             for task, task_loss in cost_losses_by_task.items():
                 info[f"safety/cost_loss/{self._diagnostic_key(task)}"] = task_loss
             info.update(self._last_cost_horizon_metrics)
+            info.update(self._last_cost_target_metrics)
+            if safety_diagnostics:
+                info.update(safety_diagnostics)
         info.update(pi_info)
         if diagnostics is not None:
             info["gradient_diagnostics"] = diagnostics

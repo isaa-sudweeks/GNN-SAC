@@ -50,6 +50,7 @@ CONSOLE_FORMAT = [
 
 CAT_TO_COLOR = {
     "train": "blue",
+    "safety": "red",
     "eval": "green",
     "training_rewards": "magenta",
     "gradient_diagnostics": "cyan",
@@ -449,7 +450,7 @@ class Logger:
         if self._wandb:
             step = clean_metrics.get("step")
             wandb_metrics = {
-                f"{category}/{key}": value
+                key if key.startswith("safety/") else f"{category}/{key}": value
                 for key, value in clean_metrics.items()
             }
             self._wandb.log(wandb_metrics, step=step)
