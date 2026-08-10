@@ -762,6 +762,26 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_graph_topology_list_allows_variable_edge_role_spaces(self):
+        cfg = graph_test_cfg(
+            task="truss-graph",
+            truss_topologies=["tetrahedron", "octahedron", "henneberg_n6_1tube_2"],
+            multitask=False,
+            num_envs=1,
+            max_steps=2,
+            nsubsteps=1,
+            domain_randomization=False,
+            graph_features={"edge_roles": True},
+        )
+        env = make_env(cfg)
+        try:
+            observations = env.reset_many(env_indices=[0, 1, 2])
+            self.assertEqual([obs.num_nodes for obs in observations], [8, 12, 13])
+            for obs in observations:
+                self.assertEqual(obs.edge_role.shape, (obs.edge_index.shape[1],))
+        finally:
+            env.close()
+
     def test_graph_topology_list_accepts_realistic_variant_suffix(self):
         cfg = graph_test_cfg(
             task="truss-graph",
