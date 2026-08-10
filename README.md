@@ -5,8 +5,9 @@
 # Setup with uv
 
 The checked-in `uv.lock` provides a reproducible environment. On Linux, uv
-installs the CUDA 13.0 (`cu130`) PyTorch build; on macOS it uses PyTorch's
-native wheel instead.
+installs the CUDA 13.0 (`cu130`) PyTorch build and JAX CUDA 13 plugin; on macOS
+it uses the native PyTorch and JAX wheels instead.
+Python 3.12 or newer is required.
 
 ```bash
 uv sync --frozen

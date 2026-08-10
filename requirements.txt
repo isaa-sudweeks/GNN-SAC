@@ -6,6 +6,8 @@ mujoco
 mujoco-mjx
 hydra-core
 hydra-submitit-launcher
+jax[cuda13]>=0.11.0; sys_platform == "linux"
+jax>=0.11.0; sys_platform != "linux"
 omegaconf
 termcolor
 optuna
