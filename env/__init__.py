@@ -69,6 +69,25 @@ def _is_graph_env(cfg):
     tasks = list(getattr(cfg, "tasks", [getattr(cfg, "task", "")]))
     return bool(getattr(cfg, "use_graph_observations", False)) or any("graph" in str(task) for task in tasks)
 
+
+def _configure_graph_feature_dims(cfg):
+    features = getattr(cfg, "graph_features", {})
+    get_value = (
+        features.get
+        if hasattr(features, "get")
+        else lambda name, default=False: getattr(features, name, default)
+    )
+    node_roles = bool(get_value("node_roles", False))
+    edge_roles = bool(get_value("edge_roles", False))
+    edge_distance = bool(get_value("edge_distance", False))
+    use_virtual_node = bool(getattr(cfg, "use_virtual_node", False))
+    cfg.effective_node_feature_dim = (
+        int(cfg.node_feature_dim)
+        + 2 * int(node_roles)
+        + 2 * int(use_virtual_node)
+    )
+    cfg.edge_feature_dim = 3 * int(edge_roles) + int(edge_distance)
+
 def _num_policy_actuators(env):
     mj_model = env.unwrapped.mj_model
     return int(len(getattr(mj_model, "external_actuator_ids", range(mj_model.model.nu))))
@@ -119,6 +138,7 @@ def _make_mjx_vector_graph_env(cfg):
     cfg.obs_shape = {key: value.shape for key, value in env.observation_space.spaces.items()}
     cfg.obs_dim = env.node_feature_dim
     cfg.node_feature_dim = env.node_feature_dim
+    _configure_graph_feature_dims(cfg)
     cfg.node_action_dim = env.node_action_dim
     cfg.action_dim = env.node_action_dim
     cfg.policy_action_counts = [
@@ -218,6 +238,7 @@ def make_env(cfg):
         if is_graph_env:
             cfg.obs_dim = int(getattr(env.unwrapped, "node_feature_dim", cfg.get("node_feature_dim", 0)))
             cfg.node_feature_dim = cfg.obs_dim
+            _configure_graph_feature_dims(cfg)
             cfg.node_action_dim = int(getattr(env.unwrapped, "node_action_dim", env.action_space.shape[-1]))
             cfg.action_dim = cfg.node_action_dim
             cfg.num_policy_actions = int(max(cfg.policy_action_counts))
@@ -243,6 +264,7 @@ def make_env(cfg):
             cfg.obs_shape = {k: v.shape for k, v in env.observation_space.spaces.items()}
             cfg.obs_dim = int(getattr(env.unwrapped, "node_feature_dim", cfg.get("node_feature_dim", 0)))
             cfg.node_feature_dim = cfg.obs_dim
+            _configure_graph_feature_dims(cfg)
             cfg.node_action_dim = int(getattr(env.unwrapped, "node_action_dim", env.action_space.shape[-1]))
             cfg.action_dim = cfg.node_action_dim
             cfg.num_policy_actions = _num_policy_actions(env)

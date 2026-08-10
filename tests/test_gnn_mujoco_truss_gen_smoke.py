@@ -489,6 +489,32 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_native_graph_features_flow_from_environment_to_policy(self):
+        cfg = graph_test_cfg(
+            graph_features={
+                "node_roles": True,
+                "edge_roles": True,
+                "edge_distance": True,
+            },
+            max_steps=1,
+            episode_length=1,
+            nsubsteps=1,
+        )
+        env = make_env(cfg)
+        try:
+            obs = env.reset()
+            self.assertEqual(obs.x.shape[1], 6)
+            self.assertEqual(obs.edge_role.shape, (obs.edge_index.shape[1],))
+            self.assertEqual(cfg.effective_node_feature_dim, 8)
+            self.assertEqual(cfg.edge_feature_dim, 4)
+
+            agent = GNNSAC(cfg)
+            action = agent.act(obs, eval_mode=True)
+            self.assertEqual(action.shape, (obs.num_nodes, 1))
+            self.assertTrue(torch.isfinite(action).all())
+        finally:
+            env.close()
+
     def test_graph_env_scale_changes_generated_robot_size(self):
         base_env = make_env(
             graph_test_cfg(

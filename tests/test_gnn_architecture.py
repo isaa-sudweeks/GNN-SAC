@@ -71,6 +71,13 @@ class GNNArchitectureTest(unittest.TestCase):
         self.assertTrue(any(key.startswith("gamma.") for key in keys))
         self.assertFalse(any(key.startswith("extra_mpls.") for key in keys))
 
+    def test_disabled_edge_features_preserve_first_layer_shapes(self):
+        legacy = GNN(3, 8, [10, 10])
+        explicit_disabled = GNN(3, 8, [10, 10], edge_channels=0)
+        self.assertEqual(legacy.state_dict().keys(), explicit_disabled.state_dict().keys())
+        for key, value in legacy.state_dict().items():
+            self.assertEqual(value.shape, explicit_disabled.state_dict()[key].shape)
+
     def test_critic_handles_batched_graphs_and_backward(self):
         batch = Batch.from_data_list([graph(3), graph(5)])
         action = torch.randn(batch.x.size(0), 1)

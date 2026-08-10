@@ -83,6 +83,33 @@ class MjxVectorEnvTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_configurable_graph_features_flow_through_mjx_policy(self):
+        cfg = mjx_cfg(
+            num_envs=1,
+            graph_features={
+                "node_roles": True,
+                "edge_roles": True,
+                "edge_distance": True,
+            },
+        )
+        env = make_env(cfg)
+        try:
+            observation = env.reset_many()[0]
+            self.assertEqual(observation.x.shape[1], 6)
+            self.assertEqual(
+                observation.edge_role.shape,
+                (observation.edge_index.shape[1],),
+            )
+            self.assertEqual(cfg.effective_node_feature_dim, 8)
+            self.assertEqual(cfg.edge_feature_dim, 4)
+
+            agent = GNNSAC(cfg)
+            action = agent.act(observation, eval_mode=True)
+            self.assertEqual(action.shape, (observation.num_nodes, 1))
+            self.assertTrue(torch.isfinite(action).all())
+        finally:
+            env.close()
+
     def test_rejects_nonpositive_warp_capacities_before_upstream_construction(self):
         with self.assertRaisesRegex(ValueError, "warp_naconmax must be a positive integer"):
             make_env(mjx_cfg(mjx_impl="warp", warp_naconmax=0))

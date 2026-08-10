@@ -19,21 +19,38 @@ def _validate_dims(name: str, dims: Sequence[int], *, allow_empty: bool) -> list
     return values
 
 
+def _message_features(x_i, x_j, edge_attr, edge_channels: int):
+    if edge_channels == 0:
+        if edge_attr is not None and edge_attr.size(-1) != 0:
+            raise ValueError("Received edge features for a GNN configured with edge_feature_dim=0.")
+        return torch.cat([x_i, x_j], dim=1)
+    if edge_attr is None:
+        raise ValueError(f"GNN expects {edge_channels} edge features, but edge_attr is missing.")
+    if edge_attr.ndim != 2 or edge_attr.size(0) != x_i.size(0):
+        raise ValueError("edge_attr must have one row per directed message edge.")
+    if edge_attr.size(1) != edge_channels:
+        raise ValueError(
+            f"GNN expects {edge_channels} edge features, got {edge_attr.size(1)}."
+        )
+    return torch.cat([x_i, x_j, edge_attr], dim=1)
+
+
 class _MessagePassingLayer(MessagePassing):
     """One independently parameterized message-and-update block."""
 
-    def __init__(self, in_channels: int, out_channels: int, hidden_channels: list[int], dropout: float):
+    def __init__(self, in_channels: int, out_channels: int, hidden_channels: list[int], dropout: float, edge_channels: int):
         super().__init__(aggr="add")
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.phi = mlp(in_channels * 2, hidden_channels, out_channels, dropout=dropout)
+        self.edge_channels = edge_channels
+        self.phi = mlp(in_channels * 2 + edge_channels, hidden_channels, out_channels, dropout=dropout)
         self.gamma = mlp(in_channels + out_channels, hidden_channels, out_channels, dropout=dropout)
 
-    def forward(self, x, edge_index):
-        return self.propagate(edge_index, x=x)
+    def forward(self, x, edge_index, edge_attr=None):
+        return self.propagate(edge_index, x=x, edge_attr=edge_attr)
 
-    def message(self, x_i, x_j):
-        return self.phi(torch.cat([x_i, x_j], dim=1))
+    def message(self, x_i, x_j, edge_attr):
+        return self.phi(_message_features(x_i, x_j, edge_attr, self.edge_channels))
 
     def update(self, aggr_out, x):
         return self.gamma(torch.cat([x, aggr_out], dim=1))
@@ -49,6 +66,7 @@ class GNN(MessagePassing):
         *,
         mpl_dims: Sequence[int] | None = None,
         skip_connections: bool = True,
+        edge_channels: int = 0,
     ):
         super().__init__(aggr="add")
         if mpl_dims is None:
@@ -61,12 +79,15 @@ class GNN(MessagePassing):
         self.out_channels = self.mpl_dims[-1]
         self.dropout = dropout
         self.skip_connections = bool(skip_connections)
+        self.edge_channels = int(edge_channels)
+        if self.edge_channels < 0:
+            raise ValueError("edge_channels must be nonnegative")
 
         # Keep these names for compatibility with existing one-layer checkpoints.
-        self.phi = mlp(in_channels * 2, self.hidden_channels, self.mpl_dims[0], dropout=dropout)
+        self.phi = mlp(in_channels * 2 + self.edge_channels, self.hidden_channels, self.mpl_dims[0], dropout=dropout)
         self.gamma = mlp(in_channels + self.mpl_dims[0], self.hidden_channels, self.mpl_dims[0], dropout=dropout)
         self.extra_mpls = nn.ModuleList(
-            _MessagePassingLayer(input_dim, output_dim, self.hidden_channels, dropout)
+            _MessagePassingLayer(input_dim, output_dim, self.hidden_channels, dropout, self.edge_channels)
             for input_dim, output_dim in zip(self.mpl_dims, self.mpl_dims[1:])
         )
         self.skip_projections = nn.ModuleList()
@@ -76,15 +97,15 @@ class GNN(MessagePassing):
                 for input_dim, output_dim in zip(self.mpl_dims, self.mpl_dims[1:])
             )
 
-    def forward(self, x, edge_index):
-        x = self.propagate(edge_index, x=x)
+    def forward(self, x, edge_index, edge_attr=None):
+        x = self.propagate(edge_index, x=x, edge_attr=edge_attr)
         for index, layer in enumerate(self.extra_mpls):
-            updated = layer(x, edge_index)
+            updated = layer(x, edge_index, edge_attr)
             x = updated + self.skip_projections[index](x) if self.skip_connections else updated
         return x
 
-    def message(self, x_i, x_j):
-        return self.phi(torch.cat([x_i, x_j], dim=1))
+    def message(self, x_i, x_j, edge_attr):
+        return self.phi(_message_features(x_i, x_j, edge_attr, self.edge_channels))
 
     def update(self, aggr_out, x):
         return self.gamma(torch.cat([x, aggr_out], dim=1))
@@ -93,7 +114,7 @@ class GNN(MessagePassing):
         return (
             f"GNN(in_channels={self.in_channels}, mpl_dims={self.mpl_dims}, "
             f"message_hidden_dims={self.hidden_channels}, dropout={self.dropout}, "
-            f"skip_connections={self.skip_connections})\n"
+            f"skip_connections={self.skip_connections}, edge_channels={self.edge_channels})\n"
             f"Phi(Message Passing):\t{self.phi}\n"
             f"Gamma(Update):\t{self.gamma}\n"
             f"Additional MPLs:\t{self.extra_mpls}"
@@ -110,6 +131,7 @@ class Q_GNN(GNN):
         *,
         mpl_dims: Sequence[int] | None = None,
         skip_connections: bool = True,
+        edge_channels: int = 0,
     ):
         super().__init__(
             in_channels,
@@ -118,12 +140,13 @@ class Q_GNN(GNN):
             dropout,
             mpl_dims=mpl_dims,
             skip_connections=skip_connections,
+            edge_channels=edge_channels,
         )
         self.head_hidden_dims = _validate_dims("head_hidden_dims", head_hidden_dims, allow_empty=True)
         self.head = mlp(self.out_channels, self.head_hidden_dims, 1)
 
-    def forward(self, x, edge_index, batch=None, action_mask=None):
-        x = super().forward(x, edge_index)
+    def forward(self, x, edge_index, batch=None, action_mask=None, edge_attr=None):
+        x = super().forward(x, edge_index, edge_attr)
         if batch is None:
             batch = x.new_zeros(x.size(0), dtype=torch.long)
         if action_mask is not None:

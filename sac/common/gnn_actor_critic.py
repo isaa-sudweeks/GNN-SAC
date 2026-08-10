@@ -6,7 +6,13 @@ from torch_geometric.nn import global_add_pool, global_mean_pool
 
 from common import math 
 from common import gnn_layers
-from common.graph_transforms import graph_input_dim, physical_node_mask, policy_action_mask
+from common.graph_transforms import (
+    graph_edge_input_dim,
+    graph_feature_flags,
+    graph_input_dim,
+    physical_node_mask,
+    policy_action_mask,
+)
 from common import mlp_layers as layers 
 
 class GNNActorCritic(nn.Module):
@@ -28,14 +34,21 @@ class GNNActorCritic(nn.Module):
         actor_mpl_dims = [cfg.embedding_dim] if shared_mpl_dims is None else shared_mpl_dims
         critic_mpl_dims = [cfg.Q_output_dim] if shared_mpl_dims is None else shared_mpl_dims
         skip_connections = getattr(cfg, "mpl_skip_connections", True)
+        feature_flags = graph_feature_flags(cfg)
         gnn_obs_dim = graph_input_dim(
             cfg.obs_dim,
             use_virtual_node=bool(getattr(cfg, "use_virtual_node", False)),
+            use_node_roles=feature_flags["use_node_roles"],
+        )
+        edge_channels = graph_edge_input_dim(
+            use_edge_roles=feature_flags["use_edge_roles"],
+            use_edge_distance=feature_flags["use_edge_distance"],
         )
 
         self._pi = gnn_layers.GNN(
             gnn_obs_dim, hidden_channels=message_hidden, mpl_dims=actor_mpl_dims,
-            dropout=cfg.dropout, skip_connections=skip_connections
+            dropout=cfg.dropout, skip_connections=skip_connections,
+            edge_channels=edge_channels,
         )
 
         self._action_head = layers.mlp(
@@ -47,7 +60,8 @@ class GNNActorCritic(nn.Module):
             [gnn_layers.Q_GNN(
                 gnn_obs_dim + cfg.action_dim, hidden_channels=message_hidden,
                 head_hidden_dims=cfg.head_hidden_dims, mpl_dims=critic_mpl_dims,
-                dropout=cfg.dropout, skip_connections=skip_connections
+                dropout=cfg.dropout, skip_connections=skip_connections,
+                edge_channels=edge_channels,
             ) for _ in range(int(cfg.num_q))]
         )
 
@@ -87,7 +101,7 @@ class GNNActorCritic(nn.Module):
             obs:Observation data of a graph in the torch geometric Data format
         """
         action_mask = policy_action_mask(obs)
-        embeddings = self._pi(obs.x, obs.edge_index)
+        embeddings = self._pi(obs.x, obs.edge_index, getattr(obs, "edge_attr", None))
         mean, log_std = self._action_head(embeddings[action_mask]).chunk(2, dim=-1)
         log_std = math.log_std(log_std, self.log_std_min, self.log_std_dif)
         
@@ -113,7 +127,7 @@ class GNNActorCritic(nn.Module):
     def pi_mean(self, obs):
         """Compute deterministic actions without sampling policy noise or statistics."""
         action_mask = policy_action_mask(obs)
-        embeddings = self._pi(obs.x, obs.edge_index)
+        embeddings = self._pi(obs.x, obs.edge_index, getattr(obs, "edge_attr", None))
         mean, _ = self._action_head(embeddings[action_mask]).chunk(2, dim=-1)
         return torch.tanh(mean)
     
@@ -149,6 +163,7 @@ class GNNActorCritic(nn.Module):
             obs.edge_index,
             getattr(obs, "batch", None),
             pool_mask,
+            getattr(obs, "edge_attr", None),
         )
 
         if return_type == "all":
