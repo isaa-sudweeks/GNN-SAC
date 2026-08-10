@@ -33,12 +33,12 @@ class FirstNonRigidEigenvalueRewardMixin:
 
     def _compute_reward(self, action, previous_com=None):
         critical_eig_raw = float(self.mj_model._critical_eig())
+        critical_eig = self._rigidity_ratio(critical_eig_raw)
         terminated = (
             not np.isfinite(critical_eig_raw)
-            or critical_eig_raw < self.config.critical_eig_threshold
+            or critical_eig < self.config.critical_eig_threshold
         )
-        critical_eig = critical_eig_raw if np.isfinite(critical_eig_raw) else 0.0
-        self._observation_rigidity = self._rigidity_ratio(critical_eig_raw)
+        self._observation_rigidity = critical_eig
 
         com_delta_x = 0.0
         if previous_com is None:
