@@ -47,5 +47,6 @@ safety_constraint:
     initial_horizon: 50 # Starting actor, critic-sampling, evaluation, and multiplier horizon.
     promotion_factor: 1.5 # Monotonic multiplicative horizon increase after sustained success.
     consecutive_success_windows: 3 # Passing multiplier batches required before promotion.
-    boundary_sample_probability: 0.50 # Cost-critic samples placed exactly at the active horizon.
-    upper_half_sample_probability: 0.25 # Additional samples drawn from the active range's upper half.
+    horizon_one_sample_probability: 0.25 # Cost-critic samples placed exactly at one-step horizon.
+    boundary_sample_probability: 0.35 # Cost-critic samples placed exactly at the active horizon.
+    upper_half_sample_probability: 0.20 # Additional samples drawn from the active range's upper half.

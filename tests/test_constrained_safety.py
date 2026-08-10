@@ -84,8 +84,9 @@ def curriculum_config(**overrides):
         "initial_horizon": 50,
         "promotion_factor": 1.5,
         "consecutive_success_windows": 3,
-        "boundary_sample_probability": 0.5,
-        "upper_half_sample_probability": 0.25,
+        "horizon_one_sample_probability": 0.25,
+        "boundary_sample_probability": 0.35,
+        "upper_half_sample_probability": 0.20,
     }
     curriculum.update(overrides.pop("curriculum", {}))
     safety["curriculum"] = curriculum
@@ -168,16 +169,19 @@ class FiniteHorizonCostTest(unittest.TestCase):
 
         torch.testing.assert_close(target, torch.tensor([1.0, 0.0, 0.0, 0.6]))
 
-    def test_curriculum_sampling_is_bounded_and_boundary_weighted(self):
+    def test_curriculum_sampling_uses_configured_horizon_mix(self):
         agent = GNNSAC(curriculum_config())
         torch.manual_seed(7)
         horizons = agent._sample_cost_horizons(TASKS[0], 20000)
 
         self.assertEqual(int(horizons.min()), 1)
         self.assertEqual(int(horizons.max()), 50)
+        horizon_one_fraction = float((horizons == 1).float().mean())
         boundary_fraction = float((horizons == 50).float().mean())
-        self.assertGreater(boundary_fraction, 0.49)
-        self.assertLess(boundary_fraction, 0.55)
+        self.assertGreater(horizon_one_fraction, 0.24)
+        self.assertLess(horizon_one_fraction, 0.27)
+        self.assertGreater(boundary_fraction, 0.34)
+        self.assertLess(boundary_fraction, 0.38)
 
     def test_fixed_horizon_sampling_remains_uniform_and_seed_compatible(self):
         agent = GNNSAC(config())
@@ -209,9 +213,11 @@ class FiniteHorizonCostTest(unittest.TestCase):
             {"initial_horizon": 1001},
             {"promotion_factor": 1.0},
             {"consecutive_success_windows": 0},
+            {"horizon_one_sample_probability": -0.1},
             {"boundary_sample_probability": -0.1},
             {
-                "boundary_sample_probability": 0.8,
+                "horizon_one_sample_probability": 0.4,
+                "boundary_sample_probability": 0.4,
                 "upper_half_sample_probability": 0.3,
             },
         )

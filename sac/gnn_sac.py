@@ -111,8 +111,11 @@ class GNNSAC(torch.nn.Module):
         initial = int(self._curriculum_cfg("initial_horizon", 50))
         factor = float(self._curriculum_cfg("promotion_factor", 1.5))
         successes = int(self._curriculum_cfg("consecutive_success_windows", 3))
-        boundary = float(self._curriculum_cfg("boundary_sample_probability", 0.5))
-        upper = float(self._curriculum_cfg("upper_half_sample_probability", 0.25))
+        horizon_one = float(
+            self._curriculum_cfg("horizon_one_sample_probability", 0.25)
+        )
+        boundary = float(self._curriculum_cfg("boundary_sample_probability", 0.35))
+        upper = float(self._curriculum_cfg("upper_half_sample_probability", 0.20))
         if not 1 <= initial <= self.safety_horizon:
             raise ValueError(
                 "safety curriculum initial_horizon must be in "
@@ -122,9 +125,10 @@ class GNNSAC(torch.nn.Module):
             raise ValueError("safety curriculum promotion_factor must be finite and greater than 1")
         if successes <= 0:
             raise ValueError("safety curriculum consecutive_success_windows must be positive")
-        if not 0.0 <= boundary <= 1.0 or not 0.0 <= upper <= 1.0:
+        probabilities = (horizon_one, boundary, upper)
+        if any(not 0.0 <= probability <= 1.0 for probability in probabilities):
             raise ValueError("safety curriculum sampling probabilities must be in [0, 1]")
-        if boundary + upper > 1.0:
+        if sum(probabilities) > 1.0:
             raise ValueError("safety curriculum sampling probabilities must sum to at most 1")
 
     def _configured_tasks(self):
@@ -185,11 +189,14 @@ class GNNSAC(torch.nn.Module):
                 "consecutive_success_windows": int(
                     self._curriculum_cfg("consecutive_success_windows", 3)
                 ),
+                "horizon_one_sample_probability": float(
+                    self._curriculum_cfg("horizon_one_sample_probability", 0.25)
+                ),
                 "boundary_sample_probability": float(
-                    self._curriculum_cfg("boundary_sample_probability", 0.5)
+                    self._curriculum_cfg("boundary_sample_probability", 0.35)
                 ),
                 "upper_half_sample_probability": float(
-                    self._curriculum_cfg("upper_half_sample_probability", 0.25)
+                    self._curriculum_cfg("upper_half_sample_probability", 0.20)
                 ),
             }
         return identity
@@ -569,11 +576,14 @@ class GNNSAC(torch.nn.Module):
                 device=self.device,
             )
         active_horizon = self.active_safety_horizon(task)
+        horizon_one_probability = float(
+            self._curriculum_cfg("horizon_one_sample_probability", 0.25)
+        )
         boundary_probability = float(
-            self._curriculum_cfg("boundary_sample_probability", 0.5)
+            self._curriculum_cfg("boundary_sample_probability", 0.35)
         )
         upper_probability = float(
-            self._curriculum_cfg("upper_half_sample_probability", 0.25)
+            self._curriculum_cfg("upper_half_sample_probability", 0.20)
         )
         categories = torch.rand(batch_size, device=self.device)
         horizons = torch.randint(
@@ -583,9 +593,11 @@ class GNNSAC(torch.nn.Module):
             device=self.device,
         )
         upper_start = max(1, int(math.ceil(active_horizon / 2.0)))
+        boundary_end = horizon_one_probability + boundary_probability
+        upper_end = boundary_end + upper_probability
         upper_mask = (
-            (categories >= boundary_probability)
-            & (categories < boundary_probability + upper_probability)
+            (categories >= boundary_end)
+            & (categories < upper_end)
         )
         upper_count = int(upper_mask.sum().item())
         if upper_count:
@@ -595,7 +607,12 @@ class GNNSAC(torch.nn.Module):
                 (upper_count,),
                 device=self.device,
             )
-        horizons[categories < boundary_probability] = active_horizon
+        boundary_mask = (
+            (categories >= horizon_one_probability)
+            & (categories < boundary_end)
+        )
+        horizons[boundary_mask] = active_horizon
+        horizons[categories < horizon_one_probability] = 1
         return horizons
 
     def _record_cost_horizon_metrics(self, task, horizons):
@@ -605,6 +622,9 @@ class GNNSAC(torch.nn.Module):
             {
                 f"safety/critic_sampled_horizon_mean/{key}": horizons.float().mean(),
                 f"safety/critic_sampled_horizon_max/{key}": horizons.max(),
+                f"safety/critic_sampled_horizon_one_fraction/{key}": (
+                    horizons == 1
+                ).float().mean(),
                 f"safety/critic_sampled_boundary_fraction/{key}": (
                     horizons == active_horizon
                 ).float().mean(),
