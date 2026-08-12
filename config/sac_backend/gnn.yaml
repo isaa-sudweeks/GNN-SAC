@@ -25,6 +25,7 @@ num_actuators: 8 # Total MuJoCo actuator controls after node-to-edge mapping.
 # Message-passing depth is the list length; each value is that layer's output width.
 mpl_dims:
   - 128
+  - 128
 message_hidden_dims:
   - 256
   - 256
