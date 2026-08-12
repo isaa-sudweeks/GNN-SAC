@@ -10,6 +10,8 @@ from typing import Any
 import hydra
 from omegaconf import OmegaConf, open_dict
 
+from common.cross_validation import resolve_cross_validation
+
 
 LAUNCH_COMMAND_ENV = "GNN_SAC_LAUNCH_COMMAND"
 
@@ -110,6 +112,7 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 			if truss_topologies is not None and list(topologies) != list(truss_topologies):
 				raise ValueError("Use either topologies or truss_topologies, not both with different values.")
 			cfg.truss_topologies = topologies
+		resolve_cross_validation(cfg)
 		if cfg.get("work_dir", None) not in {None, "???"}:
 			cfg.work_dir = Path(cfg.work_dir)
 		else:
