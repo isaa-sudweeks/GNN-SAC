@@ -8,6 +8,7 @@ xml_path: env/truss/assets/Baseline/octahedron_velocity_integrated_ctr.xml # MuJ
 truss_topology: octahedron # mujoco-truss-gen preset used by unified truss envs.
 truss_topologies: null # Optional list of mujoco-truss-gen presets for multi-topology runs.
 topologies: null # Alias for truss_topologies; useful for CLI sweeps.
+eval_extra_topologies: null # Additional held-out presets to evaluate without adding them to training or replay.
 truss_realistic: false # Whether unified truss envs should request realistic generated models.
 truss_graph_view: auto # Graph view for unified graph envs: auto, physical, or logical.
 

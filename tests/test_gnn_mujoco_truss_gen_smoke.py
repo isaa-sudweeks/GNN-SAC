@@ -204,6 +204,152 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         trainer._activate_shared_eval_env(1724)
         self.assertEqual(eval_env.selected_env_indices, [])
 
+    def test_extra_eval_topologies_are_held_out_from_training_aggregate(self):
+        class DummyTrainingBuckets:
+            is_topology_bucket = True
+            topologies = ["octahedron", "tetrahedron"]
+            topology_representative_indices = {"octahedron": 0, "tetrahedron": 1}
+
+        class DummyNativeEvalEnv:
+            num_envs = 3
+
+            def __init__(self):
+                self.active_env_idx = 0
+
+            def reset(self, task_idx=None):
+                self.active_env_idx = int(task_idx or 0)
+                return torch.tensor([float(self.active_env_idx)])
+
+            def step(self, action):
+                value = float(self.active_env_idx + 1)
+                info = {"success": torch.tensor(value), "truncated": torch.tensor(1.0)}
+                return torch.tensor([value]), torch.tensor(value), True, info
+
+            def close(self):
+                return
+
+        class DummyAgent:
+            model = "dummy"
+
+            def act(self, obs, t0=False, eval_mode=False):
+                return torch.tensor([0.0])
+
+        cfg = SimpleNamespace(
+            task="truss-graph",
+            env_name="truss-graph",
+            mujoco_backend="mjx",
+            eval_backend="mujoco",
+            domain_randomization=False,
+            eval_task=None,
+            eval_extra_topologies=[
+                "tetrahedron",
+                "henneberg_n6_1tube_2",
+                "henneberg_n6_1tube_2",
+            ],
+            eval_episodes=1,
+            save_video=False,
+            multitask=False,
+            truss_topologies=["octahedron", "tetrahedron"],
+            tasks=["truss-graph:octahedron", "truss-graph:tetrahedron"],
+            resume_from_checkpoint=None,
+            work_dir=str(ROOT / "logs" / "test-smoke"),
+        )
+        captured_cfg = None
+
+        def make_eval_env(eval_cfg):
+            nonlocal captured_cfg
+            captured_cfg = eval_cfg
+            return DummyNativeEvalEnv()
+
+        with patch("env.make_env", side_effect=make_eval_env):
+            trainer = OnlineTrainer(
+                cfg=cfg,
+                env=DummyTrainingBuckets(),
+                agent=DummyAgent(),
+                buffer=None,
+                logger=SimpleNamespace(video=None),
+            )
+
+        self.assertEqual(
+            list(captured_cfg.truss_topologies),
+            ["octahedron", "tetrahedron", "henneberg_n6_1tube_2"],
+        )
+        self.assertEqual(
+            list(captured_cfg.tasks),
+            [
+                "truss-graph:octahedron",
+                "truss-graph:tetrahedron",
+                "truss-graph:henneberg_n6_1tube_2",
+            ],
+        )
+
+        metrics = trainer.eval()
+
+        self.assertEqual(metrics["episode_reward"], 1.5)
+        self.assertEqual(metrics["heldout_episode_reward"], 3.0)
+        self.assertEqual(metrics["all_episode_reward"], 2.0)
+        self.assertEqual(metrics["henneberg_n6_1tube_2_episode_reward"], 3.0)
+
+    def test_extra_eval_topologies_require_native_mujoco_backend(self):
+        cfg = SimpleNamespace(
+            task="truss-graph",
+            mujoco_backend="mjx",
+            eval_backend="mjx",
+            domain_randomization=False,
+            eval_task=None,
+            eval_extra_topologies=["tetrahedron"],
+            truss_topologies=None,
+            truss_topology="octahedron",
+            resume_from_checkpoint=None,
+            work_dir=str(ROOT / "logs" / "test-smoke"),
+        )
+
+        with self.assertRaisesRegex(ValueError, "requires eval_backend=mujoco"):
+            OnlineTrainer(
+                cfg=cfg,
+                env=SimpleNamespace(),
+                agent=SimpleNamespace(model="dummy"),
+                buffer=None,
+                logger=SimpleNamespace(),
+            )
+
+    def test_single_training_topology_is_included_with_extra_eval_topologies(self):
+        cfg = SimpleNamespace(
+            task="truss-graph",
+            env_name="truss-graph",
+            mujoco_backend="mujoco",
+            eval_backend="mujoco",
+            domain_randomization=False,
+            eval_task=None,
+            eval_extra_topologies=["tetrahedron"],
+            truss_topologies=None,
+            truss_topology="octahedron",
+            resume_from_checkpoint=None,
+            work_dir=str(ROOT / "logs" / "test-smoke"),
+        )
+        captured_cfg = None
+
+        def make_eval_env(eval_cfg):
+            nonlocal captured_cfg
+            captured_cfg = eval_cfg
+            return SimpleNamespace()
+
+        with patch("env.make_env", side_effect=make_eval_env):
+            trainer = OnlineTrainer(
+                cfg=cfg,
+                env=SimpleNamespace(),
+                agent=SimpleNamespace(model="dummy"),
+                buffer=None,
+                logger=SimpleNamespace(),
+            )
+
+        self.assertEqual(
+            list(captured_cfg.truss_topologies),
+            ["octahedron", "tetrahedron"],
+        )
+        self.assertEqual(trainer._eval_training_topologies, ["octahedron"])
+        self.assertEqual(trainer._eval_heldout_topologies, ["tetrahedron"])
+
     def test_eval_scalar_value_moves_tensor_to_host_scalar(self):
         self.assertEqual(OnlineTrainer._scalar_value(torch.tensor(2.5)), 2.5)
         self.assertEqual(OnlineTrainer._scalar_value(3), 3.0)
