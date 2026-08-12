@@ -109,6 +109,8 @@ class GNNArchitectureTest(unittest.TestCase):
                     GNN(3, hidden_channels=[], mpl_dims=dims)
         with self.assertRaises(ValueError):
             GNN(3, hidden_channels=[False], mpl_dims=[8])
+        with self.assertRaisesRegex(ValueError, "critic_readout must be one of"):
+            Q_GNN(3, mpl_dims=[8], critic_readout="unknown")
 
 
 if __name__ == "__main__":
