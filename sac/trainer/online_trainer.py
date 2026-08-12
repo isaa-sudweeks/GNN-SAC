@@ -212,10 +212,10 @@ class OnlineTrainer(Trainer):
         return self._evaluate_and_log()
 
     def _eval_one(self, task_idx=None, video_key="videos/eval_video"):
-        ep_rewards, ep_successes, ep_lengths = [], [], []
+        ep_rewards, ep_successes, ep_lengths, ep_distances = [], [], [], []
         for i in range(self.cfg.eval_episodes):
             obs = self.eval_env.reset(task_idx=task_idx) if task_idx is not None else self.eval_env.reset()
-            done, ep_reward, t = False, 0, 0
+            done, ep_reward, ep_distance, t = False, 0, 0, 0
             if self.cfg.save_video:
                 self.logger.video.init(self.eval_env, enabled=(i==0))
             while not done:
@@ -224,23 +224,26 @@ class OnlineTrainer(Trainer):
                 action = self.agent.act(obs, t0=t==0, eval_mode=True)
                 obs, reward, done, info = self.eval_env.step(action)
                 ep_reward += reward
+                ep_distance += self._scalar_value(info.get("com_delta_x", 0.0))
                 t += 1
                 if self.cfg.save_video:
                     self.logger.video.record(self.eval_env)
             ep_rewards.append(self._scalar_value(ep_reward))
             ep_successes.append(self._scalar_value(info['success']))
             ep_lengths.append(t)
+            ep_distances.append(ep_distance)
             if self.cfg.save_video:
                 self.logger.video.save(self._step, key=video_key)
         return dict(
             episode_reward=np.nanmean(ep_rewards),
             episode_success=np.nanmean(ep_successes),
             episode_length=np.nanmean(ep_lengths),
+            episode_distance=np.nanmean(ep_distances),
         )
 
     def _eval_multitask(self):
         metrics = {}
-        task_rewards, task_successes, task_lengths = [], [], []
+        task_rewards, task_successes, task_lengths, task_distances = [], [], [], []
         for task_idx in range(int(getattr(self.eval_env, "num_envs", 1))):
             task_name = self._eval_task_name(task_idx)
             task_key = self._metric_key(task_name)
@@ -251,13 +254,16 @@ class OnlineTrainer(Trainer):
             metrics[f"{task_key}_episode_reward"] = task_metrics["episode_reward"]
             metrics[f"{task_key}_episode_success"] = task_metrics["episode_success"]
             metrics[f"{task_key}_episode_length"] = task_metrics["episode_length"]
+            metrics[f"{task_key}_episode_distance"] = task_metrics["episode_distance"]
             task_rewards.append(task_metrics["episode_reward"])
             task_successes.append(task_metrics["episode_success"])
             task_lengths.append(task_metrics["episode_length"])
+            task_distances.append(task_metrics["episode_distance"])
         metrics.update(
             episode_reward=np.nanmean(task_rewards),
             episode_success=np.nanmean(task_successes),
             episode_length=np.nanmean(task_lengths),
+            episode_distance=np.nanmean(task_distances),
         )
         return metrics
 
@@ -267,7 +273,7 @@ class OnlineTrainer(Trainer):
 
     def _eval_topologies(self, topology_indices):
         metrics = {}
-        topology_rewards, topology_successes, topology_lengths = [], [], []
+        topology_rewards, topology_successes, topology_lengths, topology_distances = [], [], [], []
         for topology, env_idx in topology_indices.items():
             topology_key = self._metric_key(topology)
             topology_metrics = self._eval_one(
@@ -277,13 +283,16 @@ class OnlineTrainer(Trainer):
             metrics[f"{topology_key}_episode_reward"] = topology_metrics["episode_reward"]
             metrics[f"{topology_key}_episode_success"] = topology_metrics["episode_success"]
             metrics[f"{topology_key}_episode_length"] = topology_metrics["episode_length"]
+            metrics[f"{topology_key}_episode_distance"] = topology_metrics["episode_distance"]
             topology_rewards.append(topology_metrics["episode_reward"])
             topology_successes.append(topology_metrics["episode_success"])
             topology_lengths.append(topology_metrics["episode_length"])
+            topology_distances.append(topology_metrics["episode_distance"])
         metrics.update(
             episode_reward=np.nanmean(topology_rewards),
             episode_success=np.nanmean(topology_successes),
             episode_length=np.nanmean(topology_lengths),
+            episode_distance=np.nanmean(topology_distances),
         )
         return metrics
 

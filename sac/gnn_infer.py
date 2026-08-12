@@ -521,6 +521,7 @@ def _run_vectorized_inference(cfg, env, agent) -> list[dict]:
         active = list(env_indices)
         rewards = [None] * batch_size
         lengths = [0] * batch_size
+        distances = [0.0] * batch_size
         final_info = [{} for _ in range(batch_size)]
         position_commands = [None] * batch_size
         printed_position_commands = [False] * batch_size
@@ -551,6 +552,7 @@ def _run_vectorized_inference(cfg, env, agent) -> list[dict]:
             for env_idx, (obs, reward, done, info) in zip(active, step_results):
                 observations[env_idx] = obs
                 rewards[env_idx] = reward if rewards[env_idx] is None else rewards[env_idx] + reward
+                distances[env_idx] += _to_float(info.get("com_delta_x", 0.0))
                 lengths[env_idx] += 1
                 final_info[env_idx] = info
                 hit_limit = max_steps is not None and lengths[env_idx] >= int(max_steps)
@@ -575,6 +577,7 @@ def _run_vectorized_inference(cfg, env, agent) -> list[dict]:
                 "episode_reward": _to_float(rewards[env_idx]),
                 "episode_success": _to_float(info.get("success", 0.0)),
                 "episode_length": lengths[env_idx],
+                "episode_distance": distances[env_idx],
                 "terminated": _to_float(info.get("terminated", 0.0)),
                 "truncated": _to_float(info.get("truncated", 0.0)),
             }
@@ -594,6 +597,7 @@ def _run_serialized_inference(cfg, env, agent, smooth_rendering: bool) -> list[d
         done = False
         ep_reward = 0.0
         ep_success = 0.0
+        ep_distance = 0.0
         info = {}
         step = 0
         max_steps = getattr(cfg, "inference_max_steps", None)
@@ -628,6 +632,7 @@ def _run_serialized_inference(cfg, env, agent, smooth_rendering: bool) -> list[d
             _render_if_enabled(env, cfg, step_started_at, realtime_pacing=not smooth_rendering)
             ep_reward += _to_float(reward)
             ep_success = float(info.get("success", ep_success))
+            ep_distance += _to_float(info.get("com_delta_x", 0.0))
             step = next_step
             if max_steps is not None and step >= int(max_steps):
                 break
@@ -641,6 +646,7 @@ def _run_serialized_inference(cfg, env, agent, smooth_rendering: bool) -> list[d
             "episode_reward": ep_reward,
             "episode_success": ep_success,
             "episode_length": step,
+            "episode_distance": ep_distance,
             "terminated": _to_float(info.get("terminated", 0.0)),
             "truncated": _to_float(info.get("truncated", 0.0)),
         }
@@ -683,11 +689,13 @@ def run_inference(cfg):
 
         rewards = np.asarray([row["episode_reward"] for row in results], dtype=np.float64)
         successes = np.asarray([row["episode_success"] for row in results], dtype=np.float64)
+        distances = np.asarray([row["episode_distance"] for row in results], dtype=np.float64)
         print(
             colored("Summary:", "cyan", attrs=["bold"]),
             f"reward_mean={rewards.mean():.6f}",
             f"reward_std={rewards.std():.6f}",
             f"success_mean={successes.mean():.6f}",
+            f"distance_mean={distances.mean():.6f}",
         )
 
         if cfg.output_csv not in (None, "", "???"):
@@ -704,6 +712,7 @@ def run_inference(cfg):
         return {
             "episode_reward": float(rewards.mean()),
             "episode_success": float(successes.mean()),
+            "episode_distance": float(distances.mean()),
         }
     finally:
         env.close()

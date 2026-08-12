@@ -137,6 +137,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
                 reward = torch.tensor(float(self.active_env_idx + 1))
                 info = {
                     "success": torch.tensor(float(self.active_env_idx)),
+                    "com_delta_x": torch.tensor(0.25 * float(self.active_env_idx + 1)),
                     "terminated": torch.tensor(0.0),
                     "truncated": torch.tensor(1.0),
                 }
@@ -200,6 +201,9 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         self.assertEqual(metrics["octahedron_episode_reward"], 1.0)
         self.assertEqual(metrics["tetrahedron_episode_reward"], 2.0)
         self.assertEqual(metrics["episode_reward"], 1.5)
+        self.assertEqual(metrics["octahedron_episode_distance"], 0.25)
+        self.assertEqual(metrics["tetrahedron_episode_distance"], 0.5)
+        self.assertEqual(metrics["episode_distance"], 0.375)
 
         trainer._activate_shared_eval_env(1724)
         self.assertEqual(eval_env.selected_env_indices, [])
