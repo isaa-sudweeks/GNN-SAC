@@ -384,10 +384,26 @@ class OnlineTrainer(Trainer):
             if diagnostics_enabled and diagnostics_freq <= 0:
                 raise ValueError("gradient_diagnostics_freq must be positive")
             run_diagnostics = diagnostics_enabled and next_update % diagnostics_freq == 0
+            safety_cfg = getattr(self.cfg, "safety_constraint", None)
+            if hasattr(safety_cfg, "get"):
+                safety_enabled = bool(safety_cfg.get("enabled", False))
+                safety_diagnostics_freq = int(safety_cfg.get("diagnostics_freq", 100))
+            else:
+                safety_enabled = bool(getattr(safety_cfg, "enabled", False))
+                safety_diagnostics_freq = int(
+                    getattr(safety_cfg, "diagnostics_freq", 100)
+                )
+            if safety_enabled and safety_diagnostics_freq <= 0:
+                raise ValueError("safety_constraint.diagnostics_freq must be positive")
+            run_safety_diagnostics = (
+                safety_enabled and next_update % safety_diagnostics_freq == 0
+            )
             update_parameters = inspect.signature(self.agent.update).parameters
             update_kwargs = {}
             if "compute_diagnostics" in update_parameters:
                 update_kwargs["compute_diagnostics"] = run_diagnostics
+            if "compute_safety_diagnostics" in update_parameters:
+                update_kwargs["compute_safety_diagnostics"] = run_safety_diagnostics
             if "performance_profiler" in update_parameters:
                 update_kwargs["performance_profiler"] = self.performance_profiler
                 update_metrics = self.agent.update(self.buffer, **update_kwargs)

@@ -2,7 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import torch
 from torch_geometric.data import Batch, Data
@@ -15,6 +15,7 @@ for path in (ROOT, SAC_ROOT):
         sys.path.insert(0, str(path))
 
 from common.gnn_buffer import GNNBuffer
+from common.logger import Logger
 from gnn_sac import GNNSAC
 from trainer.base import Trainer
 from trainer.online_trainer import OnlineTrainer
@@ -70,6 +71,8 @@ def config(**overrides):
             "lambda_init": 0.1,
             "lambda_max": 100.0,
             "lambda_batch_size": 1,
+            "actor_penalty": "probability",
+            "diagnostics_freq": 100,
         },
     )
     values.update(overrides)
@@ -260,7 +263,9 @@ class MultiplierTest(unittest.TestCase):
         with patch.object(agent.model, "pi", return_value=(torch.zeros(3, 1), info)), patch.object(
             agent.model, "Q", return_value=torch.zeros(1)
         ), patch.object(
-            agent.model, "cost_Q", return_value=torch.full((2, 1), 0.4)
+            agent.model,
+            "cost_Q",
+            return_value=torch.full((2, 1), float(torch.logit(torch.tensor(0.4)))),
         ):
             low_loss, _ = agent._pi_loss(graph(1), task=TASKS[0])
             with torch.no_grad():
@@ -268,6 +273,37 @@ class MultiplierTest(unittest.TestCase):
             high_loss, _ = agent._pi_loss(graph(1), task=TASKS[0])
 
         self.assertAlmostEqual(float(high_loss - low_loss), 0.36, places=5)
+
+    def test_actor_safety_penalty_modes_use_logits_without_changing_reported_risk(self):
+        info = {"log_prob": torch.zeros(1), "entropy": torch.zeros(1)}
+        logit = torch.logit(torch.tensor(0.4))
+        expected = {
+            "probability": 0.4,
+            "softplus_logit": float(torch.nn.functional.softplus(logit)),
+            "raw_logit": float(logit),
+        }
+        for mode, expected_loss in expected.items():
+            safety = dict(config().safety_constraint)
+            safety.update(actor_penalty=mode, lambda_init=1.0)
+            agent = GNNSAC(config(safety_constraint=safety))
+            with patch.object(
+                agent.model, "pi", return_value=(torch.zeros(3, 1), info)
+            ), patch.object(
+                agent.model, "Q", return_value=torch.zeros(1)
+            ), patch.object(
+                agent.model, "cost_Q", return_value=torch.full((2, 1), float(logit))
+            ) as cost_q:
+                loss, actor_info = agent._pi_loss(graph(1), task=TASKS[0])
+
+            self.assertAlmostEqual(float(loss), expected_loss, places=5)
+            self.assertAlmostEqual(float(actor_info["safety_risk"]), 0.4, places=5)
+            self.assertTrue(cost_q.call_args.kwargs["logits"])
+
+    def test_invalid_actor_safety_penalty_is_rejected(self):
+        safety = dict(config().safety_constraint)
+        safety["actor_penalty"] = "unknown"
+        with self.assertRaisesRegex(ValueError, "actor_penalty"):
+            GNNSAC(config(safety_constraint=safety))
 
     def test_curriculum_promotes_monotonically_and_independently(self):
         cfg = curriculum_config(
@@ -497,10 +533,55 @@ class ReplayAndUpdateTest(unittest.TestCase):
         for pcgrad in (False, True):
             cfg = config(pcgrad=pcgrad)
             agent = GNNSAC(cfg)
-            metrics = agent.update(populated_buffer(cfg))
-            self.assertIn("cost_value_loss", metrics)
+            metrics = agent.update(
+                populated_buffer(cfg), compute_safety_diagnostics=True
+            )
+            self.assertIn("safety/cost_value_loss", metrics)
             self.assertIn("safety/predicted_risk_mean/truss-graph_octahedron", metrics)
-            self.assertTrue(torch.isfinite(metrics["cost_value_loss"]))
+            self.assertIn("safety/cost_target_mean/truss-graph_octahedron", metrics)
+            self.assertIn("safety/risk_action_grad_norm_mean/truss-graph_octahedron", metrics)
+            self.assertIn(
+                "safety/surrogate_action_grad_norm_mean/truss-graph_octahedron",
+                metrics,
+            )
+            self.assertIn("safety/policy_action_logit_mean/truss-graph_octahedron", metrics)
+            self.assertIn("safety/replay_action_logit_mean/truss-graph_octahedron", metrics)
+            self.assertIn(
+                "safety/policy_minus_replay_logit_mean/truss-graph_octahedron",
+                metrics,
+            )
+            self.assertIn(
+                "safety/policy_replay_action_l2_mean/truss-graph_octahedron",
+                metrics,
+            )
+            self.assertIn(
+                "safety/constraint_to_reward_grad_ratio/truss-graph_octahedron",
+                metrics,
+            )
+            self.assertTrue(torch.isfinite(metrics["safety/cost_value_loss"]))
+
+
+class SafetyLoggingTest(unittest.TestCase):
+    def test_safety_metrics_bypass_train_namespace(self):
+        logger = Logger.__new__(Logger)
+        logger._wandb = Mock()
+        logger._print = Mock()
+
+        logger.log(
+            {
+                "step": 12,
+                "value_loss": 0.5,
+                "safety/cost_value_loss": 0.25,
+                "safety/lambda/truss-graph_octahedron": 2.0,
+            },
+            "train",
+        )
+
+        logged = logger._wandb.log.call_args.args[0]
+        self.assertEqual(logged["train/value_loss"], 0.5)
+        self.assertEqual(logged["safety/cost_value_loss"], 0.25)
+        self.assertEqual(logged["safety/lambda/truss-graph_octahedron"], 2.0)
+        self.assertNotIn("train/safety/cost_value_loss", logged)
 
 
 if __name__ == "__main__":
