@@ -33,6 +33,7 @@ action_head_hidden_dims:
   - 256
   - 256
 mpl_skip_connections: true
+message_attention: true # Learn one normalized scalar weight per incoming graph edge.
 head_hidden_dims:
   - 256
   - 256

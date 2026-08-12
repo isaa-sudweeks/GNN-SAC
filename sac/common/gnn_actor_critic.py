@@ -37,6 +37,7 @@ class GNNActorCritic(nn.Module):
             raise ValueError(
                 f"critic_readout={critic_readout!r} requires use_virtual_node=true"
             )
+        message_attention = bool(getattr(cfg, "message_attention", False))
         gnn_obs_dim = graph_input_dim(
             cfg.obs_dim,
             use_virtual_node=use_virtual_node,
@@ -44,7 +45,8 @@ class GNNActorCritic(nn.Module):
 
         self._pi = gnn_layers.GNN(
             gnn_obs_dim, hidden_channels=message_hidden, mpl_dims=actor_mpl_dims,
-            dropout=cfg.dropout, skip_connections=skip_connections
+            dropout=cfg.dropout, skip_connections=skip_connections,
+            message_attention=message_attention,
         )
 
         self._action_head = layers.mlp(
@@ -58,6 +60,7 @@ class GNNActorCritic(nn.Module):
                 head_hidden_dims=cfg.head_hidden_dims, mpl_dims=critic_mpl_dims,
                 dropout=cfg.dropout, skip_connections=skip_connections,
                 critic_readout=critic_readout,
+                message_attention=message_attention,
             ) for _ in range(int(cfg.num_q))]
         )
 

@@ -70,6 +70,39 @@ class GNNArchitectureTest(unittest.TestCase):
         self.assertTrue(any(key.startswith("phi.") for key in keys))
         self.assertTrue(any(key.startswith("gamma.") for key in keys))
         self.assertFalse(any(key.startswith("extra_mpls.") for key in keys))
+        self.assertFalse(any("attention_score" in key for key in keys))
+
+    def test_attention_normalizes_messages_over_incoming_edges(self):
+        model = GNN(3, hidden_channels=[], mpl_dims=[5], message_attention=True)
+        model.eval()
+        center = torch.tensor([[0.2, -0.3, 0.7]])
+        neighbor = torch.tensor([[1.1, 0.4, -0.2]])
+        single_x = torch.cat([center, neighbor], dim=0)
+        repeated_x = torch.cat([center, neighbor.repeat(3, 1)], dim=0)
+        single_edge = torch.tensor([[1], [0]], dtype=torch.long)
+        repeated_edges = torch.tensor(
+            [[1, 2, 3], [0, 0, 0]], dtype=torch.long
+        )
+
+        single_output = model(single_x, single_edge)[0]
+        repeated_output = model(repeated_x, repeated_edges)[0]
+
+        torch.testing.assert_close(single_output, repeated_output)
+
+    def test_attention_is_single_head_and_backpropagates_through_every_layer(self):
+        model = GNN(
+            3,
+            hidden_channels=[11],
+            mpl_dims=[8, 6],
+            message_attention=True,
+        )
+        output = model(graph().x, graph().edge_index)
+        output.sum().backward()
+
+        self.assertEqual(model.attention_score.out_features, 1)
+        self.assertIsNotNone(model.attention_score.weight.grad)
+        self.assertEqual(model.extra_mpls[0].attention_score.out_features, 1)
+        self.assertIsNotNone(model.extra_mpls[0].attention_score.weight.grad)
 
     def test_critic_handles_batched_graphs_and_backward(self):
         batch = Batch.from_data_list([graph(3), graph(5)])
@@ -89,6 +122,18 @@ class GNNArchitectureTest(unittest.TestCase):
             self.assertEqual(critic.mpl_dims, [8, 6])
             self.assertEqual(critic.head[0].out_features, 5)
         self.assertEqual(model._target_Qs.modules_list[0].mpl_dims, [8, 6])
+
+    def test_actor_critic_enables_attention_for_actor_critics_and_targets(self):
+        model = GNNActorCritic(cfg(message_attention=True))
+
+        self.assertTrue(model._pi.message_attention)
+        self.assertIsNotNone(model._pi.attention_score)
+        for critic in model._Qs.modules_list:
+            self.assertTrue(critic.message_attention)
+            self.assertIsNotNone(critic.attention_score)
+        for critic in model._target_Qs.modules_list:
+            self.assertTrue(critic.message_attention)
+            self.assertIsNotNone(critic.attention_score)
 
     def test_legacy_config_uses_actor_and_critic_output_widths(self):
         legacy = cfg(embedding_dim=13, Q_output_dim=17)
