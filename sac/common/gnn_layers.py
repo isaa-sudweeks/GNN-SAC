@@ -147,6 +147,7 @@ class Q_GNN(GNN):
         *,
         mpl_dims: Sequence[int] | None = None,
         skip_connections: bool = True,
+        critic_readout: str = "physical_mean",
         message_attention: bool = False,
     ):
         super().__init__(
@@ -158,20 +159,61 @@ class Q_GNN(GNN):
             skip_connections=skip_connections,
             message_attention=message_attention,
         )
-        self.head_hidden_dims = _validate_dims("head_hidden_dims", head_hidden_dims, allow_empty=True)
-        self.head = mlp(self.out_channels, self.head_hidden_dims, 1)
+        valid_readouts = {
+            "physical_mean",
+            "virtual_node",
+            "physical_mean_virtual_node",
+        }
+        if critic_readout not in valid_readouts:
+            raise ValueError(
+                f"critic_readout must be one of {sorted(valid_readouts)}, "
+                f"got {critic_readout!r}"
+            )
+        self.critic_readout = critic_readout
+        self.head_hidden_dims = _validate_dims(
+            "head_hidden_dims", head_hidden_dims, allow_empty=True
+        )
+        head_input_dim = self.out_channels * (
+            2 if critic_readout == "physical_mean_virtual_node" else 1
+        )
+        self.head = mlp(head_input_dim, self.head_hidden_dims, 1)
 
-    def forward(self, x, edge_index, batch=None, action_mask=None):
+    def forward(self, x, edge_index, batch=None, physical_mask=None):
         x = super().forward(x, edge_index)
         if batch is None:
             batch = x.new_zeros(x.size(0), dtype=torch.long)
-        if action_mask is not None:
-            x = x[action_mask]
-            batch = batch[action_mask]
-        return self.head(global_mean_pool(x, batch)).squeeze(-1)
+
+        if physical_mask is None:
+            if self.critic_readout != "physical_mean":
+                raise ValueError(
+                    f"critic_readout={self.critic_readout!r} requires a physical-node mask"
+                )
+            readout = global_mean_pool(x, batch)
+        else:
+            physical_mask = physical_mask.bool()
+            if physical_mask.dim() != 1 or physical_mask.numel() != x.size(0):
+                raise ValueError(
+                    "The physical-node mask must contain one value per graph node."
+                )
+            physical_mean = global_mean_pool(
+                x[physical_mask], batch[physical_mask]
+            )
+            if self.critic_readout == "physical_mean":
+                readout = physical_mean
+            else:
+                # ``prepare_graph`` appends exactly one virtual node to every
+                # graph. Batched boolean indexing therefore returns virtual
+                # embeddings in graph order without a pooling reduction or a
+                # GPU-to-host synchronization in this training hot path.
+                virtual_node = x[~physical_mask]
+                if self.critic_readout == "virtual_node":
+                    readout = virtual_node
+                else:
+                    readout = torch.cat([physical_mean, virtual_node], dim=-1)
+        return self.head(readout).squeeze(-1)
 
     def __repr__(self):
         return (
             super().__repr__().replace("GNN(", "Q_GNN(", 1)
-            + f"\nPooling:\tglobal_mean_pool\nHead:\t{self.head}"
+            + f"\nReadout:\t{self.critic_readout}\nHead:\t{self.head}"
         )

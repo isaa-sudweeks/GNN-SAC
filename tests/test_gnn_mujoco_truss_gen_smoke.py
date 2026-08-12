@@ -589,7 +589,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             self.assertGreaterEqual(float(next_obs.rigidity.item()), 0.0)
             self.assertAlmostEqual(
                 float(next_obs.rigidity.item()),
-                float(info["critical_eig"]) / env.unwrapped._initial_critical_eig,
+                float(info["critical_eig"]),
                 places=5,
             )
             self.assertTrue(float(reward) == float(reward))
@@ -612,6 +612,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             unwrapped = env.unwrapped
             self.assertFalse(getattr(unwrapped.mj_model, "wcrm", True))
 
+            unwrapped._initial_critical_eig = 0.5
             unwrapped.mj_model._critical_eig = lambda: 0.25
             unwrapped.mj_model.collapse_check = lambda: 99.0
             unwrapped.mj_model.get_forward_velocity = lambda: 0.0
@@ -621,10 +622,37 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             reward, info, terminated = unwrapped._compute_reward(action)
 
             self.assertFalse(terminated)
-            self.assertEqual(info["critical_eig"], 0.25)
+            self.assertEqual(info["critical_eig"], 0.5)
             self.assertEqual(info["critical_eig_raw"], 0.25)
-            self.assertAlmostEqual(info["rigidity"], 2.5 * 0.25)
-            self.assertAlmostEqual(reward, 2.5 * 0.25)
+            self.assertAlmostEqual(info["rigidity"], 2.5 * 0.5)
+            self.assertAlmostEqual(reward, 2.5 * 0.5)
+        finally:
+            env.close()
+
+    def test_graph_collapse_threshold_uses_normalized_rigidity(self):
+        cfg = graph_test_cfg(
+            rigidity_weight=0.0,
+            forward_weight=0.0,
+            energy_weight=0.0,
+            alive_bonus=0.0,
+            slip_weight=0.0,
+            critical_eig_threshold=0.6,
+        )
+        env = make_env(cfg)
+        try:
+            unwrapped = env.unwrapped
+            unwrapped._initial_critical_eig = 0.5
+            unwrapped.mj_model._critical_eig = lambda: 0.25
+            unwrapped.mj_model.get_forward_velocity = lambda: 0.0
+            unwrapped.mj_model.get_slip_penalty = lambda height: 0.0
+
+            action = np.zeros(unwrapped.mj_model.model.nu, dtype=np.float32)
+            _, info, terminated = unwrapped._compute_reward(action)
+
+            self.assertTrue(terminated)
+            self.assertEqual(info["critical_eig"], 0.5)
+            self.assertEqual(info["critical_eig_raw"], 0.25)
+            self.assertTrue(info["terminated_by_collapse"])
         finally:
             env.close()
 

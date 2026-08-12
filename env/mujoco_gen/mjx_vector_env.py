@@ -64,7 +64,17 @@ class MjxVectorGraphEnv(gym.Env):
                 "domain_randomization_params.physical_parameters for MJX runs, or use "
                 "mujoco_backend=mujoco for model-level randomization."
             )
-        self._core = MjxNodeVelocityEnv(truss_config)
+        mjx_impl = str(getattr(cfg, "mjx_impl", "jax")).lower()
+        if mjx_impl == "warp":
+            self._core = MjxNodeVelocityEnv(
+                truss_config,
+                mjx_impl=mjx_impl,
+                warp_graph_mode=str(getattr(cfg, "warp_graph_mode", "warp_staged")).lower(),
+                warp_naconmax=self._optional_positive_int(cfg, "warp_naconmax"),
+                warp_njmax=self._optional_positive_int(cfg, "warp_njmax"),
+            )
+        else:
+            self._core = MjxNodeVelocityEnv(truss_config, mjx_impl=mjx_impl)
         self.mj_model = self._core.mujoco_model
         self.max_episode_steps = int(self._core.config.max_steps)
         self.nsubsteps = int(self._core.config.nsubsteps)
@@ -127,6 +137,16 @@ class MjxVectorGraphEnv(gym.Env):
         self._step_compiled = jax.jit(self._core.step)
         self._step_masked_compiled = jax.jit(self._step_masked)
         self._rigidity_compiled = jax.jit(jax.vmap(self._core._critical_eig))
+
+    @staticmethod
+    def _optional_positive_int(cfg, name: str) -> int | None:
+        value = getattr(cfg, name, None)
+        if value is None:
+            return None
+        value = int(value)
+        if value <= 0:
+            raise ValueError(f"{name} must be a positive integer or null.")
+        return value
 
     @property
     def unwrapped(self):
