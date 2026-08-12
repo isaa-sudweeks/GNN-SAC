@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 import unittest
+from unittest.mock import patch
 
 import torch
 from torch_geometric.data import Batch, Data
@@ -240,6 +241,32 @@ class VirtualNodeTest(unittest.TestCase):
         self.assertTrue(
             all(parameter.grad is not None for parameter in model._Qs.parameters())
         )
+
+    def test_virtual_critic_readout_does_not_convert_tensors_to_host_scalars(self):
+        batch = Batch.from_data_list([
+            prepare_graph(graph(3), use_virtual_node=True),
+            prepare_graph(graph(5), use_virtual_node=True),
+        ])
+        critic = Q_GNN(
+            5,
+            hidden_channels=[6],
+            mpl_dims=[8],
+            critic_readout="virtual_node",
+        )
+
+        with patch.object(
+            torch.Tensor,
+            "item",
+            side_effect=AssertionError("critic readout synchronized to the host"),
+        ):
+            values = critic(
+                batch.x,
+                batch.edge_index,
+                batch.batch,
+                batch.physical_node_mask,
+            )
+
+        self.assertEqual(values.shape, (2,))
 
     def test_critic_can_concatenate_physical_mean_and_virtual_node(self):
         batch = Batch.from_data_list([

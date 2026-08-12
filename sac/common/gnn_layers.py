@@ -2,7 +2,7 @@ from typing import Sequence
 
 import torch
 import torch.nn as nn
-from torch_geometric.nn import MessagePassing, global_add_pool, global_mean_pool
+from torch_geometric.nn import MessagePassing, global_mean_pool
 
 from common.mlp_layers import mlp
 
@@ -162,21 +162,11 @@ class Q_GNN(GNN):
             if self.critic_readout == "physical_mean":
                 readout = physical_mean
             else:
-                virtual_mask = ~physical_mask
-                num_graphs = int(batch.max().item()) + 1 if batch.numel() else 0
-                virtual_counts = global_add_pool(
-                    virtual_mask.to(dtype=x.dtype), batch, size=num_graphs
-                )
-                if virtual_counts.numel() != num_graphs or not torch.all(
-                    virtual_counts == 1
-                ):
-                    raise ValueError(
-                        f"critic_readout={self.critic_readout!r} requires exactly "
-                        "one virtual node per graph."
-                    )
-                virtual_node = global_add_pool(
-                    x[virtual_mask], batch[virtual_mask], size=num_graphs
-                )
+                # ``prepare_graph`` appends exactly one virtual node to every
+                # graph. Batched boolean indexing therefore returns virtual
+                # embeddings in graph order without a pooling reduction or a
+                # GPU-to-host synchronization in this training hot path.
+                virtual_node = x[~physical_mask]
                 if self.critic_readout == "virtual_node":
                     readout = virtual_node
                 else:
