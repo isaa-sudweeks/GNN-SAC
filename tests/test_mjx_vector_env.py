@@ -100,7 +100,7 @@ class MjxVectorEnvTest(unittest.TestCase):
                 observation.edge_role.shape,
                 (observation.edge_index.shape[1],),
             )
-            self.assertEqual(cfg.effective_node_feature_dim, 8)
+            self.assertEqual(cfg.effective_node_feature_dim, 10)
             self.assertEqual(cfg.edge_feature_dim, 4)
 
             agent = GNNSAC(cfg)

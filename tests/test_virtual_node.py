@@ -2,6 +2,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 import unittest
+from unittest.mock import patch
 
 import torch
 from torch_geometric.data import Batch, Data
@@ -46,6 +47,7 @@ def cfg() -> SimpleNamespace:
         log_std_max=2.0,
         tau=0.005,
         use_virtual_node=True,
+        critic_readout="physical_mean",
     )
 
 
@@ -206,6 +208,112 @@ class VirtualNodeTest(unittest.TestCase):
         self.assertEqual(values.shape, (2, 2))
         expected = torch.tensor([1, 0, 3, 0, 0, 5, 6, 7, 0], dtype=torch.float32)
         self.assertTrue(torch.equal(captured_input[0][:, -1], expected))
+
+    def test_critic_can_read_out_virtual_node_embedding(self):
+        batch = Batch.from_data_list([
+            prepare_graph(graph(3), use_virtual_node=True),
+            prepare_graph(graph(5), use_virtual_node=True),
+        ])
+        config = cfg()
+        config.critic_readout = "virtual_node"
+        model = GNNActorCritic(config)
+        action = torch.randn(8, 1)
+        captured_input = []
+        captured_readout = []
+        critic = model._Qs.modules_list[0]
+        input_hook = critic.register_forward_pre_hook(
+            lambda module, args: captured_input.append(args[0].detach().clone())
+        )
+        head_hook = critic.head.register_forward_pre_hook(
+            lambda module, args: captured_readout.append(args[0].detach().clone())
+        )
+        try:
+            values = model.Q(batch, action, return_type="all")
+        finally:
+            input_hook.remove()
+            head_hook.remove()
+
+        encoded = GNN.forward(critic, captured_input[0], batch.edge_index)
+        expected = encoded[~physical_node_mask(batch)]
+        self.assertEqual(values.shape, (2, 2))
+        self.assertTrue(torch.allclose(captured_readout[0], expected))
+        values.sum().backward()
+        self.assertTrue(
+            all(parameter.grad is not None for parameter in model._Qs.parameters())
+        )
+
+    def test_virtual_critic_readout_does_not_convert_tensors_to_host_scalars(self):
+        batch = Batch.from_data_list([
+            prepare_graph(graph(3), use_virtual_node=True),
+            prepare_graph(graph(5), use_virtual_node=True),
+        ])
+        critic = Q_GNN(
+            5,
+            hidden_channels=[6],
+            mpl_dims=[8],
+            critic_readout="virtual_node",
+        )
+
+        with patch.object(
+            torch.Tensor,
+            "item",
+            side_effect=AssertionError("critic readout synchronized to the host"),
+        ):
+            values = critic(
+                batch.x,
+                batch.edge_index,
+                batch.batch,
+                batch.physical_node_mask,
+            )
+
+        self.assertEqual(values.shape, (2,))
+
+    def test_critic_can_concatenate_physical_mean_and_virtual_node(self):
+        batch = Batch.from_data_list([
+            prepare_graph(graph(3), use_virtual_node=True),
+            prepare_graph(graph(5), use_virtual_node=True),
+        ])
+        config = cfg()
+        config.critic_readout = "physical_mean_virtual_node"
+        model = GNNActorCritic(config)
+        action = torch.randn(8, 1)
+        captured_input = []
+        captured_readout = []
+        critic = model._Qs.modules_list[0]
+        input_hook = critic.register_forward_pre_hook(
+            lambda module, args: captured_input.append(args[0].detach().clone())
+        )
+        head_hook = critic.head.register_forward_pre_hook(
+            lambda module, args: captured_readout.append(args[0].detach().clone())
+        )
+        try:
+            values = model.Q(batch, action, return_type="all")
+        finally:
+            input_hook.remove()
+            head_hook.remove()
+
+        encoded = GNN.forward(critic, captured_input[0], batch.edge_index)
+        pool_mask = physical_node_mask(batch)
+        expected = torch.cat([
+            global_mean_pool(encoded[pool_mask], batch.batch[pool_mask]),
+            encoded[~pool_mask],
+        ], dim=-1)
+        self.assertEqual(values.shape, (2, 2))
+        self.assertEqual(critic.head[0].in_features, 16)
+        self.assertTrue(torch.allclose(captured_readout[0], expected))
+        values.sum().backward()
+        self.assertTrue(
+            all(parameter.grad is not None for parameter in model._Qs.parameters())
+        )
+
+    def test_virtual_critic_readouts_require_virtual_nodes(self):
+        for readout in ("virtual_node", "physical_mean_virtual_node"):
+            with self.subTest(readout=readout):
+                config = cfg()
+                config.use_virtual_node = False
+                config.critic_readout = readout
+                with self.assertRaisesRegex(ValueError, "requires use_virtual_node=true"):
+                    GNNActorCritic(config)
 
     def test_two_layers_create_physical_virtual_physical_dependency(self):
         base = Data(

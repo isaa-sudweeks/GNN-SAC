@@ -137,6 +137,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
                 reward = torch.tensor(float(self.active_env_idx + 1))
                 info = {
                     "success": torch.tensor(float(self.active_env_idx)),
+                    "com_delta_x": torch.tensor(0.25 * float(self.active_env_idx + 1)),
                     "terminated": torch.tensor(0.0),
                     "truncated": torch.tensor(1.0),
                 }
@@ -200,6 +201,9 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         self.assertEqual(metrics["octahedron_episode_reward"], 1.0)
         self.assertEqual(metrics["tetrahedron_episode_reward"], 2.0)
         self.assertEqual(metrics["episode_reward"], 1.5)
+        self.assertEqual(metrics["octahedron_episode_distance"], 0.25)
+        self.assertEqual(metrics["tetrahedron_episode_distance"], 0.5)
+        self.assertEqual(metrics["episode_distance"], 0.375)
 
         trainer._activate_shared_eval_env(1724)
         self.assertEqual(eval_env.selected_env_indices, [])
@@ -505,7 +509,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             obs = env.reset()
             self.assertEqual(obs.x.shape[1], 6)
             self.assertEqual(obs.edge_role.shape, (obs.edge_index.shape[1],))
-            self.assertEqual(cfg.effective_node_feature_dim, 8)
+            self.assertEqual(cfg.effective_node_feature_dim, 10)
             self.assertEqual(cfg.edge_feature_dim, 4)
 
             agent = GNNSAC(cfg)
@@ -615,7 +619,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             self.assertGreaterEqual(float(next_obs.rigidity.item()), 0.0)
             self.assertAlmostEqual(
                 float(next_obs.rigidity.item()),
-                float(info["critical_eig"]) / env.unwrapped._initial_critical_eig,
+                float(info["critical_eig"]),
                 places=5,
             )
             self.assertTrue(float(reward) == float(reward))
@@ -638,6 +642,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             unwrapped = env.unwrapped
             self.assertFalse(getattr(unwrapped.mj_model, "wcrm", True))
 
+            unwrapped._initial_critical_eig = 0.5
             unwrapped.mj_model._critical_eig = lambda: 0.25
             unwrapped.mj_model.collapse_check = lambda: 99.0
             unwrapped.mj_model.get_forward_velocity = lambda: 0.0
@@ -647,10 +652,37 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             reward, info, terminated = unwrapped._compute_reward(action)
 
             self.assertFalse(terminated)
-            self.assertEqual(info["critical_eig"], 0.25)
+            self.assertEqual(info["critical_eig"], 0.5)
             self.assertEqual(info["critical_eig_raw"], 0.25)
-            self.assertAlmostEqual(info["rigidity"], 2.5 * 0.25)
-            self.assertAlmostEqual(reward, 2.5 * 0.25)
+            self.assertAlmostEqual(info["rigidity"], 2.5 * 0.5)
+            self.assertAlmostEqual(reward, 2.5 * 0.5)
+        finally:
+            env.close()
+
+    def test_graph_collapse_threshold_uses_normalized_rigidity(self):
+        cfg = graph_test_cfg(
+            rigidity_weight=0.0,
+            forward_weight=0.0,
+            energy_weight=0.0,
+            alive_bonus=0.0,
+            slip_weight=0.0,
+            critical_eig_threshold=0.6,
+        )
+        env = make_env(cfg)
+        try:
+            unwrapped = env.unwrapped
+            unwrapped._initial_critical_eig = 0.5
+            unwrapped.mj_model._critical_eig = lambda: 0.25
+            unwrapped.mj_model.get_forward_velocity = lambda: 0.0
+            unwrapped.mj_model.get_slip_penalty = lambda height: 0.0
+
+            action = np.zeros(unwrapped.mj_model.model.nu, dtype=np.float32)
+            _, info, terminated = unwrapped._compute_reward(action)
+
+            self.assertTrue(terminated)
+            self.assertEqual(info["critical_eig"], 0.5)
+            self.assertEqual(info["critical_eig_raw"], 0.25)
+            self.assertTrue(info["terminated_by_collapse"])
         finally:
             env.close()
 

@@ -440,6 +440,7 @@ class VectorizedInferenceTest(unittest.TestCase):
                         True,
                         {
                             "success": float(index == 0),
+                            "com_delta_x": 0.25 * float(index + 1),
                             "terminated": torch.tensor(0.0),
                             "truncated": torch.tensor(1.0),
                         },
@@ -470,6 +471,7 @@ class VectorizedInferenceTest(unittest.TestCase):
         self.assertEqual(env.step_batches, [[0, 1], [0]])
         self.assertEqual([row["episode"] for row in results], [0, 1, 2])
         self.assertEqual([row["episode_length"] for row in results], [1, 1, 1])
+        self.assertEqual([row["episode_distance"] for row in results], [0.25, 0.5, 0.25])
 
 
 if __name__ == "__main__":

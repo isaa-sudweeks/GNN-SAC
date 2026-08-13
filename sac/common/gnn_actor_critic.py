@@ -35,10 +35,19 @@ class GNNActorCritic(nn.Module):
         critic_mpl_dims = [cfg.Q_output_dim] if shared_mpl_dims is None else shared_mpl_dims
         skip_connections = getattr(cfg, "mpl_skip_connections", True)
         feature_flags = graph_feature_flags(cfg)
+        use_virtual_node = bool(getattr(cfg, "use_virtual_node", False))
+        critic_readout = getattr(cfg, "critic_readout", "physical_mean")
+        if (
+            critic_readout in {"virtual_node", "physical_mean_virtual_node"}
+            and not use_virtual_node
+        ):
+            raise ValueError(
+                f"critic_readout={critic_readout!r} requires use_virtual_node=true"
+            )
         message_attention = bool(getattr(cfg, "message_attention", False))
         gnn_obs_dim = graph_input_dim(
             cfg.obs_dim,
-            use_virtual_node=bool(getattr(cfg, "use_virtual_node", False)),
+            use_virtual_node=use_virtual_node,
             use_node_roles=feature_flags["use_node_roles"],
         )
         edge_channels = graph_edge_input_dim(
@@ -64,6 +73,7 @@ class GNNActorCritic(nn.Module):
                 head_hidden_dims=cfg.head_hidden_dims, mpl_dims=critic_mpl_dims,
                 dropout=cfg.dropout, skip_connections=skip_connections,
                 edge_channels=edge_channels,
+                critic_readout=critic_readout,
                 message_attention=message_attention,
             ) for _ in range(int(cfg.num_q))]
         )

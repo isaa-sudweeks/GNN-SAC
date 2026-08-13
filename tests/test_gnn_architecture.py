@@ -103,7 +103,6 @@ class GNNArchitectureTest(unittest.TestCase):
         self.assertIsNotNone(model.attention_score.weight.grad)
         self.assertEqual(model.extra_mpls[0].attention_score.out_features, 1)
         self.assertIsNotNone(model.extra_mpls[0].attention_score.weight.grad)
-
     def test_disabled_edge_features_preserve_first_layer_shapes(self):
         legacy = GNN(3, 8, [10, 10])
         explicit_disabled = GNN(3, 8, [10, 10], edge_channels=0)
@@ -161,6 +160,8 @@ class GNNArchitectureTest(unittest.TestCase):
                     GNN(3, hidden_channels=[], mpl_dims=dims)
         with self.assertRaises(ValueError):
             GNN(3, hidden_channels=[False], mpl_dims=[8])
+        with self.assertRaisesRegex(ValueError, "critic_readout must be one of"):
+            Q_GNN(3, mpl_dims=[8], critic_readout="unknown")
 
 
 if __name__ == "__main__":
