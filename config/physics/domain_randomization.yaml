@@ -265,8 +265,8 @@ domain_randomization_params:
   # Add Gaussian noise to normalized policy actions during training rollouts.
   # The executed action is clipped back to [clip_low, clip_high] and stored in replay.
   action_noise:
-    enabled: false
-    std: 0.05
+    enabled: true
+    std: 0.1
     clip_low: -1.0
     clip_high: 1.0
     apply_to_seed_actions: false
@@ -274,7 +274,7 @@ domain_randomization_params:
   # Add Gaussian noise to policy observations during training rollouts.
   # For graph observations, noise is applied to node features (`x`) only.
   observation_noise:
-    enabled: false
-    std: 0.0
+    enabled: true
+    std: 0.02
     clip_low: null
     clip_high: null
