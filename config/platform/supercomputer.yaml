@@ -17,6 +17,8 @@ checkpoint_freq: 100_000
 checkpoint_keep_last: 5
 set_wandb_offline: true
 device: cuda
+mjx_impl: warp # Use the NVIDIA Warp MJX implementation for supercomputer runs.
+num_envs: 1536 # Total training environments across all configured topologies.
 
 # Submitit uses this Slurm launcher only in Hydra multirun mode.
 hydra:
