@@ -181,8 +181,9 @@ class Trainer:
         agent_state = state_dict["agent"]
         if isinstance(agent_state, Mapping) and "model" in agent_state:
             checkpoint = {"model": agent_state["model"]}
-            if "log_alpha" in agent_state:
-                checkpoint["log_alpha"] = agent_state["log_alpha"]
+            for key in ("log_alpha", "graph_feature_schema"):
+                if key in agent_state:
+                    checkpoint[key] = agent_state[key]
             return checkpoint
         return agent_state
 
