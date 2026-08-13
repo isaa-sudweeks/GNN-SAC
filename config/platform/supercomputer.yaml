@@ -28,6 +28,8 @@ hydra:
   launcher:
     setup:
       - export PYTHONPATH=${oc.env:PWD}/sac:${oc.env:PWD}:${oc.env:PYTHONPATH,}
+      - export TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor-$SLURM_JOB_ID-$SLURM_ARRAY_TASK_ID
+      - mkdir -p "$TORCHINDUCTOR_CACHE_DIR"
     timeout_min: 1440
     nodes: 1
     tasks_per_node: 1
