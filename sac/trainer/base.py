@@ -91,6 +91,7 @@ class Trainer:
                 "pretrain_complete": bool(getattr(self, "_pretrain_complete", False)),
                 "optimizer_updates": int(getattr(self, "_optimizer_updates", 0)),
                 "last_eval_step": getattr(self, "_last_eval_step", None),
+                "eval_count": int(getattr(self, "_eval_count", 0)),
             },
             "agent": self.agent.training_state_dict(),
             "buffer": self.buffer.state_dict(),
@@ -164,6 +165,7 @@ class Trainer:
         self._optimizer_updates = int(trainer_state.get("optimizer_updates", 0))
         last_eval_step = trainer_state.get("last_eval_step")
         self._last_eval_step = None if last_eval_step is None else int(last_eval_step)
+        self._eval_count = int(trainer_state.get("eval_count", 0))
         if "logger" in state_dict:
             self.logger.load_state_dict(state_dict["logger"])
         saved_reward_normalizer = state_dict.get("reward_normalizer")

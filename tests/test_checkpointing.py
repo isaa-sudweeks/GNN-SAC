@@ -104,6 +104,7 @@ class CheckpointingTest(unittest.TestCase):
             trainer._pretrain_complete = True
             trainer._optimizer_updates = 17
             trainer._last_eval_step = 20
+            trainer._eval_count = 4
             trainer.reward_normalizer = TaskRewardNormalizer(
                 gamma=0.9,
                 allowed_tasks=["task"],
@@ -129,6 +130,7 @@ class CheckpointingTest(unittest.TestCase):
             self.assertTrue(resumed._pretrain_complete)
             self.assertEqual(resumed._optimizer_updates, 17)
             self.assertEqual(resumed._last_eval_step, 20)
+            self.assertEqual(resumed._eval_count, 4)
             self.assertEqual(float(resumed.agent.model.weight.item()), 5.0)
             self.assertEqual(float(resumed.buffer.value.item()), 7.0)
             self.assertEqual(resumed.logger.rows, [{"step": 10, "episode_reward": 1.5}])

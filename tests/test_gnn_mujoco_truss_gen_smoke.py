@@ -432,6 +432,28 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         self.assertFalse(OnlineTrainer._crossed_eval_interval(6, 9, 5))
         self.assertTrue(OnlineTrainer._crossed_eval_interval(9, 12, 5))
 
+    def test_video_every_n_evals_records_first_then_every_tenth(self):
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        trainer.cfg = SimpleNamespace(save_video=True, video_every_n_evals=10)
+        trainer._step = 0
+        trainer._eval_count = 0
+        recorded = []
+        trainer.eval = lambda: recorded.append(trainer._record_video_this_eval) or {
+            "episode_reward": 0.0
+        }
+        trainer.common_metrics = lambda: {}
+        trainer.logger = SimpleNamespace(log=lambda *args: None)
+        trainer.report_eval_metrics = lambda *args: None
+
+        for _ in range(21):
+            trainer._evaluate_and_log()
+
+        self.assertEqual(
+            [index for index, should_record in enumerate(recorded) if should_record],
+            [0, 10, 20],
+        )
+        self.assertEqual(trainer._eval_count, 21)
+
     def test_repeated_truss_envs_reset_and_step(self):
         cfg = flat_test_cfg(
             num_envs=4,

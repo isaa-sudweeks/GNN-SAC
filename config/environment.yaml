@@ -62,7 +62,7 @@ num_nodes: 6 # Number of node bodies in the default octahedron XML.
 num_edges: 12 # Number of structural/actuated tendon edges in the default octahedron XML.
 num_actuated_edges: 8 # Number of tendon edges controlled by the policy.
 normalize_observations: true # Whether future wrappers should normalize observation features.
-normalize_rewards: false # Normalize training rewards using task-specific discounted-return variance.
+normalize_rewards: true # Normalize training rewards using task-specific discounted-return variance.
 reward_norm_gamma: null # Discount for normalization returns; null uses the SAC training discount.
 reward_norm_epsilon: 1e-8 # Numerical floor added to each task's running return variance.
 reward_norm_clip: 10.0 # Symmetric bound applied after reward normalization.

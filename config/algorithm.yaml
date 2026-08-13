@@ -4,7 +4,7 @@
 lr: 3e-4 # Adam learning rate for actor and critic optimizers.
 batch_size: 256 # Number of replay slices sampled for each gradient update.
 grad_clip_norm: 10.0 # Maximum global gradient norm before clipping optimizer steps.
-pcgrad: false # Project conflicting per-task actor and critic gradients before optimizer steps.
+pcgrad: false # GNN profiles can enable projection of conflicting per-task gradients.
 gradient_diagnostics: false # Compare task-specific actor and critic gradients without changing the optimizer update.
 gradient_diagnostics_freq: 100 # Optimizer-update interval for gradient diagnostics when enabled.
 

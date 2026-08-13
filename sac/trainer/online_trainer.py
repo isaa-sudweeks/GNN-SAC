@@ -35,6 +35,8 @@ class OnlineTrainer(Trainer):
         self._pretrain_complete = False
         self._optimizer_updates = 0
         self._last_eval_step = None
+        self._eval_count = 0
+        self._record_video_this_eval = True
         self.reward_normalizer = self._make_reward_normalizer()
         self.performance_profiler = TrainingProfiler.from_config(self.cfg, self.logger)
         
@@ -196,11 +198,18 @@ class OnlineTrainer(Trainer):
         return self._eval_one()
 
     def _evaluate_and_log(self):
+        video_every_n_evals = int(getattr(self.cfg, "video_every_n_evals", 1))
+        if video_every_n_evals < 1:
+            raise ValueError("video_every_n_evals must be at least 1.")
+        self._record_video_this_eval = bool(getattr(self.cfg, "save_video", False)) and (
+            self._eval_count % video_every_n_evals == 0
+        )
         eval_metrics = self.eval()
         eval_metrics.update(self.common_metrics())
         self.logger.log(eval_metrics, 'eval')
         self.report_eval_metrics(eval_metrics, self._step)
         self._last_eval_step = int(self._step)
+        self._eval_count += 1
         return eval_metrics
 
     def _evaluate_final_policy(self):
@@ -213,10 +222,13 @@ class OnlineTrainer(Trainer):
 
     def _eval_one(self, task_idx=None, video_key="videos/eval_video"):
         ep_rewards, ep_successes, ep_lengths, ep_distances = [], [], [], []
+        record_video = bool(getattr(self.cfg, "save_video", False)) and bool(
+            getattr(self, "_record_video_this_eval", True)
+        )
         for i in range(self.cfg.eval_episodes):
             obs = self.eval_env.reset(task_idx=task_idx) if task_idx is not None else self.eval_env.reset()
             done, ep_reward, ep_distance, t = False, 0, 0, 0
-            if self.cfg.save_video:
+            if record_video:
                 self.logger.video.init(self.eval_env, enabled=(i==0))
             while not done:
                 #if getattr(self.cfg, 'device', 'cuda') == 'cuda':
@@ -226,13 +238,13 @@ class OnlineTrainer(Trainer):
                 ep_reward += reward
                 ep_distance += self._scalar_value(info.get("com_delta_x", 0.0))
                 t += 1
-                if self.cfg.save_video:
+                if record_video:
                     self.logger.video.record(self.eval_env)
             ep_rewards.append(self._scalar_value(ep_reward))
             ep_successes.append(self._scalar_value(info['success']))
             ep_lengths.append(t)
             ep_distances.append(ep_distance)
-            if self.cfg.save_video:
+            if record_video:
                 self.logger.video.save(self._step, key=video_key)
         return dict(
             episode_reward=np.nanmean(ep_rewards),
