@@ -12,6 +12,7 @@ for path in (ROOT, SAC_ROOT):
         sys.path.insert(0, str(path))
 
 from gnn_infer import load_agent_checkpoint
+from trainer.base import Trainer
 
 
 def fail_if_unpickled():
@@ -36,6 +37,35 @@ class DummyAgent:
 
 
 class InferenceCheckpointTest(unittest.TestCase):
+    def test_trainer_sidecar_preserves_graph_feature_schema(self):
+        schema = {
+            "node_roles": True,
+            "edge_roles": True,
+            "edge_distance": True,
+            "edge_role_vocabulary": ["structural", "tendon", "virtual"],
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            checkpoint_dir = Path(tmp_dir)
+            Trainer._write_checkpoint_files(
+                checkpoint_dir,
+                "step_10",
+                {
+                    "agent": {
+                        "model": {"weight": torch.tensor([3.0])},
+                        "graph_feature_schema": schema,
+                    },
+                    "buffer": UnloadableReplay(),
+                },
+                keep_last=1,
+                write_agent=True,
+            )
+
+            agent = DummyAgent()
+            load_agent_checkpoint(agent, checkpoint_dir / "latest.pt")
+
+            self.assertEqual(agent.loaded["graph_feature_schema"], schema)
+            self.assertEqual(float(agent.loaded["model"]["weight"].item()), 3.0)
+
     def test_full_checkpoint_creates_and_reuses_agent_only_sidecar(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             checkpoint = Path(tmp_dir) / "latest.pt"

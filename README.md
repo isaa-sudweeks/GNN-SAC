@@ -2,6 +2,21 @@
 > **Big Idea**:
 > By using GNNs there is a way to formulate learned control algorithms to be topologically generalizable, thus allowing the network to potentially learn how to move many different structures using the same network. It might even be able to extend to the point where it could control robots to both roll and walk.
 
+# Setup with uv
+
+The checked-in `uv.lock` provides a reproducible environment. On Linux, uv
+installs the CUDA 13.0 (`cu130`) PyTorch build and JAX CUDA 13 plugin; on macOS
+it uses the native PyTorch and JAX wheels instead.
+Python 3.12 or newer is required.
+
+```bash
+uv sync --frozen
+uv run python sac/gnn_train.py device=cpu steps=1000 enable_wandb=false
+```
+
+On a CUDA training machine, omit `device=cpu` (or set `device=cuda`). Commands
+run through `uv run` automatically use the locked project environment.
+
 # Thesis Claim
 - A graph-structured SAC policy can learn tendon-level control for compliant or tensegrity robots in a way that generalizes across robot topologies better than fixed-size MLP policies.
 - The important property is not that the controller is fully topologically invariant. It should be permutation equivariant to node and edge ordering while still using the robot topology to produce useful actions.
@@ -172,7 +187,7 @@ python sac/gnn_infer.py --config-name inference/gnn_mjx \
   model=/path/to/final.pt episodes=256 num_envs=256
 ```
 
-The MJX training path requires `mujoco-truss-gen>=0.11.2` and
+The MJX training path requires `mujoco-truss-gen>=0.12.0` and
 training-environment rendering disabled. Native MuJoCo evaluation can render
 and record videos. MJX owns one compiled model and one fixed environment batch
 per topology, so realistic models and fixed-shape runtime domain randomization
@@ -185,7 +200,7 @@ JAX remains the default MJX physics implementation. On an NVIDIA CUDA host,
 install the Warp extra and select the upstream Warp implementation explicitly:
 
 ```bash
-python -m pip install 'mujoco-truss-gen[warp]>=0.11.2'
+python -m pip install 'mujoco-truss-gen[warp]>=0.12.0'
 python sac/gnn_train.py sim_backend=mjx mjx_impl=warp device=cuda
 ```
 

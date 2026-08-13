@@ -7,7 +7,12 @@ import torch.nn.functional as F
 from torch_geometric.data import Batch, Data
 
 from common.gnn_actor_critic import GNNActorCritic 
-from common.graph_transforms import policy_action_mask, prepare_graph
+from common.graph_transforms import (
+    graph_feature_flags,
+    graph_feature_schema,
+    policy_action_mask,
+    prepare_graph,
+)
 
 class GNNSAC(torch.nn.Module):
     """
@@ -61,11 +66,13 @@ class GNNSAC(torch.nn.Module):
             {
                 "model": self.model.state_dict(),
                 "log_alpha": self.log_alpha.detach().cpu(),
+                "graph_feature_schema": graph_feature_schema(self.cfg),
             },
             fp,
         )
     def load(self, fp):
         state_dict = fp if isinstance(fp, dict) else torch.load(fp, map_location=self.device, weights_only=False)
+        self._validate_graph_feature_schema(state_dict)
         self.model.load_state_dict(state_dict["model"] if "model" in state_dict else state_dict)
         if isinstance(state_dict, dict) and "log_alpha" in state_dict:
             self.log_alpha.data.copy_(state_dict["log_alpha"].to(self.device))
@@ -77,7 +84,31 @@ class GNNSAC(torch.nn.Module):
             "q_optim": self.q_optim.state_dict(),
             "pi_optim": self.pi_optim.state_dict(),
             "alpha_optim": self.alpha_optim.state_dict(),
+            "graph_feature_schema": graph_feature_schema(self.cfg),
         }
+
+    def _validate_graph_feature_schema(self, state_dict):
+        if not isinstance(state_dict, dict) or "model" not in state_dict:
+            saved_schema = None
+        else:
+            saved_schema = state_dict.get("graph_feature_schema")
+        expected_schema = graph_feature_schema(self.cfg)
+        features_enabled = any(
+            expected_schema[name]
+            for name in ("node_roles", "edge_roles", "edge_distance")
+        )
+        if saved_schema is None:
+            if features_enabled:
+                raise ValueError(
+                    "Checkpoint has no graph feature schema, but configurable graph features are enabled. "
+                    "Use a checkpoint trained with the same graph_features configuration."
+                )
+            return
+        if saved_schema != expected_schema:
+            raise ValueError(
+                "Checkpoint graph feature schema does not match this run: "
+                f"saved={saved_schema}, current={expected_schema}."
+            )
 
     def load_training_state_dict(self, state_dict):
         self.load(state_dict)
@@ -105,8 +136,10 @@ class GNNSAC(torch.nn.Module):
         action_masks = [policy_action_mask(obs) for obs in observations]
         action_counts = [int(mask.sum()) for mask in action_masks]
         use_virtual_node = bool(getattr(self.cfg, "use_virtual_node", False))
+        feature_flags = graph_feature_flags(self.cfg)
         prepared = [
-            prepare_graph(obs, use_virtual_node=use_virtual_node) for obs in observations
+            prepare_graph(obs, use_virtual_node=use_virtual_node, **feature_flags)
+            for obs in observations
         ]
         obs_batch = Batch.from_data_list(prepared).to(self.device, non_blocking=True)
         if eval_mode:

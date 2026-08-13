@@ -8,6 +8,8 @@ import torch
 from gymnasium import spaces
 
 from env.mujoco_gen.topology_envs import (
+    _edge_roles_enabled,
+    _semantic_edge_roles,
     make_truss_env_config,
     resolve_truss_topology,
 )
@@ -98,8 +100,8 @@ class MjxVectorGraphEnv(gym.Env):
             raise RuntimeError("MJX control graph action size does not match its node metadata.")
         edge_index = get_edge_index(self.mj_model, graph_view="control")
         self._edge_index = torch.as_tensor(edge_index, dtype=torch.long)
-        self.observation_space = spaces.Dict(
-            {
+        self._edge_role = None
+        observation_spaces = {
                 "x": spaces.Box(
                     low=-np.inf,
                     high=np.inf,
@@ -120,7 +122,18 @@ class MjxVectorGraphEnv(gym.Env):
                     dtype=np.float32,
                 ),
             }
-        )
+        if _edge_roles_enabled(cfg):
+            self._edge_role = torch.as_tensor(
+                _semantic_edge_roles(self.mj_model, graph_view="control"),
+                dtype=torch.long,
+            )
+            observation_spaces["edge_role"] = spaces.Box(
+                low=0,
+                high=1,
+                shape=(edge_index.shape[1],),
+                dtype=np.int64,
+            )
+        self.observation_space = spaces.Dict(observation_spaces)
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
@@ -277,7 +290,7 @@ class MjxVectorGraphEnv(gym.Env):
             self.num_envs, node_count, 3
         )
         features = torch.cat((positions, velocities), dim=-1)
-        return [
+        observations = [
             {
                 "x": features[env_idx],
                 "edge_index": self._edge_index,
@@ -286,6 +299,10 @@ class MjxVectorGraphEnv(gym.Env):
             }
             for env_idx in indices
         ]
+        if self._edge_role is not None:
+            for observation in observations:
+                observation["edge_role"] = self._edge_role
+        return observations
 
     def _to_torch(self, value) -> torch.Tensor:
         return torch.utils.dlpack.from_dlpack(value)

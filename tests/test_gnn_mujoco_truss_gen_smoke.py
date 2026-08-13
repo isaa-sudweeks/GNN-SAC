@@ -493,6 +493,32 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_native_graph_features_flow_from_environment_to_policy(self):
+        cfg = graph_test_cfg(
+            graph_features={
+                "node_roles": True,
+                "edge_roles": True,
+                "edge_distance": True,
+            },
+            max_steps=1,
+            episode_length=1,
+            nsubsteps=1,
+        )
+        env = make_env(cfg)
+        try:
+            obs = env.reset()
+            self.assertEqual(obs.x.shape[1], 6)
+            self.assertEqual(obs.edge_role.shape, (obs.edge_index.shape[1],))
+            self.assertEqual(cfg.effective_node_feature_dim, 10)
+            self.assertEqual(cfg.edge_feature_dim, 4)
+
+            agent = GNNSAC(cfg)
+            action = agent.act(obs, eval_mode=True)
+            self.assertEqual(action.shape, (obs.num_nodes, 1))
+            self.assertTrue(torch.isfinite(action).all())
+        finally:
+            env.close()
+
     def test_graph_env_scale_changes_generated_robot_size(self):
         base_env = make_env(
             graph_test_cfg(
@@ -765,6 +791,26 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             results = env.step_many(actions, env_indices=[0, 1])
             self.assertEqual([result[0].num_nodes for result in results], control_node_counts)
             self.assertEqual([result[3]["task"] for result in results], cfg.tasks)
+        finally:
+            env.close()
+
+    def test_graph_topology_list_allows_variable_edge_role_spaces(self):
+        cfg = graph_test_cfg(
+            task="truss-graph",
+            truss_topologies=["tetrahedron", "octahedron", "henneberg_n6_1tube_2"],
+            multitask=False,
+            num_envs=1,
+            max_steps=2,
+            nsubsteps=1,
+            domain_randomization=False,
+            graph_features={"edge_roles": True},
+        )
+        env = make_env(cfg)
+        try:
+            observations = env.reset_many(env_indices=[0, 1, 2])
+            self.assertEqual([obs.num_nodes for obs in observations], [8, 12, 13])
+            for obs in observations:
+                self.assertEqual(obs.edge_role.shape, (obs.edge_index.shape[1],))
         finally:
             env.close()
 

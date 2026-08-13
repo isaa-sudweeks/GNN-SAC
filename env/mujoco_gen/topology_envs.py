@@ -14,6 +14,7 @@ from mujoco_truss_gen import (
     TrussPhysicalParameters,
     TrussEnvConfig,
     get_edge_index,
+    get_edge_types,
     get_mujoco_spec,
     get_node_features,
 )
@@ -30,6 +31,21 @@ def _cfg_get(config, name, default=None):
     if hasattr(config, "get"):
         return config.get(name, default)
     return getattr(config, name, default)
+
+
+def _edge_roles_enabled(config) -> bool:
+    features = _cfg_get(config, "graph_features", {})
+    return bool(_cfg_get(features, "edge_roles", False))
+
+
+def _semantic_edge_roles(source, *, graph_view: str) -> np.ndarray:
+    """Map upstream edge labels to tube=0 and connector=1."""
+    upstream_roles = get_edge_types(source, graph_view=graph_view)
+    role_map = {"actuated": 0, "structural": 0, "connector": 1}
+    try:
+        return np.asarray([role_map[str(role)] for role in upstream_roles], dtype=np.int64)
+    except KeyError as exc:
+        raise ValueError(f"Unsupported mujoco-truss-gen edge type: {exc.args[0]!r}") from exc
 
 
 _MISSING = object()
@@ -466,8 +482,7 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
 
     def _define_observation_space(self):
         edge_index = get_edge_index(self.mj_model, graph_view=self._graph_view())
-        self.observation_space = spaces.Dict(
-            {
+        observation_spaces = {
                 "x": spaces.Box(
                     low=-np.inf,
                     high=np.inf,
@@ -488,7 +503,14 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
                     dtype=np.float32,
                 ),
             }
-        )
+        if _edge_roles_enabled(self.source_config):
+            observation_spaces["edge_role"] = spaces.Box(
+                low=0,
+                high=1,
+                shape=(edge_index.shape[1],),
+                dtype=np.int64,
+            )
+        self.observation_space = spaces.Dict(observation_spaces)
 
     def _policy_action_mask(self):
         if self._use_control_graph():
@@ -530,7 +552,7 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         else:
             vel_norm = features[:, 3:]
 
-        return {
+        observation = {
             "x": np.concatenate([pos_rel, vel_norm], axis=1).astype(np.float32),
             "edge_index": edge_index,
             "action_mask": self._policy_action_mask(),
@@ -538,6 +560,11 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
                 [self._current_observation_rigidity()], dtype=np.float32
             ),
         }
+        if _edge_roles_enabled(self.source_config):
+            observation["edge_role"] = _semantic_edge_roles(
+                self.mj_model, graph_view=graph_view
+            )
+        return observation
 
     def step(self, action):
         action = np.asarray(action, dtype=np.float32)
