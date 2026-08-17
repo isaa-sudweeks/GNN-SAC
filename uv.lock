@@ -701,7 +701,7 @@ requires-dist = [
     { name = "jax", extras = ["cuda13"], marker = "sys_platform == 'linux'", specifier = ">=0.11.0" },
     { name = "mujoco" },
     { name = "mujoco-mjx" },
-    { name = "mujoco-truss-gen", specifier = ">=0.12.0" },
+    { name = "mujoco-truss-gen", specifier = ">=0.12.2" },
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "optuna" },
@@ -1142,7 +1142,7 @@ wheels = [
 
 [[package]]
 name = "mujoco-truss-gen"
-version = "0.12.0"
+version = "0.12.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gymnasium" },
@@ -1152,9 +1152,9 @@ dependencies = [
     { name = "numpy" },
     { name = "scipy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/33/28/1d7d38eb64037df75baf2ad1b0cd8b4dfebc38b798c62547e8e17ebdd6c0/mujoco_truss_gen-0.12.0.tar.gz", hash = "sha256:830a734887c58836d103a8d3f20df284cccfc74aa5120cd7a92608b3be95330f", size = 128875, upload-time = "2026-08-05T20:33:25.405Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2c/92/9f89ed1727aee1c2853b9ea8353803eba23bc6a1f502146b7a443535538e/mujoco_truss_gen-0.12.2.tar.gz", hash = "sha256:80a9e027e01326a330d478a98ea7b0cf1d7a983bd110e64fec49e83d3373ca99", size = 131945, upload-time = "2026-08-17T18:45:17.157Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/14/e0/d20b179b6f7a9298bdb8289697ab6ddcac39cf5fbfce100000b8318d91ba/mujoco_truss_gen-0.12.0-py3-none-any.whl", hash = "sha256:8410f631cf7fecf74095323a8560d2cf0a4ab906dbcfb3131618ce809fec3356", size = 103456, upload-time = "2026-08-05T20:33:24.002Z" },
+    { url = "https://files.pythonhosted.org/packages/3e/21/5771b344ca80be0bd354544b08969f3383a7aaa022d73658445962f9c35e/mujoco_truss_gen-0.12.2-py3-none-any.whl", hash = "sha256:303a075b3332be9d85df8b3525b4f0a18bdb7c367720d96b710cd4011d700ee5", size = 104394, upload-time = "2026-08-17T18:45:15.915Z" },
 ]
 
 [[package]]
