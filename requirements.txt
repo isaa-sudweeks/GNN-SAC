@@ -11,6 +11,9 @@ jax>=0.11.0; sys_platform != "linux"
 omegaconf
 termcolor
 optuna
+pandas
+plotly
+kaleido
 wandb[media]
 mujoco-truss-gen>=0.12.2
 torch_geometric
