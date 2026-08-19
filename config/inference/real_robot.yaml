@@ -1,0 +1,33 @@
+# @package _global_
+
+defaults:
+  - /config
+  - override /sac_backend: gnn
+  - _self_
+
+model: ???
+model_file: null
+serial_map_file: ???
+tracker_assignment: automatic # automatic or manual
+tracker_layout_file: null # Required for manual mode; optional coordinate calibration for automatic mode.
+control_frequency_hz: 10.0
+control_steps: null
+velocity_filter_alpha: 1.0
+deterministic: true
+
+# Current MuJoCo graph observations center x/y but preserve absolute z above ground.
+# Use [true, true, true] only for a checkpoint trained with fully COM-relative xyz.
+com_relative_axes: [true, true, false]
+
+# Must match the observation preprocessing and graph architecture used in training.
+normalize_observations: true
+domain_randomization: false
+
+# Can instead be placed in tracker_layout_file. Identity assumes SteamVR is already
+# calibrated to the policy's MuJoCo axes.
+steamvr_to_policy_matrix: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+
+enable_wandb: false
+save_agent: false
+save_csv: false
+save_video: false
