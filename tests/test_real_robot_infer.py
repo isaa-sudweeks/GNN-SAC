@@ -48,6 +48,18 @@ class RealRobotObservationTest(unittest.TestCase):
         np.testing.assert_array_equal(self.layout.action_mask, [True, False, True])
         np.testing.assert_array_equal(self.layout.edge_role, [0, 0, 1, 1])
 
+    def test_coordinate_matrix_swaps_steamvr_y_and_z_for_policy(self):
+        self.layout.steamvr_to_policy_matrix = np.asarray(
+            [[1, 0, 0], [0, 0, 1], [0, 1, 0]], dtype=float
+        )
+        positions = self.layout.ordered_positions(
+            {"S0": [1, 2, 3], "S1": [4, 5, 6], "S2": [7, 8, 9]}
+        )
+        np.testing.assert_array_equal(
+            positions,
+            [[1, 3, 2], [4, 6, 5], [7, 9, 8]],
+        )
+
     def test_builds_com_relative_normalized_position_and_velocity(self):
         builder = RealRobotObservationBuilder(self.layout, True, 1.0, (True, True, True))
         initial = np.asarray([[0, 0, 0], [1, 2, 3], [2, 4, 6]], dtype=float)

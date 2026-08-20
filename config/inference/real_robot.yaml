@@ -31,9 +31,9 @@ com_relative_axes: [true, true, false]
 normalize_observations: true
 domain_randomization: false
 
-# Can instead be placed in tracker_layout_file. Identity assumes SteamVR is already
-# calibrated to the policy's MuJoCo axes.
-steamvr_to_policy_matrix: [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+# Can instead be placed in tracker_layout_file. SteamVR and the policy use
+# opposite y/z axis conventions: policy (x, y, z) = SteamVR (x, z, y).
+steamvr_to_policy_matrix: [[1, 0, 0], [0, 0, 1], [0, 1, 0]]
 
 enable_wandb: false
 save_agent: false
