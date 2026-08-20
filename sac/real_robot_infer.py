@@ -37,6 +37,71 @@ class MissingTrackerFrame(RuntimeError):
     """A transient frame that does not contain every configured tracker."""
 
 
+class SerialVelocityCommandFormatter:
+    """Format commands accepted by the TrussRobotFirmware USB transmitter."""
+
+    def __init__(
+        self,
+        graph_node_names,
+        action_mask=None,
+        serial_node_order=None,
+        *,
+        max_velocity_ticks_per_second: int,
+        duration_seconds: float,
+    ):
+        self.graph_node_names = tuple(str(name) for name in graph_node_names)
+        if action_mask is None:
+            action_mask = np.ones(len(self.graph_node_names), dtype=bool)
+        action_mask = np.asarray(action_mask, dtype=bool)
+        if action_mask.shape != (len(self.graph_node_names),):
+            raise ValueError("action_mask must contain one entry per preset graph node")
+        self.command_node_names = tuple(
+            name for name, active in zip(self.graph_node_names, action_mask) if active
+        )
+        self.serial_node_order = (
+            self.command_node_names
+            if serial_node_order is None
+            else tuple(str(name) for name in serial_node_order)
+        )
+        if (
+            len(self.serial_node_order) != len(self.command_node_names)
+            or set(self.serial_node_order) != set(self.command_node_names)
+        ):
+            raise ValueError(
+                "serial_node_order must contain every actuated preset node exactly once"
+            )
+        self._graph_index = {
+            name: index for index, name in enumerate(self.graph_node_names)
+        }
+        self.max_velocity_ticks_per_second = int(max_velocity_ticks_per_second)
+        self.duration_seconds = float(duration_seconds)
+        if self.max_velocity_ticks_per_second <= 0:
+            raise ValueError("serial_max_velocity_ticks_per_second must be positive")
+        if not np.isfinite(self.duration_seconds) or self.duration_seconds <= 0.0:
+            raise ValueError("serial_command_duration_s must be positive and finite")
+
+    def velocity_command(self, normalized_node_velocity: np.ndarray) -> str:
+        normalized = np.asarray(normalized_node_velocity, dtype=np.float64)
+        if normalized.shape == (len(self.graph_node_names), 1):
+            normalized = normalized[:, 0]
+        if normalized.shape != (len(self.graph_node_names),):
+            raise ValueError(
+                "Serial firmware supports one scalar velocity per graph node; "
+                f"received shape {normalized.shape}"
+            )
+        if not np.isfinite(normalized).all():
+            raise ValueError("Serial velocity commands must be finite")
+        limit = self.max_velocity_ticks_per_second
+        ticks = np.rint(np.clip(normalized, -1.0, 1.0) * limit).astype(np.int64)
+        ordered = [int(ticks[self._graph_index[name]]) for name in self.serial_node_order]
+        duration = f"{self.duration_seconds:g}"
+        return f"VEL_DUR:{','.join(str(value) for value in ordered)}:{duration}"
+
+    def emergency_stop_command(self) -> str:
+        zeros = ",".join("0" for _ in self.serial_node_order)
+        return f"VEL_DUR:{zeros}:0"
+
+
 def _critical_rigidity(positions: np.ndarray, edge_index: np.ndarray) -> float:
     """Return the first mode after the six free-body modes of R^T R."""
     node_count = positions.shape[0]
@@ -416,6 +481,36 @@ class RealRobotObservationBuilder:
         return graph
 
 
+def _run_print_only_control_loop(cfg, source, layout, builder, agent, formatter) -> None:
+    frequency_hz = float(cfg.control_frequency_hz)
+    if not np.isfinite(frequency_hz) or frequency_hz <= 0.0:
+        raise ValueError("control_frequency_hz must be positive and finite")
+    period = 1.0 / frequency_hz
+    next_tick = time.monotonic()
+    step = 0
+    try:
+        while cfg.control_steps is None or step < int(cfg.control_steps):
+            now = time.monotonic()
+            try:
+                positions = layout.ordered_positions(source.positions_by_serial())
+                observation = builder.build(positions, now)
+                action = agent.act(
+                    observation,
+                    t0=step == 0,
+                    eval_mode=bool(cfg.deterministic),
+                )
+                normalized_node_velocity = action.detach().cpu().numpy()
+                print(formatter.velocity_command(normalized_node_velocity), flush=True)
+                step += 1
+            except MissingTrackerFrame as exc:
+                print(f"tracker frame skipped: {exc}", file=sys.stderr, flush=True)
+            next_tick += period
+            time.sleep(max(0.0, next_tick - time.monotonic()))
+    except KeyboardInterrupt:
+        print(formatter.emergency_stop_command(), flush=True)
+        print("Emergency stop command printed after Ctrl-C.", file=sys.stderr, flush=True)
+
+
 def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
     with open_dict(cfg):
         cfg.enable_wandb = False
@@ -444,38 +539,25 @@ def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
             f"Configuration expects {cfg.num_policy_actions} policy actions but the tracker "
             f"layout marks {expected_actions} nodes as actuated."
         )
+    configured_order = getattr(cfg, "serial_node_order", None)
+    if configured_order is None or (
+        isinstance(configured_order, str) and configured_order in ("", "null")
+    ):
+        configured_order = None
+    formatter = SerialVelocityCommandFormatter(
+        layout.node_names,
+        layout.action_mask,
+        configured_order,
+        max_velocity_ticks_per_second=int(cfg.serial_max_velocity_ticks_per_second),
+        duration_seconds=float(cfg.serial_command_duration_s),
+    )
     checkpoint = resolve_checkpoint(str(cfg.model), cfg)
     agent = GNNSAC(cfg)
     load_agent_checkpoint(agent, checkpoint)
     agent.model.eval()
     source = source or SteamVRTrackerSource()
-    frequency_hz = float(cfg.control_frequency_hz)
-    if not np.isfinite(frequency_hz) or frequency_hz <= 0.0:
-        raise ValueError("control_frequency_hz must be positive and finite")
-    period = 1.0 / frequency_hz
-    next_tick = time.monotonic()
-    step = 0
     try:
-        while cfg.control_steps is None or step < int(cfg.control_steps):
-            now = time.monotonic()
-            try:
-                positions = layout.ordered_positions(source.positions_by_serial())
-                observation = builder.build(positions, now)
-                action = agent.act(observation, t0=step == 0, eval_mode=bool(cfg.deterministic))
-                command = action.detach().cpu().numpy() * float(cfg.speed)
-                print(json.dumps({
-                    "step": step,
-                    "timestamp": now,
-                    "velocity_command_by_node": {
-                        name: np.asarray(value).reshape(-1).astype(float).tolist()
-                        for name, value in zip(layout.node_names, command)
-                    },
-                }), flush=True)
-                step += 1
-            except MissingTrackerFrame as exc:
-                print(f"tracker frame skipped: {exc}", file=sys.stderr, flush=True)
-            next_tick += period
-            time.sleep(max(0.0, next_tick - time.monotonic()))
+        _run_print_only_control_loop(cfg, source, layout, builder, agent, formatter)
     finally:
         source.close()
 

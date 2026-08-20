@@ -1,7 +1,10 @@
 import json
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 import numpy as np
@@ -12,7 +15,12 @@ for path in (ROOT, SAC_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from real_robot_infer import RealRobotObservationBuilder, TrackerLayout
+from real_robot_infer import (
+    RealRobotObservationBuilder,
+    SerialVelocityCommandFormatter,
+    TrackerLayout,
+    _run_print_only_control_loop,
+)
 from tests.test_gnn_mujoco_truss_gen_smoke import graph_test_cfg
 
 
@@ -98,6 +106,69 @@ class RealRobotObservationTest(unittest.TestCase):
         self.assertEqual(preset.edge_index.shape[0], 2)
         self.assertEqual(preset.edge_role.shape[0], preset.edge_index.shape[1])
         self.assertEqual(preset.action_mask.shape, (len(preset.node_names),))
+
+
+class SerialVelocityCommandFormatterTest(unittest.TestCase):
+    def test_formats_firmware_velocity_command_in_transmitter_order(self):
+        formatter = SerialVelocityCommandFormatter(
+            ("n0", "n1", "n2"),
+            None,
+            ("n2", "n0", "n1"),
+            max_velocity_ticks_per_second=1800,
+            duration_seconds=0.2,
+        )
+        command = formatter.velocity_command(np.asarray([[0.25], [-0.5], [2.0]]))
+        self.assertEqual(command, "VEL_DUR:1800,450,-900:0.2")
+
+    def test_emergency_stop_has_zero_for_every_transmitter_channel(self):
+        formatter = SerialVelocityCommandFormatter(
+            ("n0", "n1", "n2", "n3"),
+            max_velocity_ticks_per_second=1800,
+            duration_seconds=0.2,
+        )
+        self.assertEqual(formatter.emergency_stop_command(), "VEL_DUR:0,0,0,0:0")
+
+    def test_ctrl_c_prints_emergency_stop(self):
+        class InterruptedSource:
+            def positions_by_serial(self):
+                raise KeyboardInterrupt
+
+        formatter = SerialVelocityCommandFormatter(
+            ("n0", "n1", "n2"),
+            max_velocity_ticks_per_second=1800,
+            duration_seconds=0.2,
+        )
+        cfg = SimpleNamespace(
+            control_frequency_hz=10.0,
+            control_steps=None,
+            deterministic=True,
+            speed=0.05,
+        )
+        stdout, stderr = StringIO(), StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            _run_print_only_control_loop(
+                cfg,
+                InterruptedSource(),
+                layout=SimpleNamespace(ordered_positions=lambda positions: positions),
+                builder=None,
+                agent=None,
+                formatter=formatter,
+            )
+        self.assertEqual(stdout.getvalue().strip(), "VEL_DUR:0,0,0:0")
+        self.assertIn("Emergency stop", stderr.getvalue())
+
+    def test_passive_graph_nodes_are_omitted_from_transmitter_fields(self):
+        formatter = SerialVelocityCommandFormatter(
+            ("n0", "passive", "n2"),
+            (True, False, True),
+            max_velocity_ticks_per_second=1800,
+            duration_seconds=0.2,
+        )
+        self.assertEqual(
+            formatter.velocity_command(np.asarray([0.5, 0.0, -0.25])),
+            "VEL_DUR:900,-450:0.2",
+        )
+        self.assertEqual(formatter.emergency_stop_command(), "VEL_DUR:0,0:0")
 
 
 if __name__ == "__main__":

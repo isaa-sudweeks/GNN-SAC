@@ -15,6 +15,14 @@ control_steps: null
 velocity_filter_alpha: 1.0
 deterministic: true
 
+# Print-only USB transmitter settings. Future serial I/O should append "\n" and
+# write these same commands at 115200 baud.
+serial_port: null
+serial_baud_rate: 115200
+serial_node_order: null # null uses actuated nodes in mujoco-truss-gen graph order.
+serial_max_velocity_ticks_per_second: 1800
+serial_command_duration_s: 0.2
+
 # Current MuJoCo graph observations center x/y but preserve absolute z above ground.
 # Use [true, true, true] only for a checkpoint trained with fully COM-relative xyz.
 com_relative_axes: [true, true, false]

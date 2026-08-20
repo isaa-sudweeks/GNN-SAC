@@ -54,4 +54,16 @@ python sac/real_robot_infer.py \
 
 Install the optional SteamVR binding (`pip install openvr`) and start SteamVR before either command. The configuration must match training, especially the topology, scale, realism/control-graph settings, normalization, and graph features. The current simulation observation centers x/y and retains absolute z, so `com_relative_axes` defaults to `[true, true, false]`; set all three true only when that matches training. The first velocity observation is zero; subsequent velocities use elapsed monotonic time. Set `velocity_filter_alpha` below 1 for exponential smoothing.
 
+## Transmitter command output and emergency stop
+
+Each control cycle prints the exact newline-delimited command expected by the Arduino USB transmitter:
+
+```text
+VEL_DUR:0,500,-300:0.2
+```
+
+Each normalized policy action is clipped to `[-1, 1]`, multiplied directly by the firmware limit of 1800 ticks/second, and rounded to an integer. The simulation-side `speed` conversion is not applied to serial commands. Passive tracked nodes remain policy context but are omitted from the transmitter fields. `serial_node_order` controls the transmitter channel order; when null, it uses the actuated nodes in preset graph order. Set it explicitly when firmware receiver-address order differs from the preset.
+
+Pressing `Ctrl-C` prints one immediate zero-duration velocity command containing a zero for every configured transmitter channel, for example `VEL_DUR:0,0,0:0`, before the tracker source closes. Serial I/O is intentionally not implemented yet; the future writer should send the printed command plus `\n` at `serial_baud_rate` (115200 by default).
+
 For `use_virtual_node=true`, the wrapper computes the first non-rigid eigenvalue from the configured bar graph and normalizes it by the first frame, matching the policy's rigidity input contract. This is valid only when the configured nodes and edges describe the tracked physical framework; a reduced tracker set cannot reproduce full-robot rigidity.
