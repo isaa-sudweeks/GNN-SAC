@@ -109,25 +109,29 @@ When the physical layout is not a registered `mujoco-truss-gen` preset, define t
       "name": "triangle_1",
       "nodes": ["node_1", "node_2", "node_4"],
       "passive_node": "node_1",
-      "trackers": {"node_1": "B11", "node_2": "B12"}
+      "trackers": {"node_1": "B11", "node_2": "B12"},
+      "rollers": {"node_2": "02", "node_4": "04"}
     },
     {
       "name": "triangle_2",
       "nodes": ["node_1", "node_5", "node_3"],
       "passive_node": "node_1",
-      "trackers": {"node_3": "B13", "node_5": "B15"}
+      "trackers": {"node_3": "B13", "node_5": "B15"},
+      "rollers": {"node_5": "06", "node_3": "07"}
     },
     {
       "name": "triangle_3",
       "nodes": ["node_3", "node_6", "node_2"],
       "passive_node": "node_6",
-      "trackers": {"node_6": "B16"}
+      "trackers": {"node_6": "B16"},
+      "rollers": {"node_3": "08", "node_2": "10"}
     },
     {
       "name": "triangle_4",
       "nodes": ["node_4", "node_6", "node_5"],
       "passive_node": "node_6",
-      "trackers": {"node_4": "B14"}
+      "trackers": {"node_4": "B14"},
+      "rollers": {"node_4": "11", "node_5": "12"}
     }
   ],
   "tracker_calibration": {
@@ -146,6 +150,8 @@ When the physical layout is not a registered `mujoco-truss-gen` preset, define t
 ```
 
 The `trackers` object maps the logical node carrying a physical puck to that puck's stable ID from `serial_to_tracker_id`. Two entries on one triangle mean two physical pucks contribute independent estimates of the same rigid triangle plane. If the serial map uses logical node names as its tracker IDs, the shorter `"tracker_nodes": ["node_1", "node_2"]` form is equivalent. A single `"tracker": "node_1"` is also accepted. `tracker_calibration` is optional and defaults to local normal `[0,0,1]` with zero offset; add one entry per puck when its mount differs.
+
+The `rollers` object maps each actuated node occurrence on that triangle to its physical roller number. Store numbers as decimal strings so identifiers such as `"02"` retain their leading zero. A triangle's passive node is omitted because it is masked. Once any `rollers` object is present, every actuated occurrence across the definition must have one, and roller numbers must be unique. The generated transmitter command order is ascending numeric roller number. Because the mapping is triangle-local, two copies of the same logical node may use different roller numbers.
 
 The generator intentionally matches `mujoco-truss-gen`:
 
@@ -201,7 +207,7 @@ Each control cycle prints the exact newline-delimited command expected by the Ar
 VEL_DUR:0,500,-300:0.2
 ```
 
-Each normalized policy action is clipped to `[-1, 1]`, multiplied directly by the firmware limit of 1800 ticks/second, and rounded to an integer. The simulation-side `speed` conversion is not applied to serial commands. Passive tracked nodes remain policy context but are omitted from the transmitter fields. `serial_node_order` controls the transmitter channel order; when null, it uses the actuated nodes in generated graph order. Set it explicitly when firmware receiver-address order differs from that order.
+Each normalized policy action is clipped to `[-1, 1]`, multiplied directly by the firmware limit of 1800 ticks/second, and rounded to an integer. The simulation-side `speed` conversion is not applied to serial commands. Passive tracked nodes remain policy context but are omitted from the transmitter fields. `serial_node_order` controls the transmitter channel order. When it is null, a triangle graph uses ascending `rollers` order; definitions without roller metadata and presets use actuated graph order. An explicit `serial_node_order` override still takes precedence.
 
 Pressing `Ctrl-C` prints one immediate zero-duration velocity command containing a zero for every configured transmitter channel, for example `VEL_DUR:0,0,0:0`, before the tracker source closes. Serial I/O is intentionally not implemented yet; the future writer should send the printed command plus `\n` at `serial_baud_rate` (115200 by default).
 

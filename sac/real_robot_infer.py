@@ -221,6 +221,7 @@ class TrackerLayout:
     assignment_mode: str = "manual"
     tracker_mounts: dict[str, TrackerMount] | None = None
     plane_parallel_tolerance: float = 1e-6
+    serial_node_order: tuple[str, ...] | None = None
 
     @staticmethod
     def _expand_triangle_definition(layout: Mapping[str, object]) -> dict:
@@ -239,6 +240,9 @@ class TrackerLayout:
 
         triangle_nodes: dict[str, tuple[str, str, str]] = {}
         passive_nodes: dict[str, str] = {}
+        roller_by_occurrence: dict[tuple[str, str], tuple[int, str]] = {}
+        triangles_with_rollers = set()
+        roller_numbers = set()
         tracker_assignments: list[tuple[str, str, str]] = []
         tracker_ids = set()
         tracked_nodes = set()
@@ -270,6 +274,40 @@ class TrackerLayout:
                 )
             triangle_nodes[name] = nodes
             passive_nodes[name] = passive_node
+
+            raw_rollers = raw_triangle.get("rollers")
+            if raw_rollers is not None:
+                triangles_with_rollers.add(name)
+                if not isinstance(raw_rollers, dict):
+                    raise ValueError(f"Triangle {name!r} rollers must be a node-to-roller object")
+                unknown_roller_nodes = set(str(node) for node in raw_rollers) - set(nodes)
+                if unknown_roller_nodes:
+                    raise ValueError(
+                        f"Triangle {name!r} rollers contains nodes outside the triangle: "
+                        f"{sorted(unknown_roller_nodes)}"
+                    )
+                if passive_node in {str(node) for node in raw_rollers}:
+                    raise ValueError(
+                        f"Triangle {name!r} passive node {passive_node!r} must not have a roller"
+                    )
+                for raw_node, raw_roller in raw_rollers.items():
+                    logical_node = str(raw_node)
+                    roller_id = str(raw_roller)
+                    if not roller_id.isdecimal():
+                        raise ValueError(
+                            f"Triangle {name!r} roller for {logical_node!r} must be a "
+                            "decimal identifier such as \"02\""
+                        )
+                    roller_number = int(roller_id)
+                    if roller_number in roller_numbers:
+                        raise ValueError(
+                            f"Roller numbers must be unique; duplicate: {roller_id!r}"
+                        )
+                    roller_numbers.add(roller_number)
+                    roller_by_occurrence[(name, logical_node)] = (
+                        roller_number,
+                        roller_id,
+                    )
 
             raw_trackers = raw_triangle.get(
                 "trackers",
@@ -318,6 +356,23 @@ class TrackerLayout:
                 tracked_nodes.add(logical_node)
                 tracker_assignments.append((tracker_id, logical_node, name))
 
+        if triangles_with_rollers:
+            expected_roller_occurrences = {
+                (triangle_name, logical_node)
+                for triangle_name, nodes in triangle_nodes.items()
+                for logical_node in nodes
+                if logical_node != passive_nodes[triangle_name]
+            }
+            missing_rollers = expected_roller_occurrences - set(roller_by_occurrence)
+            if missing_rollers:
+                details = [
+                    f"{triangle}.{node}" for triangle, node in sorted(missing_rollers)
+                ]
+                raise ValueError(
+                    "When rollers are configured, every actuated triangle node needs a "
+                    f"roller number; missing: {details}"
+                )
+
         node_incidence: dict[str, list[str]] = {}
         for triangle_name, nodes in triangle_nodes.items():
             for logical_node in nodes:
@@ -357,6 +412,7 @@ class TrackerLayout:
             )
 
         control_node_names = []
+        control_node_by_occurrence: dict[tuple[str, str], str] = {}
         control_triangles: dict[str, list[str]] = {}
         control_by_logical: dict[str, list[str]] = {}
         owned_nodes = set()
@@ -371,6 +427,7 @@ class TrackerLayout:
                 owned_nodes.add(logical_node)
                 control_node_names.append(control_node)
                 control_nodes.append(control_node)
+                control_node_by_occurrence[(triangle_name, logical_node)] = control_node
                 control_by_logical.setdefault(logical_node, []).append(control_node)
             control_triangles[triangle_name] = control_nodes
 
@@ -411,6 +468,14 @@ class TrackerLayout:
             }
 
         expanded = dict(layout)
+        serial_node_order = None
+        if roller_by_occurrence:
+            serial_node_order = [
+                control_node_by_occurrence[occurrence]
+                for occurrence, _ in sorted(
+                    roller_by_occurrence.items(), key=lambda item: item[1][0]
+                )
+            ]
         expanded.update(
             tracker_assignment="triangle_planes",
             node_names=control_node_names,
@@ -420,6 +485,8 @@ class TrackerLayout:
             edges=edges,
             tracker_mounts=tracker_mounts,
         )
+        if serial_node_order is not None:
+            expanded["serial_node_order"] = serial_node_order
         return expanded
 
     @classmethod
@@ -461,6 +528,19 @@ class TrackerLayout:
         actuated = set(str(value) for value in layout.get("actuated_nodes", node_names))
         if not actuated <= set(node_names):
             raise ValueError(f"actuated_nodes contains unknown nodes: {sorted(actuated - set(node_names))}")
+        raw_serial_node_order = layout.get("serial_node_order")
+        serial_node_order = (
+            None
+            if raw_serial_node_order is None
+            else tuple(str(value) for value in raw_serial_node_order)
+        )
+        if serial_node_order is not None and (
+            len(serial_node_order) != len(actuated)
+            or set(serial_node_order) != actuated
+        ):
+            raise ValueError(
+                "serial_node_order must contain every actuated graph node exactly once"
+            )
         edge_role = np.asarray(directed_roles, dtype=np.int64) if directed_roles else None
         if edge_role is not None and edge_role.size != edge_index.shape[1]:
             raise ValueError("Either all edges or no edges must specify a role")
@@ -486,6 +566,7 @@ class TrackerLayout:
             assignment_mode=assignment_mode,
             tracker_mounts=tracker_mounts,
             plane_parallel_tolerance=plane_parallel_tolerance,
+            serial_node_order=serial_node_order,
         )
         result._validate_tracker_map()
         return result
@@ -1073,6 +1154,8 @@ def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
         isinstance(configured_order, str) and configured_order in ("", "null")
     ):
         configured_order = None
+    if configured_order is None:
+        configured_order = layout.serial_node_order
     formatter = SerialVelocityCommandFormatter(
         layout.node_names,
         layout.action_mask,

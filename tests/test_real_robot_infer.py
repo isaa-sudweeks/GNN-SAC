@@ -105,24 +105,28 @@ class RealRobotObservationTest(unittest.TestCase):
                     "nodes": ["node_1", "node_2", "node_4"],
                     "passive_node": "node_1",
                     "trackers": {"node_1": "B11", "node_2": "B12"},
+                    "rollers": {"node_2": "04", "node_4": "02"},
                 },
                 {
                     "name": "triangle_2",
                     "nodes": ["node_1", "node_5", "node_3"],
                     "passive_node": "node_1",
                     "trackers": {"node_3": "B13", "node_5": "B15"},
+                    "rollers": {"node_5": "08", "node_3": "07"},
                 },
                 {
                     "name": "triangle_3",
                     "nodes": ["node_3", "node_6", "node_2"],
                     "passive_node": "node_6",
                     "trackers": {"node_6": "B16"},
+                    "rollers": {"node_3": "06", "node_2": "05"},
                 },
                 {
                     "name": "triangle_4",
                     "nodes": ["node_4", "node_6", "node_5"],
                     "passive_node": "node_6",
                     "trackers": {"node_4": "B14"},
+                    "rollers": {"node_4": "03", "node_5": "01"},
                 },
             ]
         }))
@@ -148,6 +152,46 @@ class RealRobotObservationTest(unittest.TestCase):
             ("triangle_1", "triangle_4"),
         )
         self.assertEqual(layout.tracker_mounts["B14"].abstract_node, "node_4")
+        self.assertEqual(layout.serial_node_order, (
+            "node_5_tri_triangle_4", "node_4", "node_4_tri_triangle_4", "node_2",
+            "node_2_tri_triangle_3", "node_3_tri_triangle_3", "node_3", "node_5",
+        ))
+        formatter = SerialVelocityCommandFormatter(
+            layout.node_names,
+            layout.action_mask,
+            layout.serial_node_order,
+            max_velocity_ticks_per_second=100,
+            duration_seconds=0.2,
+        )
+        normalized = np.arange(len(layout.node_names), dtype=float) / 20.0
+        self.assertEqual(
+            formatter.velocity_command(normalized),
+            "VEL_DUR:55,10,45,5,40,30,25,20:0.2",
+        )
+
+    def test_triangle_rollers_require_every_actuated_occurrence(self):
+        with self.assertRaisesRegex(ValueError, "every actuated triangle node"):
+            TrackerLayout._expand_triangle_definition({
+                "triangles": [{
+                    "name": "triangle_1",
+                    "nodes": ["node_1", "node_2", "node_3"],
+                    "passive_node": "node_2",
+                    "trackers": {},
+                    "rollers": {"node_1": "02"},
+                }]
+            })
+
+    def test_triangle_rollers_reject_duplicate_numeric_ids(self):
+        with self.assertRaisesRegex(ValueError, "Roller numbers must be unique"):
+            TrackerLayout._expand_triangle_definition({
+                "triangles": [{
+                    "name": "triangle_1",
+                    "nodes": ["node_1", "node_2", "node_3"],
+                    "passive_node": "node_2",
+                    "trackers": {},
+                    "rollers": {"node_1": "02", "node_3": "2"},
+                }]
+            })
 
     def test_multiple_trackers_on_one_triangle_fuse_their_plane_estimates(self):
         rotation_local_z_to_x = np.asarray(
