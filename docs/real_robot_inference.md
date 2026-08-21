@@ -52,7 +52,7 @@ python sac/real_robot_infer.py \
   control_frequency_hz=10
 ```
 
-Install the optional SteamVR binding (`pip install openvr`) and start SteamVR before either command. The configuration must match training, especially the topology, scale, realism/control-graph settings, normalization, and graph features. The current simulation observation centers x/y and retains absolute z, so `com_relative_axes` defaults to `[true, true, false]`; set all three true only when that matches training. The first velocity observation is zero; subsequent velocities use elapsed monotonic time. Set `velocity_filter_alpha` below 1 for exponential smoothing.
+Install the project dependencies, which pin the tested SteamVR binding to `openvr==2.5.102`, and start SteamVR before either command. This OpenVR release still imports `pkg_resources`, so the project also pins `setuptools==81.0.0`, the last compatible major release. For a targeted repair of an existing environment, run `python -m pip install --force-reinstall setuptools==81.0.0 openvr==2.5.102`. The configuration must match training, especially the topology, scale, realism/control-graph settings, normalization, and graph features. The current simulation observation centers x/y and retains absolute z, so `com_relative_axes` defaults to `[true, true, false]`; set all three true only when that matches training. The first velocity observation is zero; subsequent velocities use elapsed monotonic time. Set `velocity_filter_alpha` below 1 for exponential smoothing.
 
 ## Six-tracker triangle-plane reconstruction
 
