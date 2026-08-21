@@ -64,12 +64,15 @@ def run_training(cfg, trial=None):
     print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)
 
     env = make_env(cfg)
+    agent = GNNSAC(cfg)
+    buffer = GNNBuffer(cfg)
+    logger = Logger(cfg)
     trainer = OnlineTrainer(
         cfg = cfg,
         env = env,
-        agent=GNNSAC(cfg),
-        logger=Logger(cfg),
-        buffer=GNNBuffer(cfg),
+        agent=agent,
+        logger=logger,
+        buffer=buffer,
         trial=trial,
     )
 

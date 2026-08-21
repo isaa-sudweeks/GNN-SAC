@@ -281,8 +281,8 @@ class MjxVectorEnvTest(unittest.TestCase):
         finally:
             env.close()
 
-    def test_topology_buckets_require_at_least_one_environment_per_topology(self):
-        with self.assertRaisesRegex(ValueError, "at least one"):
+    def test_topology_buckets_require_positive_num_envs(self):
+        with self.assertRaisesRegex(ValueError, "num_envs must be positive"):
             make_env(
                 mjx_cfg(
                     num_envs=0,
@@ -290,14 +290,22 @@ class MjxVectorEnvTest(unittest.TestCase):
                 )
             )
 
-    def test_topology_buckets_require_even_total_environment_split(self):
-        with self.assertRaisesRegex(ValueError, "divisible"):
-            make_env(
-                mjx_cfg(
-                    num_envs=3,
-                    truss_topologies=["octahedron", "tetrahedron"],
-                )
+    def test_topology_buckets_round_and_persist_total_environment_count(self):
+        cfg = mjx_cfg(
+            num_envs=3,
+            truss_topologies=["octahedron", "tetrahedron"],
+        )
+        with self.assertWarnsRegex(RuntimeWarning, "num_envs=3.*using 4"):
+            env = make_env(cfg)
+        try:
+            self.assertEqual(cfg.num_envs, 4)
+            self.assertEqual(env.num_envs, 4)
+            self.assertEqual(
+                env.env.topology_allocations,
+                {"octahedron": 2, "tetrahedron": 2},
             )
+        finally:
+            env.close()
 
 
 if __name__ == "__main__":
