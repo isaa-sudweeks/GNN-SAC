@@ -1,6 +1,7 @@
 torch>=2.11.0
 tensordict
 numpy
+openvr==2.5.102
 gymnasium[mujoco]
 mujoco
 mujoco-mjx
@@ -14,6 +15,7 @@ optuna
 pandas
 plotly
 kaleido
+setuptools==81.0.0
 wandb[media]
 mujoco-truss-gen>=0.12.2
 torch_geometric

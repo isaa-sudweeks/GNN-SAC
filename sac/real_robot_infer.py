@@ -138,9 +138,11 @@ class SteamVRTrackerSource:
     def __init__(self):
         try:
             import openvr
-        except ImportError as exc:
+        except (ImportError, OSError) as exc:
             raise RuntimeError(
-                "SteamVR input requires the optional 'openvr' package: pip install openvr"
+                "SteamVR input requires openvr==2.5.102 and setuptools==81.0.0; "
+                "install the project dependencies and use a platform supported by "
+                f"the OpenVR native library. Load failure: {exc}"
             ) from exc
         self.openvr = openvr
         openvr.init(openvr.VRApplication_Background)

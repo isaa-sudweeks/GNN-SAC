@@ -63,10 +63,11 @@ The checkpoint and runtime configuration must agree on topology, realism, contro
 - [ ] Check out the intended `sim-to-real` branch and confirm the desired commit.
 - [ ] Create or activate the GNN-SAC Python environment.
 - [ ] Install the project dependencies.
-- [ ] Install the optional OpenVR Python binding in that same environment:
+- [ ] Confirm the tested OpenVR Python binding is installed in that same environment:
 
 ```bash
-python -m pip install openvr
+python -m pip install --force-reinstall setuptools==81.0.0 openvr==2.5.102
+python -m pip show openvr
 ```
 
 - [ ] Start SteamVR.

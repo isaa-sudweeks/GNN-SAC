@@ -706,9 +706,11 @@ dependencies = [
     { name = "mujoco-truss-gen" },
     { name = "numpy" },
     { name = "omegaconf" },
+    { name = "openvr" },
     { name = "optuna" },
     { name = "pandas" },
     { name = "plotly" },
+    { name = "setuptools" },
     { name = "tensordict" },
     { name = "termcolor" },
     { name = "torch", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux'" },
@@ -730,9 +732,11 @@ requires-dist = [
     { name = "mujoco-truss-gen", specifier = ">=0.12.2" },
     { name = "numpy" },
     { name = "omegaconf" },
+    { name = "openvr", specifier = "==2.5.102" },
     { name = "optuna" },
     { name = "pandas" },
     { name = "plotly" },
+    { name = "setuptools", specifier = "==81.0.0" },
     { name = "tensordict" },
     { name = "termcolor" },
     { name = "torch", marker = "sys_platform != 'linux'", specifier = ">=2.11.0" },
@@ -1575,6 +1579,15 @@ wheels = [
 ]
 
 [[package]]
+name = "openvr"
+version = "2.5.102"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/62/dd/cce68ef7aef4923eef7d25779319d6bb334bfa80e35a4223b5cc20a41cfa/openvr-2.5.102.tar.gz", hash = "sha256:50419862bb45174dc209847e46024d6e0753710d8cfad542dea21eef0d3df363", size = 1957776, upload-time = "2025-03-21T18:00:39.608Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/76/49/103b27eacb297bb3c79142c9a597df130353ad803453f7785be3e38acc6a/openvr-2.5.102-py3-none-any.whl", hash = "sha256:fca9f39de7ddcd579cfa8431384e8c4d949d2782027bb0c513a1627240b1bb38", size = 1964691, upload-time = "2025-03-21T18:00:35.986Z" },
+]
+
+[[package]]
 name = "opt-einsum"
 version = "3.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2243,11 +2256,11 @@ wheels = [
 
 [[package]]
 name = "setuptools"
-version = "83.0.0"
+version = "81.0.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/34/26/f5d29e25ffdb535afef2d35cdb55b325298f96debd670da4c325e08d70f4/setuptools-83.0.0.tar.gz", hash = "sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef", size = 1154254, upload-time = "2026-07-04T15:31:22.699Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0d/1c/73e719955c59b8e424d015ab450f51c0af856ae46ea2da83eba51cc88de1/setuptools-81.0.0.tar.gz", hash = "sha256:487b53915f52501f0a79ccfd0c02c165ffe06631443a886740b91af4b7a5845a", size = 1198299, upload-time = "2026-02-06T21:10:39.601Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/40/e1e72872c6354b306daef1703549e8e83b4d43cfea356311bf722a043752/setuptools-83.0.0-py3-none-any.whl", hash = "sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3", size = 1008090, upload-time = "2026-07-04T15:31:20.885Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/e3/c164c88b2e5ce7b24d667b9bd83589cf4f3520d97cad01534cd3c4f55fdb/setuptools-81.0.0-py3-none-any.whl", hash = "sha256:fdd925d5c5d9f62e4b74b30d6dd7828ce236fd6ed998a08d81de62ce5a6310d6", size = 1062021, upload-time = "2026-02-06T21:10:37.175Z" },
 ]
 
 [[package]]
