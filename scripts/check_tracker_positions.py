@@ -59,6 +59,9 @@ def _configuration_record(layout: TrackerLayout) -> dict:
         "actuated_nodes": [
             name for name, actuated in zip(layout.node_names, layout.action_mask) if actuated
         ],
+        "serial_node_order": (
+            list(layout.serial_node_order) if layout.serial_node_order is not None else None
+        ),
         "connections": _undirected_connections(layout),
     }
 
