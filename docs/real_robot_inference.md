@@ -1,6 +1,6 @@
 # Real-robot GNN inference
 
-`sac/real_robot_infer.py` replaces the MuJoCo observation/step loop with SteamVR tracker input. It still constructs the selected `mujoco-truss-gen` preset once at startup to obtain the policy node order, control graph, action mask, edge roles, and nominal coordinates used for tracker matching. MuJoCo is then closed; every closed-loop observation comes from SteamVR. The physical tracker positions in the first complete frame establish the observation bounding box and rigidity reference. Commands are printed as JSON and are not sent to hardware.
+`sac/real_robot_infer.py` replaces the MuJoCo observation/step loop with SteamVR tracker input. It obtains the policy node order, control graph, action mask, and edge roles from either a selected `mujoco-truss-gen` preset or a hand-authored triangle definition. Preset mode constructs MuJoCo once for this metadata and then closes it; every closed-loop observation comes from SteamVR. The physical tracker positions in the first complete frame establish the observation bounding box and rigidity reference. Commands are printed as JSON and are not sent to hardware.
 
 Keep the permanent serial mapping in one JSON file:
 
@@ -83,7 +83,7 @@ The layout explicitly records (1) which triangle carries each tracker, (2) which
 }
 ```
 
-Provide one entry for every ideal/abstract preset node and one uniquely named triangle for every physical tracker. Every name in `joint_triangles` must correspond to one of those tracker-mounted triangles. The `local_plane_normal` is the triangle normal expressed in that tracker's local SteamVR frame. If the tracker origin is not actually on the triangle plane, measure the vector from the tracker origin to any point on the plane in tracker-local coordinates and set `local_plane_point_offset`; leaving it zero applies the derivation's tracker-origin-on-plane assumption.
+Provide one entry for every ideal/abstract preset node. Multiple trackers may be mounted on the same triangle; their calibrated plane estimates are normal-aligned and averaged into one measured triangle plane. Every name in `joint_triangles` must correspond to a triangle carrying at least one tracker. The `local_plane_normal` is the triangle normal expressed in that tracker's local SteamVR frame. If the tracker origin is not actually on the triangle plane, measure the vector from the tracker origin to any point on the plane in tracker-local coordinates and set `local_plane_point_offset`; leaving it zero applies the derivation's tracker-origin-on-plane assumption.
 
 Run the reconstructed mode with:
 
@@ -98,6 +98,101 @@ python sac/real_robot_infer.py \
 
 For each joint, the code intersects its two measured planes and orthogonally projects the rigidly connected tracker's position onto that line. A frame is skipped when the planes are parallel or nearly parallel because the joint is not observable from that plane pair. The mechanical perpendicularity assumption must hold for each configured tracker/joint pair; mounting a puck on a triangle alone does not guarantee it.
 
+## Hand-authored graph and position checker
+
+When the physical layout is not a registered `mujoco-truss-gen` preset, define the four logical triangles and six tracker locations directly. The loader generates the complete policy graph and plane-intersection metadata:
+
+```json
+{
+  "triangles": [
+    {
+      "name": "triangle_1",
+      "nodes": ["node_1", "node_2", "node_4"],
+      "passive_node": "node_1",
+      "trackers": {"node_1": "B11", "node_2": "B12"}
+    },
+    {
+      "name": "triangle_2",
+      "nodes": ["node_1", "node_5", "node_3"],
+      "passive_node": "node_1",
+      "trackers": {"node_3": "B13", "node_5": "B15"}
+    },
+    {
+      "name": "triangle_3",
+      "nodes": ["node_3", "node_6", "node_2"],
+      "passive_node": "node_6",
+      "trackers": {"node_6": "B16"}
+    },
+    {
+      "name": "triangle_4",
+      "nodes": ["node_4", "node_6", "node_5"],
+      "passive_node": "node_6",
+      "trackers": {"node_4": "B14"}
+    }
+  ],
+  "tracker_calibration": {
+    "B11": {
+      "local_plane_normal": [0, 0, 1],
+      "local_plane_point_offset": [0, 0, 0]
+    },
+    "B12": {
+      "local_plane_normal": [0, 0, 1],
+      "local_plane_point_offset": [0, 0, 0]
+    }
+  },
+  "steamvr_to_policy_matrix": [[1, 0, 0], [0, 0, 1], [0, 1, 0]],
+  "plane_parallel_tolerance": 1e-6
+}
+```
+
+The `trackers` object maps the logical node carrying a physical puck to that puck's stable ID from `serial_to_tracker_id`. Two entries on one triangle mean two physical pucks contribute independent estimates of the same rigid triangle plane. If the serial map uses logical node names as its tracker IDs, the shorter `"tracker_nodes": ["node_1", "node_2"]` form is equivalent. A single `"tracker": "node_1"` is also accepted. `tracker_calibration` is optional and defaults to local normal `[0,0,1]` with zero offset; add one entry per puck when its mount differs.
+
+The generator intentionally matches `mujoco-truss-gen`:
+
+- Triangles and nodes are traversed in file order.
+- The first occurrence of a logical node keeps its name. Later occurrences are named `<node>_tri_<triangle>`.
+- Each triangle produces three `tube` edges.
+- All control-node copies of the same logical node receive `connector` edges.
+- The occurrence named by each triangle's `passive_node` is excluded from the action mask.
+- The two triangles containing each logical node become that node's plane-intersection pair.
+
+Every logical node must have exactly one puck, every triangle must carry at least one puck, and every logical node must occur in exactly two triangles. Those constraints describe the current four-triangle/six-node mechanism and prevent an ambiguous reconstruction from running.
+
+Before loading a policy, validate the definition and print one live reconstructed frame:
+
+```bash
+python scripts/check_tracker_positions.py \
+  --serial-map config/tracker_maps/vive_serial_map.json \
+  --graph-definition /path/to/robot_graph.json
+```
+
+The first JSON line echoes the controller node order, action nodes, and connections. The second line contains the reconstructed positions both as an ordered array and keyed by node name. This checker calls the same `TrackerLayout.ordered_positions()` implementation as real inference; it neither loads a checkpoint nor creates motor commands.
+
+For a repeatable offline math test, save a pose frame as JSON and pass `--poses`:
+
+```json
+{
+  "poses_by_serial": {
+    "LHR-AAAA": {
+      "position": [0.1, 0.2, 0.3],
+      "rotation_matrix": [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    }
+  }
+}
+```
+
+To use the hand-authored graph for print-only policy inference, pass it instead of a preset tracker layout:
+
+```bash
+python sac/real_robot_infer.py \
+  model=/path/to/final.pt \
+  serial_map_file=config/tracker_maps/vive_serial_map.json \
+  graph_definition_file=/path/to/robot_graph.json \
+  num_policy_actions=NUMBER_OF_ACTUATED_NODES
+```
+
+Do not also set `tracker_layout_file`. The checkpoint architecture and enabled graph features must match the hand-authored definition. The triangle generator supplies `tube` and `connector` roles on every generated edge.
+
 ## Transmitter command output and emergency stop
 
 Each control cycle prints the exact newline-delimited command expected by the Arduino USB transmitter:
@@ -106,7 +201,7 @@ Each control cycle prints the exact newline-delimited command expected by the Ar
 VEL_DUR:0,500,-300:0.2
 ```
 
-Each normalized policy action is clipped to `[-1, 1]`, multiplied directly by the firmware limit of 1800 ticks/second, and rounded to an integer. The simulation-side `speed` conversion is not applied to serial commands. Passive tracked nodes remain policy context but are omitted from the transmitter fields. `serial_node_order` controls the transmitter channel order; when null, it uses the actuated nodes in preset graph order. Set it explicitly when firmware receiver-address order differs from the preset.
+Each normalized policy action is clipped to `[-1, 1]`, multiplied directly by the firmware limit of 1800 ticks/second, and rounded to an integer. The simulation-side `speed` conversion is not applied to serial commands. Passive tracked nodes remain policy context but are omitted from the transmitter fields. `serial_node_order` controls the transmitter channel order; when null, it uses the actuated nodes in generated graph order. Set it explicitly when firmware receiver-address order differs from that order.
 
 Pressing `Ctrl-C` prints one immediate zero-duration velocity command containing a zero for every configured transmitter channel, for example `VEL_DUR:0,0,0:0`, before the tracker source closes. Serial I/O is intentionally not implemented yet; the future writer should send the printed command plus `\n` at `serial_baud_rate` (115200 by default).
 

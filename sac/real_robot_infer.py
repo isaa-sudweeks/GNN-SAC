@@ -220,23 +220,229 @@ class TrackerLayout:
     tracker_mounts: dict[str, TrackerMount] | None = None
     plane_parallel_tolerance: float = 1e-6
 
+    @staticmethod
+    def _expand_triangle_definition(layout: Mapping[str, object]) -> dict:
+        """Generate a MuJoCo-style control graph from logical triangles."""
+        raw_triangles = layout.get("triangles")
+        if not isinstance(raw_triangles, list) or not raw_triangles:
+            raise ValueError("triangles must be a nonempty list")
+        conflicting = {"node_names", "edges", "actuated_nodes", "tracker_mounts"} & set(
+            layout
+        )
+        if conflicting:
+            raise ValueError(
+                "Triangle definitions generate graph fields automatically; remove: "
+                f"{sorted(conflicting)}"
+            )
+
+        triangle_nodes: dict[str, tuple[str, str, str]] = {}
+        passive_nodes: dict[str, str] = {}
+        tracker_assignments: list[tuple[str, str, str]] = []
+        tracker_ids = set()
+        tracked_nodes = set()
+        calibration = layout.get("tracker_calibration", {})
+        if not isinstance(calibration, dict):
+            raise ValueError("tracker_calibration must be an object")
+
+        for index, raw_triangle in enumerate(raw_triangles):
+            if not isinstance(raw_triangle, dict):
+                raise ValueError(f"triangles[{index}] must be an object")
+            missing = {"name", "nodes", "passive_node"} - set(raw_triangle)
+            if missing:
+                raise ValueError(
+                    f"triangles[{index}] is missing fields: {sorted(missing)}"
+                )
+            name = str(raw_triangle["name"])
+            if name in triangle_nodes:
+                raise ValueError(f"Triangle names must be unique; duplicate: {name!r}")
+            raw_nodes = raw_triangle["nodes"]
+            if not isinstance(raw_nodes, list) or len(raw_nodes) != 3:
+                raise ValueError(f"Triangle {name!r} must contain exactly three nodes")
+            nodes = tuple(str(node) for node in raw_nodes)
+            if len(set(nodes)) != 3:
+                raise ValueError(f"Triangle {name!r} nodes must be unique")
+            passive_node = str(raw_triangle["passive_node"])
+            if passive_node not in nodes:
+                raise ValueError(
+                    f"Triangle {name!r} passive_node must be one of its nodes"
+                )
+            triangle_nodes[name] = nodes
+            passive_nodes[name] = passive_node
+
+            raw_trackers = raw_triangle.get(
+                "trackers",
+                raw_triangle.get("tracker_nodes", raw_triangle.get("tracker", [])),
+            )
+            if isinstance(raw_trackers, str):
+                raw_trackers = [raw_trackers]
+            if isinstance(raw_trackers, dict):
+                tracker_items = [
+                    (str(node), str(tracker_id))
+                    for node, tracker_id in raw_trackers.items()
+                ]
+            elif isinstance(raw_trackers, list):
+                tracker_items = []
+                for tracker_index, raw_tracker in enumerate(raw_trackers):
+                    if isinstance(raw_tracker, str):
+                        tracker_items.append((raw_tracker, raw_tracker))
+                    elif isinstance(raw_tracker, dict) and "node" in raw_tracker:
+                        node = str(raw_tracker["node"])
+                        tracker_id = str(
+                            raw_tracker.get("id", raw_tracker.get("tracker_id", node))
+                        )
+                        tracker_items.append((node, tracker_id))
+                    else:
+                        raise ValueError(
+                            f"Triangle {name!r} tracker {tracker_index} must be a node "
+                            "name or an object containing node and optional id"
+                        )
+            else:
+                raise ValueError(
+                    f"Triangle {name!r} trackers must be a node-to-tracker object or list"
+                )
+            for logical_node, tracker_id in tracker_items:
+                if logical_node not in nodes:
+                    raise ValueError(
+                        f"Tracker {tracker_id!r} is mounted at {logical_node!r}, which "
+                        f"is not a node of triangle {name!r}"
+                    )
+                if tracker_id in tracker_ids:
+                    raise ValueError(f"Tracker IDs must be unique; duplicate: {tracker_id!r}")
+                if logical_node in tracked_nodes:
+                    raise ValueError(
+                        f"Logical node {logical_node!r} has more than one tracker"
+                    )
+                tracker_ids.add(tracker_id)
+                tracked_nodes.add(logical_node)
+                tracker_assignments.append((tracker_id, logical_node, name))
+
+        node_incidence: dict[str, list[str]] = {}
+        for triangle_name, nodes in triangle_nodes.items():
+            for logical_node in nodes:
+                node_incidence.setdefault(logical_node, []).append(triangle_name)
+        missing_trackers = set(node_incidence) - tracked_nodes
+        if missing_trackers:
+            raise ValueError(
+                "Every logical node needs exactly one tracker; missing: "
+                f"{sorted(missing_trackers)}"
+            )
+        unknown_calibrations = set(calibration) - tracker_ids - tracked_nodes
+        if unknown_calibrations:
+            raise ValueError(
+                "tracker_calibration contains unknown tracker or node IDs: "
+                f"{sorted(unknown_calibrations)}"
+            )
+        untracked_triangles = set(triangle_nodes) - {
+            triangle for _, _, triangle in tracker_assignments
+        }
+        if untracked_triangles:
+            raise ValueError(
+                "Every triangle plane needs at least one tracker; missing: "
+                f"{sorted(untracked_triangles)}"
+            )
+        ambiguous_nodes = {
+            node: triangles
+            for node, triangles in node_incidence.items()
+            if len(triangles) != 2
+        }
+        if ambiguous_nodes:
+            details = ", ".join(
+                f"{node}={triangles}" for node, triangles in sorted(ambiguous_nodes.items())
+            )
+            raise ValueError(
+                "Triangle-plane reconstruction currently requires every logical node "
+                f"to belong to exactly two triangles; got {details}"
+            )
+
+        control_node_names = []
+        control_triangles: dict[str, list[str]] = {}
+        control_by_logical: dict[str, list[str]] = {}
+        owned_nodes = set()
+        for triangle_name, nodes in triangle_nodes.items():
+            control_nodes = []
+            for logical_node in nodes:
+                control_node = (
+                    logical_node
+                    if logical_node not in owned_nodes
+                    else f"{logical_node}_tri_{triangle_name}"
+                )
+                owned_nodes.add(logical_node)
+                control_node_names.append(control_node)
+                control_nodes.append(control_node)
+                control_by_logical.setdefault(logical_node, []).append(control_node)
+            control_triangles[triangle_name] = control_nodes
+
+        edges = []
+        passive_control_nodes = set()
+        for triangle_name, nodes in triangle_nodes.items():
+            controls = control_triangles[triangle_name]
+            for edge_index in range(3):
+                edges.append(
+                    [controls[edge_index], controls[(edge_index + 1) % 3], "tube"]
+                )
+            passive_index = nodes.index(passive_nodes[triangle_name])
+            passive_control_nodes.add(controls[passive_index])
+        for controls in control_by_logical.values():
+            for index, source in enumerate(controls):
+                for target in controls[index + 1 :]:
+                    edges.append([source, target, "connector"])
+
+        tracker_mounts = {}
+        for tracker_id, logical_node, triangle_name in tracker_assignments:
+            raw_calibration = calibration.get(
+                tracker_id, calibration.get(logical_node, {})
+            )
+            if not isinstance(raw_calibration, dict):
+                raise ValueError(
+                    f"tracker_calibration[{tracker_id!r}] must be an object"
+                )
+            tracker_mounts[tracker_id] = {
+                "triangle": triangle_name,
+                "abstract_node": logical_node,
+                "joint_triangles": node_incidence[logical_node],
+                "local_plane_normal": raw_calibration.get(
+                    "local_plane_normal", [0.0, 0.0, 1.0]
+                ),
+                "local_plane_point_offset": raw_calibration.get(
+                    "local_plane_point_offset", [0.0, 0.0, 0.0]
+                ),
+            }
+
+        expanded = dict(layout)
+        expanded.update(
+            tracker_assignment="triangle_planes",
+            node_names=control_node_names,
+            actuated_nodes=[
+                node for node in control_node_names if node not in passive_control_nodes
+            ],
+            edges=edges,
+            tracker_mounts=tracker_mounts,
+        )
+        return expanded
+
     @classmethod
     def from_files(cls, serial_map_file: str, layout_file: str) -> "TrackerLayout":
+        """Load a complete hand-authored graph and tracker definition."""
         serial_data = _load_json(serial_map_file)
         serial_map = serial_data.get("serial_to_tracker_id", serial_data)
         layout = _load_json(layout_file)
+        if "triangles" in layout:
+            layout = cls._expand_triangle_definition(layout)
+        assignment_mode = str(
+            layout.get("tracker_assignment", layout.get("assignment_mode", "manual"))
+        ).lower()
+        if assignment_mode not in {"manual", "triangle_planes"}:
+            raise ValueError(
+                "Hand-authored layouts require tracker_assignment 'manual' or "
+                "'triangle_planes'"
+            )
         node_names = tuple(str(value) for value in layout["node_names"])
-        tracker_map = {str(k): str(v) for k, v in layout["tracker_id_to_node"].items()}
+        tracker_map = {
+            str(k): str(v)
+            for k, v in layout.get("tracker_id_to_node", {}).items()
+        }
         if len(set(node_names)) != len(node_names):
             raise ValueError("node_names must be unique")
-        unknown_nodes = set(tracker_map.values()) - set(node_names)
-        if unknown_nodes:
-            raise ValueError(f"Tracker map refers to unknown nodes: {sorted(unknown_nodes)}")
-        missing_nodes = set(node_names) - set(tracker_map.values())
-        if missing_nodes:
-            raise ValueError(f"Every node needs one tracker; missing: {sorted(missing_nodes)}")
-        if len(set(tracker_map.values())) != len(tracker_map):
-            raise ValueError("Only one tracker may map to each node")
 
         node_index = {name: idx for idx, name in enumerate(node_names)}
         directed_edges, directed_roles = [], []
@@ -263,7 +469,11 @@ class TrackerLayout:
             raise ValueError("steamvr_to_policy_matrix must be a finite 3x3 matrix")
         if abs(np.linalg.det(coordinate_matrix)) <= 1e-8:
             raise ValueError("steamvr_to_policy_matrix must be invertible")
-        return cls(
+        tracker_mounts = cls._parse_tracker_mounts(layout, assignment_mode)
+        plane_parallel_tolerance = float(layout.get("plane_parallel_tolerance", 1e-6))
+        if not np.isfinite(plane_parallel_tolerance) or plane_parallel_tolerance <= 0.0:
+            raise ValueError("plane_parallel_tolerance must be positive and finite")
+        result = cls(
             node_names=node_names,
             serial_to_tracker_id={str(k): str(v) for k, v in serial_map.items()},
             tracker_id_to_node=tracker_map,
@@ -271,7 +481,12 @@ class TrackerLayout:
             action_mask=np.asarray([name in actuated for name in node_names], dtype=bool),
             edge_role=edge_role,
             steamvr_to_policy_matrix=coordinate_matrix,
+            assignment_mode=assignment_mode,
+            tracker_mounts=tracker_mounts,
+            plane_parallel_tolerance=plane_parallel_tolerance,
         )
+        result._validate_tracker_map()
+        return result
 
     @classmethod
     def from_preset(
@@ -368,9 +583,9 @@ class TrackerLayout:
         unknown_nodes = set(self.tracker_id_to_node.values()) - set(self.node_names)
         missing_nodes = set(self.node_names) - set(self.tracker_id_to_node.values())
         if unknown_nodes:
-            raise ValueError(f"Tracker map refers to unknown preset nodes: {sorted(unknown_nodes)}")
+            raise ValueError(f"Tracker map refers to unknown graph nodes: {sorted(unknown_nodes)}")
         if missing_nodes:
-            raise ValueError(f"Every preset node needs one tracker; missing: {sorted(missing_nodes)}")
+            raise ValueError(f"Every graph node needs one tracker; missing: {sorted(missing_nodes)}")
         if len(set(self.tracker_id_to_node.values())) != len(self.tracker_id_to_node):
             raise ValueError("Only one tracker may map to each node")
 
@@ -444,14 +659,10 @@ class TrackerLayout:
                 "Tracker mounts refer to tracker IDs absent from the serial map: "
                 f"{sorted(unknown_trackers)}"
             )
-        triangle_to_tracker = {}
+        tracked_triangles = set()
         abstract_nodes = set()
         for mount in mounts.values():
-            if mount.triangle in triangle_to_tracker:
-                raise ValueError(
-                    f"Triangle {mount.triangle!r} has more than one tracker mount"
-                )
-            triangle_to_tracker[mount.triangle] = mount.tracker_id
+            tracked_triangles.add(mount.triangle)
             if mount.abstract_node in abstract_nodes:
                 raise ValueError(
                     f"Abstract node {mount.abstract_node!r} has more than one rigidly connected tracker"
@@ -461,7 +672,7 @@ class TrackerLayout:
             triangle
             for mount in mounts.values()
             for triangle in mount.joint_triangles
-            if triangle not in triangle_to_tracker
+            if triangle not in tracked_triangles
         }
         if missing_triangles:
             raise ValueError(
@@ -486,7 +697,7 @@ class TrackerLayout:
             )
         if missing_abstract_nodes:
             raise ValueError(
-                "Every preset abstract node needs one tracker mount; missing: "
+                "Every graph abstract node needs one tracker mount; missing: "
                 f"{sorted(missing_abstract_nodes)}"
             )
 
@@ -590,7 +801,7 @@ class TrackerLayout:
                 f"Missing valid SteamVR poses for tracker mounts: {missing}"
             )
 
-        planes = {}
+        plane_estimates: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {}
         anchor_positions = {}
         coordinate_matrix = self.steamvr_to_policy_matrix
         for tracker_id, mount in mounts.items():
@@ -608,8 +819,28 @@ class TrackerLayout:
             plane_point = position + coordinate_matrix @ (
                 pose.rotation_matrix @ mount.local_plane_point_offset
             )
-            planes[mount.triangle] = (plane_point, normal / normal_length)
+            plane_estimates.setdefault(mount.triangle, []).append(
+                (plane_point, normal / normal_length)
+            )
             anchor_positions[tracker_id] = position
+        planes = {}
+        for triangle, estimates in plane_estimates.items():
+            reference_normal = estimates[0][1]
+            aligned_normals = [
+                normal if normal @ reference_normal >= 0.0 else -normal
+                for _, normal in estimates
+            ]
+            fused_normal = np.mean(aligned_normals, axis=0)
+            fused_length = np.linalg.norm(fused_normal)
+            if fused_length <= 1e-8:
+                raise MissingTrackerFrame(
+                    f"Tracker plane normals for triangle {triangle!r} cancel each other"
+                )
+            fused_normal /= fused_length
+            fused_offset = float(
+                np.mean([fused_normal @ point for point, _ in estimates])
+            )
+            planes[triangle] = (fused_normal * fused_offset, fused_normal)
         return planes, anchor_positions
 
     def reconstructed_positions(self, poses_by_serial: Mapping[str, object]) -> np.ndarray:
@@ -806,11 +1037,23 @@ def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
     layout_file = getattr(cfg, "tracker_layout_file", None)
     if layout_file in (None, "", "null"):
         layout_file = None
-    layout = TrackerLayout.from_preset(
-        cfg,
-        str(cfg.serial_map_file),
-        str(layout_file) if layout_file is not None else None,
-    )
+    graph_definition_file = getattr(cfg, "graph_definition_file", None)
+    if graph_definition_file in (None, "", "null"):
+        graph_definition_file = None
+    if graph_definition_file is not None:
+        if layout_file is not None:
+            raise ValueError(
+                "Set either graph_definition_file or tracker_layout_file, not both"
+            )
+        layout = TrackerLayout.from_files(
+            str(cfg.serial_map_file), str(graph_definition_file)
+        )
+    else:
+        layout = TrackerLayout.from_preset(
+            cfg,
+            str(cfg.serial_map_file),
+            str(layout_file) if layout_file is not None else None,
+        )
     builder = RealRobotObservationBuilder(
         layout,
         normalize_observations=bool(cfg.normalize_observations),

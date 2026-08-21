@@ -62,6 +62,128 @@ class RealRobotObservationTest(unittest.TestCase):
             [[1, 3, 2], [4, 6, 5], [7, 9, 8]],
         )
 
+    def test_complete_hand_authored_graph_supports_triangle_reconstruction(self):
+        self.layout_path.write_text(json.dumps({
+            "tracker_assignment": "triangle_planes",
+            "node_names": ["n0", "n1", "n2"],
+            "actuated_nodes": ["n0", "n2"],
+            "edges": [["n0", "n1", "tube"], ["n1", "n2", "connector"]],
+            "tracker_mounts": {
+                "T0": {
+                    "triangle": "tri_0",
+                    "abstract_node": "n0",
+                    "joint_triangles": ["tri_0", "tri_1"],
+                },
+                "T1": {
+                    "triangle": "tri_1",
+                    "abstract_node": "n1",
+                    "joint_triangles": ["tri_1", "tri_2"],
+                },
+                "T2": {
+                    "triangle": "tri_2",
+                    "abstract_node": "n2",
+                    "joint_triangles": ["tri_2", "tri_0"],
+                },
+            },
+        }))
+        layout = TrackerLayout.from_files(str(self.serial_path), str(self.layout_path))
+        self.assertTrue(layout.requires_orientations)
+        self.assertEqual(set(layout.tracker_mounts), {"T0", "T1", "T2"})
+        np.testing.assert_array_equal(layout.action_mask, [True, False, True])
+
+    def test_triangle_definition_generates_mujoco_style_control_graph(self):
+        self.serial_path.write_text(json.dumps({
+            "serial_to_tracker_id": {
+                "S1": "B11", "S2": "B12", "S3": "B13",
+                "S4": "B14", "S5": "B15", "S6": "B16",
+            }
+        }))
+        self.layout_path.write_text(json.dumps({
+            "triangles": [
+                {
+                    "name": "triangle_1",
+                    "nodes": ["node_1", "node_2", "node_4"],
+                    "passive_node": "node_1",
+                    "trackers": {"node_1": "B11", "node_2": "B12"},
+                },
+                {
+                    "name": "triangle_2",
+                    "nodes": ["node_1", "node_5", "node_3"],
+                    "passive_node": "node_1",
+                    "trackers": {"node_3": "B13", "node_5": "B15"},
+                },
+                {
+                    "name": "triangle_3",
+                    "nodes": ["node_3", "node_6", "node_2"],
+                    "passive_node": "node_6",
+                    "trackers": {"node_6": "B16"},
+                },
+                {
+                    "name": "triangle_4",
+                    "nodes": ["node_4", "node_6", "node_5"],
+                    "passive_node": "node_6",
+                    "trackers": {"node_4": "B14"},
+                },
+            ]
+        }))
+
+        layout = TrackerLayout.from_files(str(self.serial_path), str(self.layout_path))
+
+        self.assertEqual(layout.node_names, (
+            "node_1", "node_2", "node_4",
+            "node_1_tri_triangle_2", "node_5", "node_3",
+            "node_3_tri_triangle_3", "node_6", "node_2_tri_triangle_3",
+            "node_4_tri_triangle_4", "node_6_tri_triangle_4",
+            "node_5_tri_triangle_4",
+        ))
+        np.testing.assert_array_equal(
+            layout.action_mask,
+            [False, True, True, False, True, True, True, False, True, True, False, True],
+        )
+        self.assertEqual(layout.edge_index.shape, (2, 36))
+        self.assertEqual(np.count_nonzero(layout.edge_role == 0), 24)
+        self.assertEqual(np.count_nonzero(layout.edge_role == 1), 12)
+        self.assertEqual(
+            layout.tracker_mounts["B14"].joint_triangles,
+            ("triangle_1", "triangle_4"),
+        )
+        self.assertEqual(layout.tracker_mounts["B14"].abstract_node, "node_4")
+
+    def test_multiple_trackers_on_one_triangle_fuse_their_plane_estimates(self):
+        rotation_local_z_to_x = np.asarray(
+            [[0, 0, 1], [1, 0, 0], [0, 1, 0]], dtype=float
+        )
+        rotation_local_z_to_y = np.asarray(
+            [[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=float
+        )
+        mounts = {
+            "T0": TrackerMount("T0", "tri_a", "n0", ("tri_a", "tri_b"), np.asarray([0, 0, 1]), np.zeros(3)),
+            "T1": TrackerMount("T1", "tri_a", "n1", ("tri_a", "tri_c"), np.asarray([0, 0, 1]), np.zeros(3)),
+            "T2": TrackerMount("T2", "tri_b", "n2", ("tri_b", "tri_a"), np.asarray([0, 0, 1]), np.zeros(3)),
+            "T3": TrackerMount("T3", "tri_c", "n3", ("tri_c", "tri_a"), np.asarray([0, 0, 1]), np.zeros(3)),
+        }
+        layout = TrackerLayout(
+            node_names=("n0", "n1", "n2", "n3"),
+            serial_to_tracker_id={"S0": "T0", "S1": "T1", "S2": "T2", "S3": "T3"},
+            tracker_id_to_node={},
+            edge_index=np.empty((2, 0), dtype=np.int64),
+            action_mask=np.ones(4, dtype=bool),
+            edge_role=None,
+            steamvr_to_policy_matrix=np.eye(3),
+            assignment_mode="triangle_planes",
+            tracker_mounts=mounts,
+        )
+        layout._validate_tracker_mounts()
+        planes, _ = layout._triangle_planes({
+            "S0": TrackerPose(np.asarray([0.0, 0.0, 0.0]), rotation_local_z_to_x),
+            "S1": TrackerPose(np.asarray([0.2, 2.0, 0.0]), rotation_local_z_to_x),
+            "S2": TrackerPose(np.asarray([0.0, 0.0, 0.0]), rotation_local_z_to_y),
+            "S3": TrackerPose(np.asarray([0.0, 0.0, 0.0]), np.eye(3)),
+        })
+        plane_point, plane_normal = planes["tri_a"]
+        np.testing.assert_allclose(plane_normal, [1.0, 0.0, 0.0], atol=1e-12)
+        np.testing.assert_allclose(plane_point, [0.1, 0.0, 0.0], atol=1e-12)
+
     def test_builds_com_relative_normalized_position_and_velocity(self):
         builder = RealRobotObservationBuilder(self.layout, True, 1.0, (True, True, True))
         initial = np.asarray([[0, 0, 0], [1, 2, 3], [2, 4, 6]], dtype=float)
