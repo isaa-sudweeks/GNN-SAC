@@ -7,15 +7,15 @@ This document is the pre-test and test-day checklist for running the GNN policy 
 The test uses two sources of information:
 
 - `mujoco-truss-gen` provides the selected preset's node order, graph connectivity, action mask, edge roles, and nominal node coordinates used for automatic tracker matching.
-- The physical Vive trackers provide the live node positions used for the policy observation. The first complete physical frame establishes the initial bounding box and rigidity reference.
+- The physical Vive trackers provide the live poses used to obtain policy-node positions. In six-tracker mode, orientations define triangle planes and the reconstructed abstract-joint positions are expanded to the control graph. The first complete physical frame establishes the initial bounding box and rigidity reference.
 
 After reading the preset metadata, MuJoCo is closed. It does not supply observations or advance the robot during the closed-loop test.
 
 Each successful control cycle performs:
 
-1. Read all valid tracker positions from SteamVR.
+1. Read all valid tracker poses from SteamVR.
 2. Convert SteamVR coordinates into the policy coordinate frame.
-3. Order the measurements by preset node order.
+3. Either order directly tracked nodes or reconstruct abstract joints from triangle planes and expand them into preset node order.
 4. Compute center-relative node positions.
 5. Estimate node velocities from consecutive timestamped frames.
 6. Apply the observation normalization used during training.
@@ -32,7 +32,7 @@ Passive physical nodes remain part of the GNN observation but are omitted from t
 - Vive serial mapping: `config/tracker_maps/vive_serial_map.json`
 - General wrapper documentation: `docs/real_robot_inference.md`
 
-The serial mapping currently contains 12 trackers. Before testing, confirm that the selected preset expects the same set of tracked physical nodes. For the cleanest automatic assignment, the number of active, visible entries in the serial map should equal the preset graph-node count.
+The serial mapping may contain trackers that are not used in a particular layout. Direct automatic/manual mode needs one visible tracker per preset graph node. Triangle-plane mode instead needs one visible tracker and one mount entry per ideal/abstract node.
 
 ## 3. Information to record before testing
 
@@ -50,7 +50,7 @@ Fill this out before starting SteamVR:
 - Robot/preset `scale`: ____________________
 - Expected tracked-node count: ____________________
 - Expected actuated/transmitter-channel count: ____________________
-- Tracker assignment mode: automatic / manual
+- Tracker assignment mode: automatic / manual / triangle_planes
 - Control frequency: ____________________ Hz
 - Command duration: ____________________ seconds
 - Coordinate transform verified: yes / no
@@ -77,7 +77,7 @@ python -m pip install openvr
 
 ## 5. Physical setup
 
-- [ ] Secure one tracker to each intended physical node.
+- [ ] For direct mode, secure one tracker to each intended physical node. For triangle-plane mode, secure one tracker to each configured triangle and abstract-joint mount.
 - [ ] Check that tracker mounts cannot shift relative to the nodes.
 - [ ] Arrange the robot as closely as possible to the nominal `mujoco-truss-gen` preset pose.
 - [ ] Use the same robot scale as the selected preset configuration.
@@ -87,7 +87,7 @@ python -m pip install openvr
 
 ## 6. Coordinate-frame calibration
 
-`steamvr_to_policy_matrix` converts raw SteamVR coordinates to the MuJoCo/policy world axes. The default identity matrix is only correct if those frames already agree.
+`steamvr_to_policy_matrix` converts raw SteamVR coordinates to the MuJoCo/policy world axes. The repository default maps policy `(x, y, z)` to SteamVR `(x, z, y)`; verify that this matches the actual tracking setup.
 
 Before trusting automatic assignment or policy commands, verify:
 
@@ -101,8 +101,8 @@ Configure the transform in `config/inference/real_robot.yaml` or an optional tra
 ```yaml
 steamvr_to_policy_matrix:
   - [1, 0, 0]
-  - [0, 1, 0]
   - [0, 0, 1]
+  - [0, 1, 0]
 ```
 
 Do not proceed to live actuation later until a known physical displacement produces the expected sign and axis in the policy observation.
@@ -166,6 +166,24 @@ Example layout:
 
 Node names must exactly match the selected preset.
 
+### Six-tracker triangle-plane mode
+
+Use this mode when each puck is attached to one triangle/abstract-joint mount and the policy graph contains duplicated `_tri_` control nodes:
+
+```text
+tracker_assignment=triangle_planes
+tracker_layout_file=/absolute/path/to/six_tracker_layout.json
+```
+
+Follow the `tracker_mounts` schema in `docs/real_robot_inference.md`. Before the bounded test, verify:
+
+- [ ] There is exactly one mount for every abstract preset node.
+- [ ] Every mount identifies its tracker-bearing triangle and both joint-intersection triangles.
+- [ ] `local_plane_normal` matches the physical tracker orientation.
+- [ ] `local_plane_point_offset` is measured if the tracker origin is not on the triangle plane.
+- [ ] The tracker-to-joint direction is mechanically perpendicular to the configured plane-intersection line.
+- [ ] The test pose does not make either configured plane pair nearly parallel.
+
 ## 8. First bounded tracking test
 
 Start with a five-second, print-only test at 10 Hz:
@@ -175,7 +193,8 @@ python sac/real_robot_infer.py \
   model=/absolute/path/to/final.pt \
   truss_topology=YOUR_PRESET \
   serial_map_file=config/tracker_maps/vive_serial_map.json \
-  tracker_assignment=automatic \
+  tracker_assignment=triangle_planes \
+  tracker_layout_file=/absolute/path/to/six_tracker_layout.json \
   control_frequency_hz=10 \
   control_steps=50
 ```
@@ -186,8 +205,7 @@ During the run, verify:
 
 - [ ] The checkpoint loads without a graph-feature-schema mismatch.
 - [ ] The expected preset and node count are used.
-- [ ] Automatic assignment completes once.
-- [ ] Assignment RMS error is acceptable.
+- [ ] The selected direct assignment or triangle-plane layout validates at startup.
 - [ ] No configured tracker is reported missing.
 - [ ] One command is printed per successful frame.
 - [ ] The number of command fields equals the actuated-node/transmitter-channel count.
@@ -205,7 +223,7 @@ At 10 Hz, a new command is produced every 0.1 seconds. The default command durat
 
 ## 9. Motion-observation checks
 
-Repeat bounded tests while moving one tracker/node slowly by hand. Do not connect actuation yet.
+Repeat bounded tests while moving one tracker/mount slowly by hand. Do not connect actuation yet.
 
 - [ ] Move the robot in the trained forward direction and verify command changes are repeatable.
 - [ ] Move it laterally and verify the response differs from forward motion as expected.

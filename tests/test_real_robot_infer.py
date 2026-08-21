@@ -19,6 +19,8 @@ from real_robot_infer import (
     RealRobotObservationBuilder,
     SerialVelocityCommandFormatter,
     TrackerLayout,
+    TrackerMount,
+    TrackerPose,
     _run_print_only_control_loop,
 )
 from tests.test_gnn_mujoco_truss_gen_smoke import graph_test_cfg
@@ -118,6 +120,129 @@ class RealRobotObservationTest(unittest.TestCase):
         self.assertEqual(preset.edge_index.shape[0], 2)
         self.assertEqual(preset.edge_role.shape[0], preset.edge_index.shape[1])
         self.assertEqual(preset.action_mask.shape, (len(preset.node_names),))
+
+    def test_triangle_plane_layout_accepts_one_mount_per_abstract_preset_node(self):
+        cfg = graph_test_cfg(
+            truss_topology="octahedron",
+            domain_randomization=False,
+        )
+        cfg.tracker_assignment = "automatic"
+        cfg.steamvr_to_policy_matrix = np.eye(3).tolist()
+        preset = TrackerLayout.from_preset(cfg, str(self.serial_path), None)
+        abstract_nodes = sorted(
+            {TrackerLayout._abstract_node_name(name) for name in preset.node_names}
+        )
+        serial_map = {
+            f"S{index}": f"T{index}" for index in range(len(abstract_nodes))
+        }
+        self.serial_path.write_text(json.dumps({"serial_to_tracker_id": serial_map}))
+        tracker_mounts = {}
+        for index, abstract_node in enumerate(abstract_nodes):
+            triangle = f"triangle_{index}"
+            next_triangle = f"triangle_{(index + 1) % len(abstract_nodes)}"
+            tracker_mounts[f"T{index}"] = {
+                "triangle": triangle,
+                "abstract_node": abstract_node,
+                "joint_triangles": [triangle, next_triangle],
+                "local_plane_normal": [0, 0, 1],
+            }
+        self.layout_path.write_text(json.dumps({"tracker_mounts": tracker_mounts}))
+        cfg.tracker_assignment = "triangle_planes"
+        reconstructed = TrackerLayout.from_preset(
+            cfg, str(self.serial_path), str(self.layout_path)
+        )
+        self.assertEqual(len(reconstructed.tracker_mounts), len(abstract_nodes))
+        self.assertEqual(len(abstract_nodes), 6)
+        self.assertEqual(len(reconstructed.node_names), 12)
+        self.assertTrue(reconstructed.requires_orientations)
+
+    def test_reconstructs_joint_and_expands_it_to_control_graph_duplicates(self):
+        rotation_local_z_to_x = np.asarray(
+            [[0, 0, 1], [1, 0, 0], [0, 1, 0]], dtype=float
+        )
+        rotation_local_z_to_y = np.asarray(
+            [[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=float
+        )
+        mounts = {
+            "T0": TrackerMount(
+                tracker_id="T0",
+                triangle="tri_a",
+                abstract_node="node_0",
+                joint_triangles=("tri_a", "tri_b"),
+                local_plane_normal=np.asarray([0, 0, 1], dtype=float),
+                local_plane_point_offset=np.zeros(3),
+            ),
+            "T1": TrackerMount(
+                tracker_id="T1",
+                triangle="tri_b",
+                abstract_node="node_1",
+                joint_triangles=("tri_b", "tri_a"),
+                local_plane_normal=np.asarray([0, 0, 1], dtype=float),
+                local_plane_point_offset=np.zeros(3),
+            ),
+        }
+        layout = TrackerLayout(
+            node_names=("node_0_tri_a", "node_0_tri_b", "node_1_tri_a"),
+            serial_to_tracker_id={"S0": "T0", "S1": "T1"},
+            tracker_id_to_node={},
+            edge_index=np.asarray([[0, 1], [1, 0]], dtype=np.int64),
+            action_mask=np.ones(3, dtype=bool),
+            edge_role=None,
+            steamvr_to_policy_matrix=np.eye(3),
+            assignment_mode="triangle_planes",
+            tracker_mounts=mounts,
+        )
+        layout._validate_tracker_mounts()
+        positions = layout.reconstructed_positions(
+            {
+                "S0": TrackerPose(
+                    position=np.asarray([0, 2, 3], dtype=float),
+                    rotation_matrix=rotation_local_z_to_x,
+                ),
+                "S1": TrackerPose(
+                    position=np.asarray([4, 0, 5], dtype=float),
+                    rotation_matrix=rotation_local_z_to_y,
+                ),
+            }
+        )
+        np.testing.assert_allclose(
+            positions,
+            [[0, 0, 3], [0, 0, 3], [0, 0, 5]],
+            atol=1e-12,
+        )
+
+    def test_reconstruction_rejects_parallel_triangle_planes(self):
+        mounts = {
+            tracker_id: TrackerMount(
+                tracker_id=tracker_id,
+                triangle=triangle,
+                abstract_node=abstract_node,
+                joint_triangles=("tri_a", "tri_b"),
+                local_plane_normal=np.asarray([0, 0, 1], dtype=float),
+                local_plane_point_offset=np.zeros(3),
+            )
+            for tracker_id, triangle, abstract_node in (
+                ("T0", "tri_a", "node_0"),
+                ("T1", "tri_b", "node_1"),
+            )
+        }
+        layout = TrackerLayout(
+            node_names=("node_0", "node_1"),
+            serial_to_tracker_id={"S0": "T0", "S1": "T1"},
+            tracker_id_to_node={},
+            edge_index=np.asarray([[0, 1], [1, 0]], dtype=np.int64),
+            action_mask=np.ones(2, dtype=bool),
+            edge_role=None,
+            steamvr_to_policy_matrix=np.eye(3),
+            assignment_mode="triangle_planes",
+            tracker_mounts=mounts,
+        )
+        poses = {
+            "S0": TrackerPose(np.zeros(3), np.eye(3)),
+            "S1": TrackerPose(np.ones(3), np.eye(3)),
+        }
+        with self.assertRaisesRegex(RuntimeError, "parallel"):
+            layout.reconstructed_positions(poses)
 
 
 class SerialVelocityCommandFormatterTest(unittest.TestCase):

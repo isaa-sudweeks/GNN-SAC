@@ -8,8 +8,9 @@ defaults:
 model: ???
 model_file: null
 serial_map_file: ???
-tracker_assignment: automatic # automatic or manual
-tracker_layout_file: null # Required for manual mode; optional coordinate calibration for automatic mode.
+tracker_assignment: automatic # automatic, manual, or triangle_planes
+tracker_layout_file: null # Required for manual/triangle_planes; optional calibration for automatic.
+plane_parallel_tolerance: 1.0e-6
 control_frequency_hz: 10.0
 control_steps: null
 velocity_filter_alpha: 1.0

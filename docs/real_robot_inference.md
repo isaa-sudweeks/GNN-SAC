@@ -54,6 +54,50 @@ python sac/real_robot_infer.py \
 
 Install the optional SteamVR binding (`pip install openvr`) and start SteamVR before either command. The configuration must match training, especially the topology, scale, realism/control-graph settings, normalization, and graph features. The current simulation observation centers x/y and retains absolute z, so `com_relative_axes` defaults to `[true, true, false]`; set all three true only when that matches training. The first velocity observation is zero; subsequent velocities use elapsed monotonic time. Set `velocity_filter_alpha` below 1 for exponential smoothing.
 
+## Six-tracker triangle-plane reconstruction
+
+Use `tracker_assignment=triangle_planes` when the physical system has one puck per ideal/abstract node while the policy uses duplicated control-graph nodes. This mode reads each tracker's full position and orientation, reconstructs each abstract spherical joint, and copies that physical joint position to every control node whose name has the same prefix before `_tri_`.
+
+The layout explicitly records (1) which triangle carries each tracker, (2) which abstract joint the tracker is rigidly connected to, and (3) the two tracked triangle planes whose intersection contains that joint:
+
+```json
+{
+  "tracker_mounts": {
+    "B11": {
+      "triangle": "triangle_0",
+      "abstract_node": "node_0",
+      "joint_triangles": ["triangle_0", "triangle_1"],
+      "local_plane_normal": [0, 0, 1],
+      "local_plane_point_offset": [0, 0, 0]
+    },
+    "B12": {
+      "triangle": "triangle_1",
+      "abstract_node": "node_1",
+      "joint_triangles": ["triangle_1", "triangle_2"],
+      "local_plane_normal": [0, 0, 1],
+      "local_plane_point_offset": [0, 0, 0]
+    }
+  },
+  "steamvr_to_policy_matrix": [[1, 0, 0], [0, 0, 1], [0, 1, 0]],
+  "plane_parallel_tolerance": 1e-6
+}
+```
+
+Provide one entry for every ideal/abstract preset node and one uniquely named triangle for every physical tracker. Every name in `joint_triangles` must correspond to one of those tracker-mounted triangles. The `local_plane_normal` is the triangle normal expressed in that tracker's local SteamVR frame. If the tracker origin is not actually on the triangle plane, measure the vector from the tracker origin to any point on the plane in tracker-local coordinates and set `local_plane_point_offset`; leaving it zero applies the derivation's tracker-origin-on-plane assumption.
+
+Run the reconstructed mode with:
+
+```bash
+python sac/real_robot_infer.py \
+  model=/path/to/final.pt \
+  truss_topology=YOUR_PRESET \
+  serial_map_file=config/tracker_maps/vive_serial_map.json \
+  tracker_layout_file=/path/to/six_tracker_layout.json \
+  tracker_assignment=triangle_planes
+```
+
+For each joint, the code intersects its two measured planes and orthogonally projects the rigidly connected tracker's position onto that line. A frame is skipped when the planes are parallel or nearly parallel because the joint is not observable from that plane pair. The mechanical perpendicularity assumption must hold for each configured tracker/joint pair; mounting a puck on a triangle alone does not guarantee it.
+
 ## Transmitter command output and emergency stop
 
 Each control cycle prints the exact newline-delimited command expected by the Arduino USB transmitter:
@@ -66,4 +110,4 @@ Each normalized policy action is clipped to `[-1, 1]`, multiplied directly by th
 
 Pressing `Ctrl-C` prints one immediate zero-duration velocity command containing a zero for every configured transmitter channel, for example `VEL_DUR:0,0,0:0`, before the tracker source closes. Serial I/O is intentionally not implemented yet; the future writer should send the printed command plus `\n` at `serial_baud_rate` (115200 by default).
 
-For `use_virtual_node=true`, the wrapper computes the first non-rigid eigenvalue from the configured bar graph and normalizes it by the first frame, matching the policy's rigidity input contract. This is valid only when the configured nodes and edges describe the tracked physical framework; a reduced tracker set cannot reproduce full-robot rigidity.
+For `use_virtual_node=true`, the wrapper computes the first non-rigid eigenvalue from the configured bar graph and normalizes it by the first frame, matching the policy's rigidity input contract. Directly treating a reduced tracker set as the full graph cannot reproduce full-robot rigidity; triangle-plane mode first reconstructs and expands all configured control nodes before evaluating it.

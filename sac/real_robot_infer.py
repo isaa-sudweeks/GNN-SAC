@@ -28,8 +28,17 @@ from gnn_infer import load_agent_checkpoint, resolve_checkpoint
 from gnn_sac import GNNSAC
 
 
+@dataclass(frozen=True)
+class TrackerPose:
+    """One tracker pose, expressed in the SteamVR standing frame."""
+
+    position: np.ndarray
+    rotation_matrix: np.ndarray
+
+
 class TrackerSource(Protocol):
     def positions_by_serial(self) -> Mapping[str, np.ndarray]: ...
+    def poses_by_serial(self) -> Mapping[str, TrackerPose]: ...
     def close(self) -> None: ...
 
 
@@ -124,7 +133,7 @@ def _critical_rigidity(positions: np.ndarray, edge_index: np.ndarray) -> float:
 
 
 class SteamVRTrackerSource:
-    """Read valid tracker translations from OpenVR's standing coordinate frame."""
+    """Read valid tracker poses from OpenVR's standing coordinate frame."""
 
     def __init__(self):
         try:
@@ -137,13 +146,13 @@ class SteamVRTrackerSource:
         openvr.init(openvr.VRApplication_Background)
         self.system = openvr.VRSystem()
 
-    def positions_by_serial(self) -> dict[str, np.ndarray]:
+    def poses_by_serial(self) -> dict[str, TrackerPose]:
         poses = self.system.getDeviceToAbsoluteTrackingPose(
             self.openvr.TrackingUniverseStanding,
             0.0,
             self.openvr.k_unMaxTrackedDeviceCount,
         )
-        positions = {}
+        tracker_poses = {}
         for device_index, pose in enumerate(poses):
             if not pose.bDeviceIsConnected or not pose.bPoseIsValid:
                 continue
@@ -154,10 +163,23 @@ class SteamVRTrackerSource:
                 device_index, self.openvr.Prop_SerialNumber_String
             )
             matrix = pose.mDeviceToAbsoluteTracking
-            positions[str(serial)] = np.asarray(
-                [matrix[0][3], matrix[1][3], matrix[2][3]], dtype=np.float64
+            tracker_poses[str(serial)] = TrackerPose(
+                position=np.asarray(
+                    [matrix[0][3], matrix[1][3], matrix[2][3]], dtype=np.float64
+                ),
+                rotation_matrix=np.asarray(
+                    [[matrix[row][column] for column in range(3)] for row in range(3)],
+                    dtype=np.float64,
+                ),
             )
-        return positions
+        return tracker_poses
+
+    def positions_by_serial(self) -> dict[str, np.ndarray]:
+        """Retain the translation-only interface used by direct tracker layouts."""
+        return {
+            serial: pose.position
+            for serial, pose in self.poses_by_serial().items()
+        }
 
     def close(self) -> None:
         self.openvr.shutdown()
@@ -172,6 +194,18 @@ def _load_json(path_value: str) -> dict:
     return value
 
 
+@dataclass(frozen=True)
+class TrackerMount:
+    """Calibration needed to recover one abstract joint from triangle planes."""
+
+    tracker_id: str
+    triangle: str
+    abstract_node: str
+    joint_triangles: tuple[str, str]
+    local_plane_normal: np.ndarray
+    local_plane_point_offset: np.ndarray
+
+
 @dataclass
 class TrackerLayout:
     node_names: tuple[str, ...]
@@ -183,6 +217,8 @@ class TrackerLayout:
     steamvr_to_policy_matrix: np.ndarray
     reference_positions: np.ndarray | None = None
     assignment_mode: str = "manual"
+    tracker_mounts: dict[str, TrackerMount] | None = None
+    plane_parallel_tolerance: float = 1e-6
 
     @classmethod
     def from_files(cls, serial_map_file: str, layout_file: str) -> "TrackerLayout":
@@ -249,8 +285,10 @@ class TrackerLayout:
         serial_map = serial_data.get("serial_to_tracker_id", serial_data)
         layout_data = _load_json(tracker_layout_file) if tracker_layout_file else {}
         assignment_mode = str(getattr(cfg, "tracker_assignment", "automatic")).lower()
-        if assignment_mode not in {"automatic", "manual"}:
-            raise ValueError("tracker_assignment must be 'automatic' or 'manual'")
+        if assignment_mode not in {"automatic", "manual", "triangle_planes"}:
+            raise ValueError(
+                "tracker_assignment must be 'automatic', 'manual', or 'triangle_planes'"
+            )
         tracker_map = {
             str(k): str(v)
             for k, v in layout_data.get("tracker_id_to_node", {}).items()
@@ -266,6 +304,15 @@ class TrackerLayout:
             raise ValueError("steamvr_to_policy_matrix must be a finite 3x3 matrix")
         if abs(np.linalg.det(coordinate_matrix)) <= 1e-8:
             raise ValueError("steamvr_to_policy_matrix must be invertible")
+        tracker_mounts = cls._parse_tracker_mounts(layout_data, assignment_mode)
+        plane_parallel_tolerance = float(
+            layout_data.get(
+                "plane_parallel_tolerance",
+                getattr(cfg, "plane_parallel_tolerance", 1e-6),
+            )
+        )
+        if not np.isfinite(plane_parallel_tolerance) or plane_parallel_tolerance <= 0.0:
+            raise ValueError("plane_parallel_tolerance must be positive and finite")
 
         env = make_env(cfg)
         try:
@@ -298,6 +345,8 @@ class TrackerLayout:
                 steamvr_to_policy_matrix=coordinate_matrix,
                 reference_positions=reference_positions,
                 assignment_mode=assignment_mode,
+                tracker_mounts=tracker_mounts,
+                plane_parallel_tolerance=plane_parallel_tolerance,
             )
             result._validate_tracker_map()
             return result
@@ -306,6 +355,9 @@ class TrackerLayout:
 
     def _validate_tracker_map(self) -> None:
         if self.assignment_mode == "automatic":
+            return
+        if self.assignment_mode == "triangle_planes":
+            self._validate_tracker_mounts()
             return
         unknown_trackers = set(self.tracker_id_to_node) - set(self.serial_to_tracker_id.values())
         if unknown_trackers:
@@ -321,6 +373,126 @@ class TrackerLayout:
             raise ValueError(f"Every preset node needs one tracker; missing: {sorted(missing_nodes)}")
         if len(set(self.tracker_id_to_node.values())) != len(self.tracker_id_to_node):
             raise ValueError("Only one tracker may map to each node")
+
+    @staticmethod
+    def _parse_tracker_mounts(
+        layout_data: Mapping[str, object], assignment_mode: str
+    ) -> dict[str, TrackerMount] | None:
+        if assignment_mode != "triangle_planes":
+            return None
+        raw_mounts = layout_data.get("tracker_mounts")
+        if not isinstance(raw_mounts, dict) or not raw_mounts:
+            raise ValueError(
+                "triangle_planes assignment requires a nonempty tracker_mounts object"
+            )
+        mounts = {}
+        for raw_tracker_id, raw_mount in raw_mounts.items():
+            tracker_id = str(raw_tracker_id)
+            if not isinstance(raw_mount, dict):
+                raise ValueError(f"tracker_mounts[{tracker_id!r}] must be an object")
+            missing_fields = {
+                field
+                for field in ("triangle", "abstract_node")
+                if field not in raw_mount
+            }
+            if missing_fields:
+                raise ValueError(
+                    f"tracker_mounts[{tracker_id!r}] is missing fields: "
+                    f"{sorted(missing_fields)}"
+                )
+            triangles = raw_mount.get("joint_triangles")
+            if not isinstance(triangles, list) or len(triangles) != 2:
+                raise ValueError(
+                    f"tracker_mounts[{tracker_id!r}].joint_triangles must contain two triangles"
+                )
+            if str(triangles[0]) == str(triangles[1]):
+                raise ValueError(
+                    f"tracker_mounts[{tracker_id!r}].joint_triangles must be distinct"
+                )
+            normal = np.asarray(
+                raw_mount.get("local_plane_normal", [0.0, 0.0, 1.0]),
+                dtype=np.float64,
+            )
+            offset = np.asarray(
+                raw_mount.get("local_plane_point_offset", [0.0, 0.0, 0.0]),
+                dtype=np.float64,
+            )
+            if normal.shape != (3,) or not np.isfinite(normal).all() or np.linalg.norm(normal) <= 1e-8:
+                raise ValueError(
+                    f"tracker_mounts[{tracker_id!r}].local_plane_normal must be a finite nonzero 3-vector"
+                )
+            if offset.shape != (3,) or not np.isfinite(offset).all():
+                raise ValueError(
+                    f"tracker_mounts[{tracker_id!r}].local_plane_point_offset must be a finite 3-vector"
+                )
+            mounts[tracker_id] = TrackerMount(
+                tracker_id=tracker_id,
+                triangle=str(raw_mount["triangle"]),
+                abstract_node=str(raw_mount["abstract_node"]),
+                joint_triangles=(str(triangles[0]), str(triangles[1])),
+                local_plane_normal=normal / np.linalg.norm(normal),
+                local_plane_point_offset=offset,
+            )
+        return mounts
+
+    def _validate_tracker_mounts(self) -> None:
+        mounts = self.tracker_mounts or {}
+        known_tracker_ids = set(self.serial_to_tracker_id.values())
+        unknown_trackers = set(mounts) - known_tracker_ids
+        if unknown_trackers:
+            raise ValueError(
+                "Tracker mounts refer to tracker IDs absent from the serial map: "
+                f"{sorted(unknown_trackers)}"
+            )
+        triangle_to_tracker = {}
+        abstract_nodes = set()
+        for mount in mounts.values():
+            if mount.triangle in triangle_to_tracker:
+                raise ValueError(
+                    f"Triangle {mount.triangle!r} has more than one tracker mount"
+                )
+            triangle_to_tracker[mount.triangle] = mount.tracker_id
+            if mount.abstract_node in abstract_nodes:
+                raise ValueError(
+                    f"Abstract node {mount.abstract_node!r} has more than one rigidly connected tracker"
+                )
+            abstract_nodes.add(mount.abstract_node)
+        missing_triangles = {
+            triangle
+            for mount in mounts.values()
+            for triangle in mount.joint_triangles
+            if triangle not in triangle_to_tracker
+        }
+        if missing_triangles:
+            raise ValueError(
+                "Joint reconstruction refers to triangles without tracker mounts: "
+                f"{sorted(missing_triangles)}"
+            )
+        for mount in mounts.values():
+            if mount.triangle not in mount.joint_triangles:
+                raise ValueError(
+                    f"Tracker {mount.tracker_id!r} is mounted on {mount.triangle!r}, which must "
+                    "also appear in its joint_triangles"
+                )
+        graph_abstract_nodes = {
+            self._abstract_node_name(node_name) for node_name in self.node_names
+        }
+        missing_abstract_nodes = graph_abstract_nodes - abstract_nodes
+        unknown_abstract_nodes = abstract_nodes - graph_abstract_nodes
+        if unknown_abstract_nodes:
+            raise ValueError(
+                "Tracker mounts refer to unknown abstract nodes: "
+                f"{sorted(unknown_abstract_nodes)}"
+            )
+        if missing_abstract_nodes:
+            raise ValueError(
+                "Every preset abstract node needs one tracker mount; missing: "
+                f"{sorted(missing_abstract_nodes)}"
+            )
+
+    @staticmethod
+    def _abstract_node_name(node_name: str) -> str:
+        return str(node_name).split("_tri_", 1)[0]
 
     @staticmethod
     def _minimum_cost_assignment(cost: np.ndarray) -> np.ndarray:
@@ -377,7 +549,110 @@ class TrackerLayout:
         )
         return mapping
 
-    def ordered_positions(self, positions_by_serial: Mapping[str, np.ndarray]) -> np.ndarray:
+    @property
+    def requires_orientations(self) -> bool:
+        return self.assignment_mode == "triangle_planes"
+
+    @staticmethod
+    def _coerce_tracker_pose(value: object, serial: str) -> TrackerPose:
+        if isinstance(value, TrackerPose):
+            position = np.asarray(value.position, dtype=np.float64)
+            rotation = np.asarray(value.rotation_matrix, dtype=np.float64)
+        elif isinstance(value, Mapping):
+            position = np.asarray(value.get("position"), dtype=np.float64)
+            rotation_value = value.get("rotation_matrix", value.get("rotation"))
+            rotation = np.asarray(rotation_value, dtype=np.float64)
+        else:
+            raise ValueError(
+                f"Tracker {serial!r} pose must provide position and rotation_matrix"
+            )
+        if position.shape != (3,) or not np.isfinite(position).all():
+            raise ValueError(f"Tracker {serial!r} position must be a finite 3-vector")
+        if rotation.shape != (3, 3) or not np.isfinite(rotation).all():
+            raise ValueError(f"Tracker {serial!r} rotation_matrix must be a finite 3x3 matrix")
+        orthogonality_error = np.linalg.norm(rotation.T @ rotation - np.eye(3), ord=np.inf)
+        if orthogonality_error > 1e-4 or np.linalg.det(rotation) < 0.0:
+            raise ValueError(f"Tracker {serial!r} rotation_matrix must be a proper rotation")
+        return TrackerPose(position=position, rotation_matrix=rotation)
+
+    def _triangle_planes(
+        self, poses_by_serial: Mapping[str, object]
+    ) -> tuple[dict[str, tuple[np.ndarray, np.ndarray]], dict[str, np.ndarray]]:
+        mounts = self.tracker_mounts or {}
+        pose_by_tracker = {}
+        for serial, raw_pose in poses_by_serial.items():
+            tracker_id = self.serial_to_tracker_id.get(str(serial))
+            if tracker_id in mounts:
+                pose_by_tracker[tracker_id] = self._coerce_tracker_pose(raw_pose, str(serial))
+        missing = sorted(set(mounts) - set(pose_by_tracker))
+        if missing:
+            raise MissingTrackerFrame(
+                f"Missing valid SteamVR poses for tracker mounts: {missing}"
+            )
+
+        planes = {}
+        anchor_positions = {}
+        coordinate_matrix = self.steamvr_to_policy_matrix
+        for tracker_id, mount in mounts.items():
+            pose = pose_by_tracker[tracker_id]
+            position = coordinate_matrix @ pose.position
+            normal = np.linalg.solve(
+                coordinate_matrix.T,
+                pose.rotation_matrix @ mount.local_plane_normal,
+            )
+            normal_length = np.linalg.norm(normal)
+            if normal_length <= 1e-8:
+                raise ValueError(
+                    f"Tracker {tracker_id!r} produced a zero triangle-plane normal"
+                )
+            plane_point = position + coordinate_matrix @ (
+                pose.rotation_matrix @ mount.local_plane_point_offset
+            )
+            planes[mount.triangle] = (plane_point, normal / normal_length)
+            anchor_positions[tracker_id] = position
+        return planes, anchor_positions
+
+    def reconstructed_positions(self, poses_by_serial: Mapping[str, object]) -> np.ndarray:
+        """Recover abstract joints and expand them into preset control-graph order."""
+        if not self.requires_orientations:
+            raise ValueError("Joint reconstruction requires triangle_planes assignment")
+        planes, anchor_positions = self._triangle_planes(poses_by_serial)
+        positions_by_abstract_node = {}
+        for mount in (self.tracker_mounts or {}).values():
+            triangle_i, triangle_j = mount.joint_triangles
+            point_i, normal_i = planes[triangle_i]
+            point_j, normal_j = planes[triangle_j]
+            line_vector = np.cross(normal_i, normal_j)
+            line_scale = np.linalg.norm(line_vector)
+            if line_scale <= self.plane_parallel_tolerance:
+                raise MissingTrackerFrame(
+                    f"Triangle planes {triangle_i!r} and {triangle_j!r} are parallel or "
+                    f"too nearly parallel (cross-normal magnitude={line_scale:.3e})"
+                )
+            line_direction = line_vector / line_scale
+            constraints = np.stack((normal_i, normal_j), axis=0)
+            right_hand_side = np.asarray(
+                [normal_i @ point_i, normal_j @ point_j], dtype=np.float64
+            )
+            line_point = np.linalg.lstsq(
+                constraints, right_hand_side, rcond=None
+            )[0]
+            anchor = anchor_positions[mount.tracker_id]
+            joint_position = line_point + line_direction * (
+                line_direction @ (anchor - line_point)
+            )
+            positions_by_abstract_node[mount.abstract_node] = joint_position
+
+        return np.stack(
+            [
+                positions_by_abstract_node[self._abstract_node_name(node_name)]
+                for node_name in self.node_names
+            ]
+        )
+
+    def ordered_positions(self, positions_by_serial: Mapping[str, object]) -> np.ndarray:
+        if self.requires_orientations:
+            return self.reconstructed_positions(positions_by_serial)
         tracker_map = self.tracker_id_to_node
         if self.assignment_mode == "automatic" and not tracker_map:
             tracker_map = self._automatic_tracker_map(positions_by_serial)
@@ -492,7 +767,16 @@ def _run_print_only_control_loop(cfg, source, layout, builder, agent, formatter)
         while cfg.control_steps is None or step < int(cfg.control_steps):
             now = time.monotonic()
             try:
-                positions = layout.ordered_positions(source.positions_by_serial())
+                if getattr(layout, "requires_orientations", False):
+                    poses_method = getattr(source, "poses_by_serial", None)
+                    if poses_method is None:
+                        raise RuntimeError(
+                            "triangle_planes assignment requires a tracker source that provides orientations"
+                        )
+                    tracker_frame = poses_method()
+                else:
+                    tracker_frame = source.positions_by_serial()
+                positions = layout.ordered_positions(tracker_frame)
                 observation = builder.build(positions, now)
                 action = agent.act(
                     observation,
