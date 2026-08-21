@@ -35,6 +35,8 @@ class OnlineTrainer(Trainer):
         self._pretrain_complete = False
         self._optimizer_updates = 0
         self._last_eval_step = None
+        self._eval_count = 0
+        self._record_video_this_eval = True
         self.reward_normalizer = self._make_reward_normalizer()
         self.performance_profiler = TrainingProfiler.from_config(self.cfg, self.logger)
         self._eval_training_topologies = []
@@ -228,11 +230,19 @@ class OnlineTrainer(Trainer):
         return self._eval_one()
 
     def _evaluate_and_log(self):
+        video_every_n_evals = int(getattr(self.cfg, "video_every_n_evals", 1))
+        if video_every_n_evals < 1:
+            raise ValueError("video_every_n_evals must be at least 1.")
+        eval_count = int(getattr(self, "_eval_count", 0))
+        self._record_video_this_eval = bool(getattr(self.cfg, "save_video", False)) and (
+            eval_count % video_every_n_evals == 0
+        )
         eval_metrics = self.eval()
         eval_metrics.update(self.common_metrics())
         self.logger.log(eval_metrics, 'eval')
         self.report_eval_metrics(eval_metrics, self._step)
         self._last_eval_step = int(self._step)
+        self._eval_count = eval_count + 1
         return eval_metrics
 
     def _evaluate_final_policy(self):
@@ -244,11 +254,14 @@ class OnlineTrainer(Trainer):
         return self._evaluate_and_log()
 
     def _eval_one(self, task_idx=None, video_key="videos/eval_video"):
-        ep_rewards, ep_successes, ep_lengths = [], [], []
+        ep_rewards, ep_successes, ep_lengths, ep_distances = [], [], [], []
+        record_video = bool(getattr(self.cfg, "save_video", False)) and bool(
+            getattr(self, "_record_video_this_eval", True)
+        )
         for i in range(self.cfg.eval_episodes):
             obs = self.eval_env.reset(task_idx=task_idx) if task_idx is not None else self.eval_env.reset()
-            done, ep_reward, t = False, 0, 0
-            if self.cfg.save_video:
+            done, ep_reward, ep_distance, t = False, 0, 0, 0
+            if record_video:
                 self.logger.video.init(self.eval_env, enabled=(i==0))
             while not done:
                 #if getattr(self.cfg, 'device', 'cuda') == 'cuda':
@@ -256,23 +269,26 @@ class OnlineTrainer(Trainer):
                 action = self.agent.act(obs, t0=t==0, eval_mode=True)
                 obs, reward, done, info = self.eval_env.step(action)
                 ep_reward += reward
+                ep_distance += self._scalar_value(info.get("com_delta_x", 0.0))
                 t += 1
-                if self.cfg.save_video:
+                if record_video:
                     self.logger.video.record(self.eval_env)
             ep_rewards.append(self._scalar_value(ep_reward))
             ep_successes.append(self._scalar_value(info['success']))
             ep_lengths.append(t)
-            if self.cfg.save_video:
+            ep_distances.append(ep_distance)
+            if record_video:
                 self.logger.video.save(self._step, key=video_key)
         return dict(
             episode_reward=np.nanmean(ep_rewards),
             episode_success=np.nanmean(ep_successes),
             episode_length=np.nanmean(ep_lengths),
+            episode_distance=np.nanmean(ep_distances),
         )
 
     def _eval_multitask(self):
         metrics = {}
-        task_rewards, task_successes, task_lengths = [], [], []
+        task_rewards, task_successes, task_lengths, task_distances = [], [], [], []
         for task_idx in range(int(getattr(self.eval_env, "num_envs", 1))):
             task_name = self._eval_task_name(task_idx)
             task_key = self._metric_key(task_name)
@@ -283,13 +299,16 @@ class OnlineTrainer(Trainer):
             metrics[f"{task_key}_episode_reward"] = task_metrics["episode_reward"]
             metrics[f"{task_key}_episode_success"] = task_metrics["episode_success"]
             metrics[f"{task_key}_episode_length"] = task_metrics["episode_length"]
+            metrics[f"{task_key}_episode_distance"] = task_metrics["episode_distance"]
             task_rewards.append(task_metrics["episode_reward"])
             task_successes.append(task_metrics["episode_success"])
             task_lengths.append(task_metrics["episode_length"])
+            task_distances.append(task_metrics["episode_distance"])
         metrics.update(
             episode_reward=np.nanmean(task_rewards),
             episode_success=np.nanmean(task_successes),
             episode_length=np.nanmean(task_lengths),
+            episode_distance=np.nanmean(task_distances),
         )
         return metrics
 
@@ -299,9 +318,9 @@ class OnlineTrainer(Trainer):
 
     def _eval_topologies(self, topology_indices):
         metrics = {}
-        topology_rewards, topology_successes, topology_lengths = [], [], []
-        trained_rewards, trained_successes, trained_lengths = [], [], []
-        heldout_rewards, heldout_successes, heldout_lengths = [], [], []
+        topology_rewards, topology_successes, topology_lengths, topology_distances = [], [], [], []
+        trained_rewards, trained_successes, trained_lengths, trained_distances = [], [], [], []
+        heldout_rewards, heldout_successes, heldout_lengths, heldout_distances = [], [], [], []
         trained_topologies = set(self._eval_training_topologies or topology_indices)
         heldout_topologies = set(self._eval_heldout_topologies)
         for topology, env_idx in topology_indices.items():
@@ -313,30 +332,37 @@ class OnlineTrainer(Trainer):
             metrics[f"{topology_key}_episode_reward"] = topology_metrics["episode_reward"]
             metrics[f"{topology_key}_episode_success"] = topology_metrics["episode_success"]
             metrics[f"{topology_key}_episode_length"] = topology_metrics["episode_length"]
+            metrics[f"{topology_key}_episode_distance"] = topology_metrics["episode_distance"]
             topology_rewards.append(topology_metrics["episode_reward"])
             topology_successes.append(topology_metrics["episode_success"])
             topology_lengths.append(topology_metrics["episode_length"])
+            topology_distances.append(topology_metrics["episode_distance"])
             if topology in trained_topologies:
                 trained_rewards.append(topology_metrics["episode_reward"])
                 trained_successes.append(topology_metrics["episode_success"])
                 trained_lengths.append(topology_metrics["episode_length"])
+                trained_distances.append(topology_metrics["episode_distance"])
             if topology in heldout_topologies:
                 heldout_rewards.append(topology_metrics["episode_reward"])
                 heldout_successes.append(topology_metrics["episode_success"])
                 heldout_lengths.append(topology_metrics["episode_length"])
+                heldout_distances.append(topology_metrics["episode_distance"])
         metrics.update(
             episode_reward=np.nanmean(trained_rewards),
             episode_success=np.nanmean(trained_successes),
             episode_length=np.nanmean(trained_lengths),
+            episode_distance=np.nanmean(trained_distances),
             all_episode_reward=np.nanmean(topology_rewards),
             all_episode_success=np.nanmean(topology_successes),
             all_episode_length=np.nanmean(topology_lengths),
+            all_episode_distance=np.nanmean(topology_distances),
         )
         if heldout_rewards:
             metrics.update(
                 heldout_episode_reward=np.nanmean(heldout_rewards),
                 heldout_episode_success=np.nanmean(heldout_successes),
                 heldout_episode_length=np.nanmean(heldout_lengths),
+                heldout_episode_distance=np.nanmean(heldout_distances),
             )
         return metrics
 

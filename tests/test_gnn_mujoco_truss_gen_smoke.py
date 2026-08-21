@@ -137,6 +137,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
                 reward = torch.tensor(float(self.active_env_idx + 1))
                 info = {
                     "success": torch.tensor(float(self.active_env_idx)),
+                    "com_delta_x": torch.tensor(0.25 * float(self.active_env_idx + 1)),
                     "terminated": torch.tensor(0.0),
                     "truncated": torch.tensor(1.0),
                 }
@@ -200,6 +201,9 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         self.assertEqual(metrics["octahedron_episode_reward"], 1.0)
         self.assertEqual(metrics["tetrahedron_episode_reward"], 2.0)
         self.assertEqual(metrics["episode_reward"], 1.5)
+        self.assertEqual(metrics["octahedron_episode_distance"], 0.25)
+        self.assertEqual(metrics["tetrahedron_episode_distance"], 0.5)
+        self.assertEqual(metrics["episode_distance"], 0.375)
 
         trainer._activate_shared_eval_env(1724)
         self.assertEqual(eval_env.selected_env_indices, [])
@@ -222,7 +226,11 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
 
             def step(self, action):
                 value = float(self.active_env_idx + 1)
-                info = {"success": torch.tensor(value), "truncated": torch.tensor(1.0)}
+                info = {
+                    "success": torch.tensor(value),
+                    "truncated": torch.tensor(1.0),
+                    "com_delta_x": torch.tensor(value / 4),
+                }
                 return torch.tensor([value]), torch.tensor(value), True, info
 
             def close(self):
@@ -286,8 +294,11 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         metrics = trainer.eval()
 
         self.assertEqual(metrics["episode_reward"], 1.5)
+        self.assertEqual(metrics["episode_distance"], 0.375)
         self.assertEqual(metrics["heldout_episode_reward"], 3.0)
+        self.assertEqual(metrics["heldout_episode_distance"], 0.75)
         self.assertEqual(metrics["all_episode_reward"], 2.0)
+        self.assertEqual(metrics["all_episode_distance"], 0.5)
         self.assertEqual(metrics["henneberg_n6_1tube_2_episode_reward"], 3.0)
 
     def test_extra_eval_topologies_require_native_mujoco_backend(self):
@@ -574,6 +585,28 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         self.assertFalse(OnlineTrainer._crossed_eval_interval(6, 9, 5))
         self.assertTrue(OnlineTrainer._crossed_eval_interval(9, 12, 5))
 
+    def test_video_every_n_evals_records_first_then_every_tenth(self):
+        trainer = OnlineTrainer.__new__(OnlineTrainer)
+        trainer.cfg = SimpleNamespace(save_video=True, video_every_n_evals=10)
+        trainer._step = 0
+        trainer._eval_count = 0
+        recorded = []
+        trainer.eval = lambda: recorded.append(trainer._record_video_this_eval) or {
+            "episode_reward": 0.0
+        }
+        trainer.common_metrics = lambda: {}
+        trainer.logger = SimpleNamespace(log=lambda *args: None)
+        trainer.report_eval_metrics = lambda *args: None
+
+        for _ in range(21):
+            trainer._evaluate_and_log()
+
+        self.assertEqual(
+            [index for index, should_record in enumerate(recorded) if should_record],
+            [0, 10, 20],
+        )
+        self.assertEqual(trainer._eval_count, 21)
+
     def test_repeated_truss_envs_reset_and_step(self):
         cfg = flat_test_cfg(
             num_envs=4,
@@ -632,6 +665,32 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             self.assertTrue(float(reward) == float(reward))
             self.assertIn("terminated", info)
             self.assertIn("truncated", info)
+        finally:
+            env.close()
+
+    def test_native_graph_features_flow_from_environment_to_policy(self):
+        cfg = graph_test_cfg(
+            graph_features={
+                "node_roles": True,
+                "edge_roles": True,
+                "edge_distance": True,
+            },
+            max_steps=1,
+            episode_length=1,
+            nsubsteps=1,
+        )
+        env = make_env(cfg)
+        try:
+            obs = env.reset()
+            self.assertEqual(obs.x.shape[1], 6)
+            self.assertEqual(obs.edge_role.shape, (obs.edge_index.shape[1],))
+            self.assertEqual(cfg.effective_node_feature_dim, 10)
+            self.assertEqual(cfg.edge_feature_dim, 4)
+
+            agent = GNNSAC(cfg)
+            action = agent.act(obs, eval_mode=True)
+            self.assertEqual(action.shape, (obs.num_nodes, 1))
+            self.assertTrue(torch.isfinite(action).all())
         finally:
             env.close()
 
@@ -907,6 +966,26 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             results = env.step_many(actions, env_indices=[0, 1])
             self.assertEqual([result[0].num_nodes for result in results], control_node_counts)
             self.assertEqual([result[3]["task"] for result in results], cfg.tasks)
+        finally:
+            env.close()
+
+    def test_graph_topology_list_allows_variable_edge_role_spaces(self):
+        cfg = graph_test_cfg(
+            task="truss-graph",
+            truss_topologies=["tetrahedron", "octahedron", "henneberg_n6_1tube_2"],
+            multitask=False,
+            num_envs=1,
+            max_steps=2,
+            nsubsteps=1,
+            domain_randomization=False,
+            graph_features={"edge_roles": True},
+        )
+        env = make_env(cfg)
+        try:
+            observations = env.reset_many(env_indices=[0, 1, 2])
+            self.assertEqual([obs.num_nodes for obs in observations], [8, 12, 13])
+            for obs in observations:
+                self.assertEqual(obs.edge_role.shape, (obs.edge_index.shape[1],))
         finally:
             env.close()
 

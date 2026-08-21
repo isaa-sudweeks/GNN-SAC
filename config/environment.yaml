@@ -53,11 +53,17 @@ topology_id: octahedron # Stable identifier for the default robot topology.
 use_graph_observations: false # Whether observations should be emitted as graph data instead of flat tensors.
 node_feature_dim: 6 # Per-node graph feature width: relative xyz position + xyz velocity.
 edge_feature_dim: 0 # Per-edge feature width for future graph observations.
+effective_node_feature_dim: 6 # Resolved policy input width after configurable graph features.
+edge_role_vocabulary: [tube, connector, virtual] # Stable semantic order used by edge-role one-hot features.
+graph_features:
+  node_roles: false # Append [actuated, passive] to each physical node observation.
+  edge_roles: false # Append [tube, connector, virtual] to each directed message edge.
+  edge_distance: false # Append endpoint distance computed from the observed xyz coordinates.
 num_nodes: 6 # Number of node bodies in the default octahedron XML.
 num_edges: 12 # Number of structural/actuated tendon edges in the default octahedron XML.
 num_actuated_edges: 8 # Number of tendon edges controlled by the policy.
 normalize_observations: true # Whether future wrappers should normalize observation features.
-normalize_rewards: false # Normalize training rewards using task-specific discounted-return variance.
+normalize_rewards: true # Normalize training rewards using task-specific discounted-return variance.
 reward_norm_gamma: null # Discount for normalization returns; null uses the SAC training discount.
 reward_norm_epsilon: 1e-8 # Numerical floor added to each task's running return variance.
 reward_norm_clip: 10.0 # Symmetric bound applied after reward normalization.

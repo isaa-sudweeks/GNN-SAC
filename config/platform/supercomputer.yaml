@@ -17,6 +17,8 @@ checkpoint_freq: 100_000
 checkpoint_keep_last: 5
 set_wandb_offline: true
 device: cuda
+mjx_impl: warp # Use the NVIDIA Warp MJX implementation for supercomputer runs.
+num_envs: 1536 # Total training environments across all configured topologies.
 
 # Submitit uses this Slurm launcher only in Hydra multirun mode.
 hydra:
@@ -26,12 +28,15 @@ hydra:
   launcher:
     setup:
       - export PYTHONPATH=${oc.env:PWD}/sac:${oc.env:PWD}:${oc.env:PYTHONPATH,}
+      - export TMPDIR=${run_root}/tmp/$SLURM_JOB_ID-$SLURM_ARRAY_TASK_ID
+      - export TORCHINDUCTOR_CACHE_DIR=${run_root}/cache/torchinductor-$SLURM_JOB_ID-$SLURM_ARRAY_TASK_ID
+      - mkdir -p "$TMPDIR" "$TORCHINDUCTOR_CACHE_DIR"
     timeout_min: 1440
     nodes: 1
     tasks_per_node: 1
     cpus_per_task: 5
     gpus_per_node: 1
-    mem_gb: 32
+    mem_gb: 128
     name: ${exp_name}-${seed}
     signal_delay_s: 120
     max_num_timeout: 20

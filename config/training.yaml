@@ -7,11 +7,11 @@ device: cpu # Torch device used for model training; use cpu when CUDA is unavail
 work_dir: ??? # Output directory; Hydra fills this when left unresolved.
 
 # Training schedule
-steps: 1_000_000 # Total environment steps to collect before ending training.
+steps: 10_000_000 # Total environment steps to collect before ending training.
 seed_steps: 5_000 # Random-action steps collected before policy updates begin; may be raised by env setup.
 pretrain_steps: 1_000 # Number of updates to run once when seed data first becomes available.
-eval_freq: 100_000 # Environment-step interval between evaluation passes.
-eval_episodes: 3 # Number of episodes averaged for each evaluation pass.
+eval_freq: 20_000 # Environment-step interval between evaluation passes.
+eval_episodes: 5 # Number of episodes averaged for each evaluation pass.
 eval_at_end: true # Evaluate the final policy unless this exact global step was already evaluated.
 progress_freq: 10_000 # Environment-step interval for collection progress logs; the final step is always logged.
 eval_task: null # Task key for evaluation, if different from training. Defaults to training task.
@@ -32,6 +32,7 @@ checkpoint_dir: checkpoints # Directory for resumable checkpoints, relative to w
 checkpoint_keep_last: 3 # Number of numbered step checkpoints to keep; latest.pt is always retained.
 resume_from_checkpoint: null # Path to a checkpoint, or "latest" to load checkpoint_dir/latest.pt.
 save_video: false # Whether to render and log video for the first evaluation episode.
+video_every_n_evals: 10 # Record video on the first evaluation, then every N evaluations.
 enable_wandb: true # Whether to send metrics, config, video, and artifacts to Weights & Biases.
 wandb_dir: null # W&B storage parent; null uses the GNN-SAC root so all offline runs collect in ./wandb.
 wandb_project: ${project} # W&B project name.

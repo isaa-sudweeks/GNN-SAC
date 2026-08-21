@@ -2,6 +2,7 @@
 
 sac_backend: gnn
 exp_name: gnn-octahedron-node-sum
+pcgrad: true # Project conflicting per-task actor and critic gradients during GNN training.
 
 # Graph environment
 task: truss-graph

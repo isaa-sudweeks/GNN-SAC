@@ -6,7 +6,7 @@ from typing import Mapping
 import torch
 from torch_geometric.data import Batch, Data
 
-from common.graph_transforms import prepare_graph
+from common.graph_transforms import graph_feature_flags, prepare_graph
 
 @dataclass(frozen=True)
 class ReplayBatch:
@@ -126,12 +126,13 @@ class _GNNTaskBuffer:
 
         with subphase("graph_preparation"):
             use_virtual_node = bool(getattr(self.cfg, "use_virtual_node", False))
+            feature_flags = graph_feature_flags(self.cfg)
             prepared_obs = [
-                prepare_graph(graph, use_virtual_node=use_virtual_node)
+                prepare_graph(graph, use_virtual_node=use_virtual_node, **feature_flags)
                 for graph in raw_obs
             ]
             prepared_next_obs = [
-                prepare_graph(graph, use_virtual_node=use_virtual_node)
+                prepare_graph(graph, use_virtual_node=use_virtual_node, **feature_flags)
                 for graph in raw_next_obs
             ]
 

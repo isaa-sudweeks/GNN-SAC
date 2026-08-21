@@ -1,4 +1,4 @@
-torch
+torch>=2.11.0
 tensordict
 numpy
 gymnasium[mujoco]
@@ -6,9 +6,14 @@ mujoco
 mujoco-mjx
 hydra-core
 hydra-submitit-launcher
+jax[cuda13]>=0.11.0; sys_platform == "linux"
+jax>=0.11.0; sys_platform != "linux"
 omegaconf
 termcolor
 optuna
+pandas
+plotly
+kaleido
 wandb[media]
-mujoco-truss-gen>=0.11.2
+mujoco-truss-gen>=0.12.2
 torch_geometric
