@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 import sys
 import time
-from typing import Mapping, Protocol
+from typing import Callable, Mapping, Protocol
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SAC_ROOT = Path(__file__).resolve().parent
@@ -44,6 +46,17 @@ class TrackerSource(Protocol):
 
 class MissingTrackerFrame(RuntimeError):
     """A transient frame that does not contain every configured tracker."""
+
+
+class SerialAcknowledgmentTimeout(TimeoutError):
+    """The USB transmitter did not confirm a command before the deadline."""
+
+    def __init__(self, command: str, timeout_seconds: float):
+        super().__init__(
+            f"No transmitter acknowledgment within {timeout_seconds:g}s for {command}"
+        )
+        self.command = command
+        self.timeout_seconds = timeout_seconds
 
 
 class SerialVelocityCommandFormatter:
@@ -109,6 +122,268 @@ class SerialVelocityCommandFormatter:
     def emergency_stop_command(self) -> str:
         zeros = ",".join("0" for _ in self.serial_node_order)
         return f"VEL_DUR:{zeros}:0"
+
+
+class CommandTransport(Protocol):
+    """Output boundary for firmware-compatible velocity commands."""
+
+    acknowledgment_gated: bool
+
+    def send(self, command: str) -> None: ...
+    def emergency_stop(self, command: str, *, reason: str) -> None: ...
+    def close(self) -> None: ...
+
+
+class PrintCommandTransport:
+    """Preserve the safe, print-only command path."""
+
+    acknowledgment_gated = False
+
+    def send(self, command: str) -> None:
+        print(command, flush=True)
+
+    def emergency_stop(self, command: str, *, reason: str) -> None:
+        print(command, flush=True)
+        print(f"Emergency stop command printed after {reason}.", file=sys.stderr, flush=True)
+
+    def close(self) -> None:
+        pass
+
+
+class SerialCommandTransport:
+    """Send one newline-delimited command at a time and wait for firmware ACK output."""
+
+    acknowledgment_gated = True
+
+    _COMPLETION_RE = re.compile(r"^VEL_DUR command completed in (\d+) ms$")
+    _FAILURE_RE = re.compile(
+        r"^FAILED to send to node (\d+) after (\d+) attempts$"
+    )
+
+    def __init__(
+        self,
+        port: str,
+        baud_rate: int,
+        serial_node_order,
+        *,
+        ack_timeout_seconds: float,
+        startup_delay_seconds: float,
+        serial_factory: Callable | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
+        if port is None:
+            raise ValueError("serial_port must be set when command_transport=serial")
+        port = str(port).strip()
+        if not port or port.lower() in ("null", "none"):
+            raise ValueError("serial_port must be set when command_transport=serial")
+        self.baud_rate = int(baud_rate)
+        if self.baud_rate <= 0:
+            raise ValueError("serial_baud_rate must be positive")
+        self.ack_timeout_seconds = float(ack_timeout_seconds)
+        if (
+            not np.isfinite(self.ack_timeout_seconds)
+            or self.ack_timeout_seconds <= 0.0
+        ):
+            raise ValueError("serial_ack_timeout_s must be positive and finite")
+        self.startup_delay_seconds = float(startup_delay_seconds)
+        if (
+            not np.isfinite(self.startup_delay_seconds)
+            or self.startup_delay_seconds < 0.0
+        ):
+            raise ValueError("serial_startup_delay_s must be nonnegative and finite")
+        self.serial_node_order = tuple(str(name) for name in serial_node_order)
+        if not self.serial_node_order:
+            raise ValueError("serial_node_order must contain at least one node")
+
+        if serial_factory is None:
+            try:
+                import serial
+            except ImportError as exc:
+                raise RuntimeError(
+                    "pyserial is required when command_transport=serial; "
+                    "install requirements.txt"
+                ) from exc
+            serial_factory = serial.Serial
+
+        self._monotonic = monotonic
+        self._sleep = sleep
+        self._serial = serial_factory(
+            port=port,
+            baudrate=self.baud_rate,
+            timeout=min(0.1, self.ack_timeout_seconds),
+            write_timeout=self.ack_timeout_seconds,
+        )
+        self.port = port
+        self._first_confirmed_send_time: float | None = None
+        self._last_confirmed_send_time: float | None = None
+        self._in_flight_command: str | None = None
+        self.confirmed_commands = 0
+        self.commands_with_failures = 0
+        self.ack_timeouts = 0
+        self.expected_node_deliveries = 0
+        self.dropped_node_deliveries = 0
+        self.node_drop_counts: Counter[int] = Counter()
+        if self.startup_delay_seconds > 0.0:
+            self._sleep(self.startup_delay_seconds)
+        reset_input_buffer = getattr(self._serial, "reset_input_buffer", None)
+        if reset_input_buffer is not None:
+            reset_input_buffer()
+        print(
+            f"Serial transport connected to {self.port} @ {self.baud_rate} baud.",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    @property
+    def command_in_flight(self) -> bool:
+        return self._in_flight_command is not None
+
+    def _write_line(self, command: str) -> None:
+        self._serial.write((command + "\n").encode("utf-8"))
+        self._serial.flush()
+
+    def _node_label(self, one_based_index: int) -> str:
+        if 1 <= one_based_index <= len(self.serial_node_order):
+            return f"{one_based_index}:{self.serial_node_order[one_based_index - 1]}"
+        return f"{one_based_index}:unknown"
+
+    def _format_stats(
+        self,
+        *,
+        round_trip_ms: float | None = None,
+        firmware_ms: int | None = None,
+        current_failures: Mapping[int, int] | None = None,
+    ) -> str:
+        if (
+            self._first_confirmed_send_time is not None
+            and self._last_confirmed_send_time is not None
+        ):
+            send_span = (
+                self._last_confirmed_send_time - self._first_confirmed_send_time
+            )
+        else:
+            send_span = 0.0
+        effective_hz = (
+            (self.confirmed_commands - 1) / send_span
+            if self.confirmed_commands > 1 and send_span > 0.0
+            else 0.0
+        )
+        if self.expected_node_deliveries:
+            success_percent = 100.0 * (
+                1.0
+                - self.dropped_node_deliveries / self.expected_node_deliveries
+            )
+        else:
+            success_percent = 100.0
+        current_failures = current_failures or {}
+        current_text = ",".join(
+            f"{self._node_label(index)}(attempts={attempts})"
+            for index, attempts in sorted(current_failures.items())
+        ) or "none"
+        cumulative_text = ",".join(
+            f"{self._node_label(index)}={count}"
+            for index, count in sorted(self.node_drop_counts.items())
+        ) or "none"
+        rtt_text = "n/a" if round_trip_ms is None else f"{round_trip_ms:.1f}"
+        firmware_text = "n/a" if firmware_ms is None else str(firmware_ms)
+        return (
+            "serial stats: "
+            f"confirmed={self.confirmed_commands} "
+            f"rtt_ms={rtt_text} firmware_ms={firmware_text} "
+            f"effective_hz={effective_hz:.2f} "
+            f"commands_with_failures={self.commands_with_failures}/{self.confirmed_commands} "
+            f"ack_timeouts={self.ack_timeouts} "
+            f"node_delivery_success={success_percent:.2f}% "
+            f"node_drops={self.dropped_node_deliveries}/{self.expected_node_deliveries} "
+            f"current_failed_nodes=[{current_text}] "
+            f"cumulative_node_drops=[{cumulative_text}]"
+        )
+
+    def send(self, command: str) -> None:
+        if self.command_in_flight:
+            raise RuntimeError("Cannot send a new command while another is awaiting ACK")
+        send_time = self._monotonic()
+        self._in_flight_command = command
+        failures: dict[int, int] = {}
+        try:
+            print(f"serial tx: {command}", flush=True)
+            self._write_line(command)
+            deadline = send_time + self.ack_timeout_seconds
+            while True:
+                if self._monotonic() >= deadline:
+                    self.ack_timeouts += 1
+                    raise SerialAcknowledgmentTimeout(
+                        command, self.ack_timeout_seconds
+                    )
+                raw_line = self._serial.readline()
+                if not raw_line:
+                    continue
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+                print(f"serial rx: {line}", flush=True)
+                failure = self._FAILURE_RE.fullmatch(line)
+                if failure is not None:
+                    node_index = int(failure.group(1))
+                    attempts = int(failure.group(2))
+                    failures[node_index] = attempts
+                    if not 1 <= node_index <= len(self.serial_node_order):
+                        print(
+                            "serial warning: firmware reported out-of-range node "
+                            f"index {node_index}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    continue
+                completion = self._COMPLETION_RE.fullmatch(line)
+                if completion is None:
+                    continue
+
+                completion_time = self._monotonic()
+                self.confirmed_commands += 1
+                if self._first_confirmed_send_time is None:
+                    self._first_confirmed_send_time = send_time
+                self._last_confirmed_send_time = send_time
+                self.expected_node_deliveries += len(self.serial_node_order)
+                if failures:
+                    self.commands_with_failures += 1
+                    self.dropped_node_deliveries += len(failures)
+                    self.node_drop_counts.update(failures.keys())
+                print(
+                    self._format_stats(
+                        round_trip_ms=1000.0 * (completion_time - send_time),
+                        firmware_ms=int(completion.group(1)),
+                        current_failures=failures,
+                    ),
+                    flush=True,
+                )
+                return
+        finally:
+            self._in_flight_command = None
+
+    def report_timeout(self, exc: SerialAcknowledgmentTimeout) -> None:
+        print(f"serial acknowledgment timeout: {exc}", file=sys.stderr, flush=True)
+        print(self._format_stats(), flush=True)
+
+    def emergency_stop(self, command: str, *, reason: str) -> None:
+        try:
+            self._write_line(command)
+            print(
+                f"Best-effort emergency stop sent after {reason}: {command}",
+                file=sys.stderr,
+                flush=True,
+            )
+        except Exception as exc:
+            print(
+                f"Failed to write emergency stop after {reason}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    def close(self) -> None:
+        if getattr(self._serial, "is_open", True):
+            self._serial.close()
 
 
 def _critical_rigidity(positions: np.ndarray, edge_index: np.ndarray) -> float:
@@ -1070,7 +1345,15 @@ class RealRobotObservationBuilder:
         return graph
 
 
-def _run_print_only_control_loop(cfg, source, layout, builder, agent, formatter) -> None:
+def _run_control_loop(
+    cfg,
+    source,
+    layout,
+    builder,
+    agent,
+    formatter,
+    transport: CommandTransport,
+) -> None:
     frequency_hz = float(cfg.control_frequency_hz)
     if not np.isfinite(frequency_hz) or frequency_hz <= 0.0:
         raise ValueError("control_frequency_hz must be positive and finite")
@@ -1079,6 +1362,7 @@ def _run_print_only_control_loop(cfg, source, layout, builder, agent, formatter)
     step = 0
     try:
         while cfg.control_steps is None or step < int(cfg.control_steps):
+            time.sleep(max(0.0, next_tick - time.monotonic()))
             now = time.monotonic()
             try:
                 if getattr(layout, "requires_orientations", False):
@@ -1098,15 +1382,57 @@ def _run_print_only_control_loop(cfg, source, layout, builder, agent, formatter)
                     eval_mode=bool(cfg.deterministic),
                 )
                 normalized_node_velocity = action.detach().cpu().numpy()
-                print(formatter.velocity_command(normalized_node_velocity), flush=True)
+                send_time = time.monotonic()
+                transport.send(formatter.velocity_command(normalized_node_velocity))
                 step += 1
+                if transport.acknowledgment_gated:
+                    next_tick = send_time + period
+                else:
+                    next_tick += period
             except MissingTrackerFrame as exc:
                 print(f"tracker frame skipped: {exc}", file=sys.stderr, flush=True)
-            next_tick += period
-            time.sleep(max(0.0, next_tick - time.monotonic()))
+                if transport.acknowledgment_gated:
+                    next_tick = now + period
+                else:
+                    next_tick += period
+            except SerialAcknowledgmentTimeout as exc:
+                if isinstance(transport, SerialCommandTransport):
+                    transport.report_timeout(exc)
+                transport.emergency_stop(
+                    formatter.emergency_stop_command(),
+                    reason="acknowledgment timeout",
+                )
+                return
     except KeyboardInterrupt:
-        print(formatter.emergency_stop_command(), flush=True)
-        print("Emergency stop command printed after Ctrl-C.", file=sys.stderr, flush=True)
+        transport.emergency_stop(formatter.emergency_stop_command(), reason="Ctrl-C")
+
+
+def _run_print_only_control_loop(cfg, source, layout, builder, agent, formatter) -> None:
+    """Backward-compatible wrapper for the print-only control path."""
+    _run_control_loop(
+        cfg,
+        source,
+        layout,
+        builder,
+        agent,
+        formatter,
+        PrintCommandTransport(),
+    )
+
+
+def _make_command_transport(cfg, formatter) -> CommandTransport:
+    mode = str(getattr(cfg, "command_transport", "print")).strip().lower()
+    if mode == "print":
+        return PrintCommandTransport()
+    if mode != "serial":
+        raise ValueError("command_transport must be either 'print' or 'serial'")
+    return SerialCommandTransport(
+        getattr(cfg, "serial_port", None),
+        int(cfg.serial_baud_rate),
+        formatter.serial_node_order,
+        ack_timeout_seconds=float(cfg.serial_ack_timeout_s),
+        startup_delay_seconds=float(cfg.serial_startup_delay_s),
+    )
 
 
 def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
@@ -1168,9 +1494,13 @@ def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
     load_agent_checkpoint(agent, checkpoint)
     agent.model.eval()
     source = source or SteamVRTrackerSource()
+    transport = None
     try:
-        _run_print_only_control_loop(cfg, source, layout, builder, agent, formatter)
+        transport = _make_command_transport(cfg, formatter)
+        _run_control_loop(cfg, source, layout, builder, agent, formatter, transport)
     finally:
+        if transport is not None:
+            transport.close()
         source.close()
 
 

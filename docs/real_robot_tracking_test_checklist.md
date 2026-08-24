@@ -1,6 +1,6 @@
-# Real-Robot Tracking and Print-Only Inference Test Checklist
+# Real-Robot Tracking and Serial Inference Test Checklist
 
-This document is the pre-test and test-day checklist for running the GNN policy from HTC Vive tracker measurements. The current implementation **does not open a serial port or send commands to the robot**. It prints the exact Arduino transmitter commands that would be sent later.
+This document is the pre-test and test-day checklist for running the GNN policy from HTC Vive tracker measurements. `command_transport=print` is the safe default and prints the exact Arduino transmitter commands. `command_transport=serial` opens the configured USB port and actuates the physical robot; use it only after completing the print-only checks and approval gate below.
 
 ## 1. Current system boundary
 
@@ -21,7 +21,7 @@ Each successful control cycle performs:
 6. Apply the observation normalization used during training.
 7. Run deterministic GNN inference.
 8. Convert each normalized active-node action to firmware ticks per second using `round(clip(action, -1, 1) * 1800)`.
-9. Print one firmware-ready `VEL_DUR` command.
+9. Print one firmware-ready `VEL_DUR` command, or send it and wait for transmitter confirmation.
 
 Passive physical nodes remain part of the GNN observation but are omitted from the transmitter command fields.
 
@@ -269,24 +269,48 @@ VEL_DUR:0,0,0,0:0
 
 The number of zeros will depend on the selected preset's actuated-node count.
 
-## 11. Serial protocol boundary
+## 11. Acknowledgment-gated serial test
 
-The current implementation only prints commands. It does not open `serial_port`, transmit bytes, or read acknowledgments.
-
-Future serial integration should send the exact printed command followed by a newline:
+The serial transport sends the exact print-mode command followed by a newline:
 
 ```text
 VEL_DUR:<v1>,<v2>,...:<duration>\n
 ```
 
-Current serial-related defaults:
+It does not send another normal command until the transmitter prints:
 
-- Baud rate: 115200
-- Maximum magnitude: 1800 ticks/second
-- Regular command duration: 0.2 seconds
-- Emergency-stop duration: 0 seconds
+```text
+VEL_DUR command completed in <milliseconds> ms
+```
 
-Before enabling physical transmission, separately verify the firmware receiver-address order. If it differs from the preset's active-node order, set `serial_node_order` explicitly. Do not infer this order from tracker IDs.
+The host also parses final delivery failures such as `FAILED to send to node 3 after 3 attempts`. Firmware node numbers are 1-based transmitter indices and are mapped through `serial_node_order` when printed. These are final failures after firmware retries; the current firmware does not expose individual RF retry losses.
+
+Before connecting motor power, verify `serial_node_order` against the receiver-address array in the transmitter firmware. Do not infer transmitter order from Vive tracker IDs.
+
+Run a bounded serial test with motors made mechanically safe:
+
+```bash
+python sac/real_robot_infer.py \
+  model=/absolute/path/to/final.pt \
+  truss_topology=YOUR_PRESET \
+  serial_map_file=config/tracker_maps/vive_serial_map.json \
+  command_transport=serial \
+  serial_port=/dev/cu.usbserial-XXXX \
+  serial_baud_rate=115200 \
+  serial_ack_timeout_s=5 \
+  control_frequency_hz=10 \
+  control_steps=50
+```
+
+- [ ] The connection message names the intended port and baud rate.
+- [ ] Every normal write is followed by a `VEL_DUR command completed` line before the next command.
+- [ ] `effective_hz` never indicates catch-up bursts above the configured maximum rate.
+- [ ] `current_failed_nodes` identifies the expected transmitter index and graph node when a receiver is intentionally unavailable.
+- [ ] `node_delivery_success`, `node_drops`, and `cumulative_node_drops` update consistently.
+- [ ] An acknowledgment timeout halts normal commands, writes one best-effort zero command, and closes the port.
+- [ ] Ctrl-C writes one best-effort zero-duration command and closes the port.
+
+Serial defaults are 115200 baud, a 5-second acknowledgment timeout, a 2-second Arduino startup delay, ±1800 ticks/second, and a 0.2-second regular command duration. `control_frequency_hz` is a maximum: slow confirmations skip missed slots rather than triggering catch-up sends.
 
 ## 12. Stop conditions
 
@@ -299,6 +323,9 @@ Stop the test immediately if any of the following occurs:
 - Commands remain saturated near ±1800 while the robot is stationary.
 - Tracker loss does not produce a skipped frame.
 - `Ctrl-C` does not print the expected all-zero command.
+- Serial mode sends a new normal command without a completion acknowledgment.
+- Delivery failures rise unexpectedly or repeatedly identify the same node.
+- Effective serial throughput is too low for the configured command duration.
 - The runtime configuration does not match the checkpoint.
 
 ## 13. Test record
@@ -312,12 +339,16 @@ Stop the test immediately if any of the following occurs:
 - Expected field count: ____________________
 - Stationary command behavior acceptable: yes / no
 - Ctrl-C emergency-stop test passed: yes / no
+- Serial port and baud: ________________________________________________
+- Confirmed command rate: ____________________ Hz
+- Node delivery success: ____________________ %
+- Nodes with final delivery failures: __________________________________
 - Unexpected warnings/errors: ________________________________________________
 - Notes: _________________________________________________________________
 
 ## 14. Approval gate before live serial actuation
 
-Do not implement or enable command transmission solely because the print-only test runs. Before live actuation, confirm all of the following:
+Do not switch `command_transport` to `serial` solely because the print-only test runs. Before live actuation, confirm all of the following:
 
 - [ ] Tracker assignment has been physically verified.
 - [ ] Coordinate axes and signs have been verified.
