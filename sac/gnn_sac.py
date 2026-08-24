@@ -1,6 +1,7 @@
 import contextlib
 from collections.abc import Sequence
 import re
+import warnings
 
 import torch 
 import torch.nn.functional as F 
@@ -23,11 +24,11 @@ class GNNSAC(torch.nn.Module):
         super().__init__()
         self.cfg = cfg
         self.device = torch.device(getattr(cfg, "device", "cuda"))
-        self.model = GNNActorCritic(cfg).to(self.device)
+        self.model = self._make_model(cfg).to(self.device)
         capturable = self.device.type in {"cuda", "xpu", "hpu", "privateuseone", "xla"}
 
         self.q_optim = torch.optim.Adam(self.model._Qs.parameters(), lr=self.cfg.lr, capturable=capturable)
-        self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=capturable) # What does eps do in this case 
+        self.pi_optim = torch.optim.Adam(self.model.actor_parameters(), lr=self.cfg.lr, eps=1e-5, capturable=capturable)
 
         init_alpha = float(getattr(self.cfg, "entropy_coef", 0.2))
         self.log_alpha = torch.nn.Parameter(torch.log(torch.tensor(init_alpha, device=self.device)))
@@ -46,6 +47,10 @@ class GNNSAC(torch.nn.Module):
         print("Discount factor:", self.discount)
         print("Target entropy:", self.target_entropy)
 
+    def _make_model(self, cfg):
+        """Construct the actor-critic used by this graph-batch SAC backend."""
+        return GNNActorCritic(cfg)
+
     @property
     def alpha(self):
         return self.log_alpha.exp()
@@ -56,6 +61,17 @@ class GNNSAC(torch.nn.Module):
 
         """
         return torch.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0).clamp(-1, 1)
+
+    def project_action(self, obs, action):
+        """Zero passive graph-action rows after seed sampling and action noise."""
+        mask = policy_action_mask(obs)
+        if isinstance(action, torch.Tensor):
+            projected = action.clone()
+            projected[~mask.to(projected.device)] = 0
+            return projected
+        projected = torch.as_tensor(action).clone()
+        projected[~mask.cpu()] = 0
+        return projected.numpy()
 
     def _get_discount(self, episode_length):
         frac = episode_length / self.cfg.discount_denom
@@ -115,9 +131,51 @@ class GNNSAC(torch.nn.Module):
         if "q_optim" in state_dict:
             self.q_optim.load_state_dict(state_dict["q_optim"])
         if "pi_optim" in state_dict:
-            self.pi_optim.load_state_dict(state_dict["pi_optim"])
+            self._load_actor_optimizer_state(state_dict["pi_optim"])
         if "alpha_optim" in state_dict:
             self.alpha_optim.load_state_dict(state_dict["alpha_optim"])
+
+    def _load_actor_optimizer_state(self, saved_state):
+        """Load actor Adam state, upgrading checkpoints that omitted the GNN head."""
+        try:
+            self.pi_optim.load_state_dict(saved_state)
+            return
+        except ValueError as exc:
+            saved_groups = list(saved_state.get("param_groups", []))
+            current_state = self.pi_optim.state_dict()
+            current_groups = list(current_state.get("param_groups", []))
+            legacy_parameter_count = len(tuple(self.model._pi.parameters()))
+            is_legacy_gnn_state = (
+                hasattr(self.model, "_action_head")
+                and len(saved_groups) == len(current_groups) == 1
+                and len(saved_groups[0].get("params", [])) == legacy_parameter_count
+                and len(current_groups[0].get("params", [])) > legacy_parameter_count
+            )
+            if not is_legacy_gnn_state:
+                raise exc
+
+        saved_group = saved_groups[0]
+        current_group = current_groups[0]
+        saved_ids = list(saved_group["params"])
+        current_ids = list(current_group["params"])
+        upgraded_group = dict(current_group)
+        upgraded_group.update(
+            {key: value for key, value in saved_group.items() if key != "params"}
+        )
+        upgraded_group["params"] = current_ids
+        upgraded_state = {
+            current_ids[index]: saved_state.get("state", {}).get(saved_id, {})
+            for index, saved_id in enumerate(saved_ids)
+        }
+        self.pi_optim.load_state_dict(
+            {"state": upgraded_state, "param_groups": [upgraded_group]}
+        )
+        warnings.warn(
+            "Loaded a legacy GNN actor optimizer checkpoint that omitted the action head; "
+            "the restored encoder state was kept and fresh Adam state was initialized for "
+            "the action head.",
+            RuntimeWarning,
+        )
 
     @torch.no_grad()
     def act(self, obs, t0 = False, eval_mode = False):
@@ -195,7 +253,9 @@ class GNNSAC(torch.nn.Module):
 
         self.pi_optim.zero_grad(set_to_none=True)
         pi_loss.backward()
-        pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._pi.parameters(), self.cfg.grad_clip_norm)
+        pi_grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.actor_parameters(), self.cfg.grad_clip_norm
+        )
         self.pi_optim.step()
 
         alpha_loss = -(self.log_alpha * (log_prob.detach() + self.target_entropy)).mean()
@@ -339,7 +399,7 @@ class GNNSAC(torch.nn.Module):
         try:
             gradients = {"critic": {}, "actor": {}}
             q_parameters = tuple(self.model._Qs.parameters())
-            pi_parameters = tuple(self.model._pi.parameters())
+            pi_parameters = tuple(self.model.actor_parameters())
             for task, batch in task_batches.items():
                 obs, action, reward, terminated, next_obs = batch
                 gradients["critic"][task] = self._parameter_gradients(
@@ -402,7 +462,7 @@ class GNNSAC(torch.nn.Module):
         )
 
     def _pcgrad_pi_and_alpha_update(self, task_batches):
-        parameters = tuple(self.model._pi.parameters())
+        parameters = tuple(self.model.actor_parameters())
         losses = []
         task_gradients = {}
         task_info = []

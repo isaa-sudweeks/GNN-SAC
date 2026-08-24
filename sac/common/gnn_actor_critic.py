@@ -96,6 +96,10 @@ class GNNActorCritic(nn.Module):
     def total_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
+    def actor_parameters(self):
+        """Return every trainable actor parameter, including the action head."""
+        return tuple(self._pi.parameters()) + tuple(self._action_head.parameters())
+
     def train(self, mode=True):
         super().train(mode)
         self._target_Qs.train(False)

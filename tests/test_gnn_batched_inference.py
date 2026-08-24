@@ -473,6 +473,49 @@ class VectorizedInferenceTest(unittest.TestCase):
         self.assertEqual([row["episode_length"] for row in results], [1, 1, 1])
         self.assertEqual([row["episode_distance"] for row in results], [0.25, 0.5, 0.25])
 
+    def test_position_logging_accepts_variable_node_action_shapes(self):
+        class DummyVectorEnv:
+            num_envs = 2
+
+            def reset_many(self, env_indices):
+                return [graph(3 + 2 * index) for index in env_indices]
+
+            def step_many(self, actions, env_indices):
+                self.action_shapes = [tuple(action.shape) for action in actions]
+                return [
+                    (
+                        graph(3 + 2 * index),
+                        torch.tensor(1.0),
+                        True,
+                        {
+                            "success": 0.0,
+                            "terminated": torch.tensor(0.0),
+                            "truncated": torch.tensor(1.0),
+                        },
+                    )
+                    for index in env_indices
+                ]
+
+        class DummyAgent:
+            def act_batch(self, observations, eval_mode=False):
+                return [torch.zeros(obs.num_nodes, 1) for obs in observations]
+
+        env = DummyVectorEnv()
+        cfg = SimpleNamespace(
+            episodes=2,
+            inference_max_steps=None,
+            deterministic=True,
+            print_position_command=True,
+            position_command_step=None,
+            position_command_dt=1.0,
+            speed=0.05,
+        )
+
+        results = _run_vectorized_inference(cfg, env, DummyAgent())
+
+        self.assertEqual(env.action_shapes, [(3, 1), (5, 1)])
+        self.assertEqual(len(results), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
