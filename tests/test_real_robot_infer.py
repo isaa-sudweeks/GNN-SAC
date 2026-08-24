@@ -6,6 +6,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -16,11 +17,16 @@ for path in (ROOT, SAC_ROOT):
         sys.path.insert(0, str(path))
 
 from real_robot_infer import (
+    PrintCommandTransport,
     RealRobotObservationBuilder,
+    SerialAcknowledgmentTimeout,
+    SerialCommandTransport,
     SerialVelocityCommandFormatter,
     TrackerLayout,
     TrackerMount,
     TrackerPose,
+    _make_command_transport,
+    _run_control_loop,
     _run_print_only_control_loop,
 )
 from tests.test_gnn_mujoco_truss_gen_smoke import graph_test_cfg
@@ -472,6 +478,337 @@ class SerialVelocityCommandFormatterTest(unittest.TestCase):
             "VEL_DUR:900,-450:0.2",
         )
         self.assertEqual(formatter.emergency_stop_command(), "VEL_DUR:0,0:0")
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += max(0.0, float(seconds))
+
+
+class _FakeSerial:
+    def __init__(self, clock, lines=()):
+        self.clock = clock
+        self.lines = list(lines)
+        self.writes = []
+        self.flush_count = 0
+        self.reset_input_buffer_count = 0
+        self.is_open = True
+        self.constructor_kwargs = None
+
+    def write(self, payload):
+        self.writes.append(payload)
+        return len(payload)
+
+    def flush(self):
+        self.flush_count += 1
+
+    def reset_input_buffer(self):
+        self.reset_input_buffer_count += 1
+
+    def readline(self):
+        self.clock.sleep(0.01 if self.lines else 0.1)
+        if not self.lines:
+            return b""
+        line = self.lines.pop(0)
+        if callable(line):
+            line = line(self)
+        return line.encode("utf-8") + b"\n"
+
+    def close(self):
+        self.is_open = False
+
+
+class SerialCommandTransportTest(unittest.TestCase):
+    def _make_transport(self, lines=(), **overrides):
+        clock = _FakeClock()
+        fake_serial = _FakeSerial(clock, lines)
+
+        def serial_factory(**kwargs):
+            fake_serial.constructor_kwargs = kwargs
+            return fake_serial
+
+        options = {
+            "ack_timeout_seconds": 0.5,
+            "startup_delay_seconds": 0.0,
+            "serial_factory": serial_factory,
+            "monotonic": clock.monotonic,
+            "sleep": clock.sleep,
+        }
+        options.update(overrides)
+        transport = SerialCommandTransport(
+            "/dev/fake",
+            115200,
+            ("roller_a", "roller_b", "roller_c"),
+            **options,
+        )
+        return transport, fake_serial, clock
+
+    def test_uses_configured_serial_settings_and_startup_delay(self):
+        transport, fake_serial, clock = self._make_transport(
+            startup_delay_seconds=2.0
+        )
+        self.assertEqual(
+            fake_serial.constructor_kwargs,
+            {
+                "port": "/dev/fake",
+                "baudrate": 115200,
+                "timeout": 0.1,
+                "write_timeout": 0.5,
+            },
+        )
+        self.assertEqual(clock.now, 2.0)
+        self.assertEqual(fake_serial.reset_input_buffer_count, 1)
+        transport.close()
+        self.assertFalse(fake_serial.is_open)
+
+    def test_waits_for_completion_and_reports_node_delivery_metrics(self):
+        def assert_only_one_command_in_flight(fake_serial):
+            self.assertEqual(fake_serial.writes, [b"VEL_DUR:1,2,3:0.2\n"])
+            return "Transmitter ready."
+
+        transport, fake_serial, _ = self._make_transport(
+            lines=(
+                assert_only_one_command_in_flight,
+                "FAILED to send to node 2 after 3 attempts",
+                "[10,20,30]",
+                "VEL_DUR command completed in 37 ms",
+            )
+        )
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            transport.send("VEL_DUR:1,2,3:0.2")
+
+        output = stdout.getvalue()
+        self.assertIn("serial rx: Transmitter ready.", output)
+        self.assertIn("firmware_ms=37", output)
+        self.assertIn("commands_with_failures=1/1", output)
+        self.assertIn("node_delivery_success=66.67%", output)
+        self.assertIn("current_failed_nodes=[2:roller_b(attempts=3)]", output)
+        self.assertEqual(transport.node_drop_counts, {2: 1})
+        self.assertEqual(transport.confirmed_commands, 1)
+
+    def test_unrelated_lines_do_not_acknowledge_next_command(self):
+        transport, fake_serial, _ = self._make_transport(
+            lines=(
+                "[1,2,3]",
+                "VEL_DUR command completed in 10 ms",
+                "[4,5,6]",
+                "VEL_DUR command completed in 11 ms",
+            )
+        )
+        transport.send("VEL_DUR:1,2,3:0.2")
+        transport.send("VEL_DUR:4,5,6:0.2")
+        self.assertEqual(
+            fake_serial.writes,
+            [b"VEL_DUR:1,2,3:0.2\n", b"VEL_DUR:4,5,6:0.2\n"],
+        )
+        self.assertEqual(transport.confirmed_commands, 2)
+
+    def test_timeout_reports_stats_and_best_effort_stop_is_written_once(self):
+        transport, fake_serial, _ = self._make_transport(
+            ack_timeout_seconds=0.25
+        )
+        with self.assertRaises(SerialAcknowledgmentTimeout) as caught:
+            transport.send("VEL_DUR:1,2,3:0.2")
+        stdout, stderr = StringIO(), StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            transport.report_timeout(caught.exception)
+            transport.emergency_stop("VEL_DUR:0,0,0:0", reason="acknowledgment timeout")
+        self.assertEqual(
+            fake_serial.writes,
+            [b"VEL_DUR:1,2,3:0.2\n", b"VEL_DUR:0,0,0:0\n"],
+        )
+        self.assertIn("ack_timeouts=1", stdout.getvalue())
+        self.assertIn("acknowledgment timeout", stderr.getvalue())
+
+    def test_rejects_invalid_serial_configuration_before_opening_port(self):
+        with self.assertRaisesRegex(ValueError, "serial_port"):
+            SerialCommandTransport(
+                "",
+                115200,
+                ("roller",),
+                ack_timeout_seconds=1.0,
+                startup_delay_seconds=0.0,
+                serial_factory=lambda **kwargs: None,
+            )
+
+        invalid_options = (
+            ({"baud_rate": 0}, "serial_baud_rate"),
+            ({"ack_timeout_seconds": 0.0}, "serial_ack_timeout_s"),
+            ({"startup_delay_seconds": -1.0}, "serial_startup_delay_s"),
+        )
+        for overrides, message in invalid_options:
+            options = {
+                "baud_rate": 115200,
+                "ack_timeout_seconds": 1.0,
+                "startup_delay_seconds": 0.0,
+            }
+            options.update(overrides)
+            with self.subTest(message=message), self.assertRaisesRegex(
+                ValueError, message
+            ):
+                SerialCommandTransport(
+                    "/dev/fake",
+                    options["baud_rate"],
+                    ("roller",),
+                    ack_timeout_seconds=options["ack_timeout_seconds"],
+                    startup_delay_seconds=options["startup_delay_seconds"],
+                    serial_factory=lambda **kwargs: None,
+                )
+
+    def test_command_transport_mode_defaults_to_print_and_rejects_unknown(self):
+        formatter = SerialVelocityCommandFormatter(
+            ("node",),
+            max_velocity_ticks_per_second=1800,
+            duration_seconds=0.2,
+        )
+        self.assertIsInstance(
+            _make_command_transport(SimpleNamespace(), formatter),
+            PrintCommandTransport,
+        )
+        with self.assertRaisesRegex(ValueError, "command_transport"):
+            _make_command_transport(
+                SimpleNamespace(command_transport="socket"), formatter
+            )
+
+
+class ControlLoopPacingTest(unittest.TestCase):
+    @staticmethod
+    def _loop_fixture():
+        class Source:
+            def positions_by_serial(self):
+                return {"tracker": np.zeros(3)}
+
+        class Builder:
+            def build(self, positions, timestamp):
+                return timestamp
+
+        class Action:
+            def detach(self):
+                return self
+
+            def cpu(self):
+                return self
+
+            def numpy(self):
+                return np.asarray([0.0])
+
+        class Agent:
+            def act(self, observation, **kwargs):
+                return Action()
+
+        formatter = SerialVelocityCommandFormatter(
+            ("node",),
+            max_velocity_ticks_per_second=1800,
+            duration_seconds=0.2,
+        )
+        cfg = SimpleNamespace(
+            control_frequency_hz=10.0,
+            control_steps=3,
+            deterministic=True,
+        )
+        layout = SimpleNamespace(
+            ordered_positions=lambda positions: np.zeros((1, 3)),
+            requires_orientations=False,
+        )
+        return cfg, Source(), layout, Builder(), Agent(), formatter
+
+    def test_delayed_ack_skips_missed_slot_without_catch_up_burst(self):
+        clock = _FakeClock()
+
+        class DelayedTransport(PrintCommandTransport):
+            acknowledgment_gated = True
+
+            def __init__(self):
+                self.send_times = []
+                self.delays = iter((0.15, 0.0, 0.0))
+
+            def send(self, command):
+                self.send_times.append(clock.monotonic())
+                clock.sleep(next(self.delays))
+
+        cfg, source, layout, builder, agent, formatter = self._loop_fixture()
+        transport = DelayedTransport()
+        with patch("real_robot_infer.time.monotonic", clock.monotonic), patch(
+            "real_robot_infer.time.sleep", clock.sleep
+        ):
+            _run_control_loop(
+                cfg,
+                source,
+                layout,
+                builder,
+                agent,
+                formatter,
+                transport,
+            )
+        np.testing.assert_allclose(transport.send_times, [0.0, 0.15, 0.25])
+
+    def test_ack_timeout_stops_loop_and_writes_one_emergency_command(self):
+        clock = _FakeClock()
+        fake_serial = _FakeSerial(clock)
+        transport = SerialCommandTransport(
+            "/dev/fake",
+            115200,
+            ("node",),
+            ack_timeout_seconds=0.25,
+            startup_delay_seconds=0.0,
+            serial_factory=lambda **kwargs: fake_serial,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        cfg, source, layout, builder, agent, formatter = self._loop_fixture()
+        stdout, stderr = StringIO(), StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr), patch(
+            "real_robot_infer.time.monotonic", clock.monotonic
+        ), patch("real_robot_infer.time.sleep", clock.sleep):
+            _run_control_loop(
+                cfg, source, layout, builder, agent, formatter, transport
+            )
+        self.assertEqual(
+            fake_serial.writes,
+            [b"VEL_DUR:0:0.2\n", b"VEL_DUR:0:0\n"],
+        )
+        self.assertIn("ack_timeouts=1", stdout.getvalue())
+        self.assertIn("Best-effort emergency stop", stderr.getvalue())
+
+    def test_ctrl_c_writes_only_one_emergency_command(self):
+        clock = _FakeClock()
+        fake_serial = _FakeSerial(clock)
+        transport = SerialCommandTransport(
+            "/dev/fake",
+            115200,
+            ("node",),
+            ack_timeout_seconds=0.25,
+            startup_delay_seconds=0.0,
+            serial_factory=lambda **kwargs: fake_serial,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        cfg, _, layout, builder, agent, formatter = self._loop_fixture()
+
+        class InterruptedSource:
+            def positions_by_serial(self):
+                raise KeyboardInterrupt
+
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()), patch(
+            "real_robot_infer.time.monotonic", clock.monotonic
+        ), patch("real_robot_infer.time.sleep", clock.sleep):
+            _run_control_loop(
+                cfg,
+                InterruptedSource(),
+                layout,
+                builder,
+                agent,
+                formatter,
+                transport,
+            )
+        self.assertEqual(fake_serial.writes, [b"VEL_DUR:0:0\n"])
 
 
 if __name__ == "__main__":

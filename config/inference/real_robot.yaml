@@ -17,10 +17,13 @@ control_steps: null
 velocity_filter_alpha: 1.0
 deterministic: true
 
-# Print-only USB transmitter settings. Future serial I/O should append "\n" and
-# write these same commands at 115200 baud.
+# USB transmitter command output. Keep print mode until graph/channel ordering and
+# tracker calibration have been verified; serial mode actuates the physical robot.
+command_transport: print # print or serial
 serial_port: null
 serial_baud_rate: 115200
+serial_ack_timeout_s: 5.0
+serial_startup_delay_s: 2.0 # Allow an Arduino reset triggered by opening USB serial.
 serial_node_order: null # null uses graph rollers in numeric order, then graph order if absent.
 serial_max_velocity_ticks_per_second: 1800
 serial_command_duration_s: 0.2
