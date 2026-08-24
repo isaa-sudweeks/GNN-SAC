@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from copy import deepcopy 
 
 import torch 
@@ -63,8 +64,10 @@ class GNNActorCritic(nn.Module):
         )
 
         self._action_head = layers.mlp(
-            actor_mpl_dims[-1], action_head_hidden, 2*cfg.action_dim,
-            dropout=cfg.dropout
+            actor_mpl_dims[-1],
+            action_head_hidden,
+            2 * cfg.action_dim,
+            dropout=cfg.dropout,
         )
 
         self._Qs = layers.Ensemble(
@@ -88,6 +91,7 @@ class GNNActorCritic(nn.Module):
     def __repr__(self):
         repr_str = "Graph Neural Network based Soft Actor Critic Network \n"
         repr_str += f"Actor: {self._pi}\n"
+        repr_str += f"Action head: {self._action_head}\n"
         repr_str += f"Critics: {self._Qs}\n"
         repr_str += "Total Learnable Parameters: {:,}".format(self.total_params)
         return repr_str
@@ -95,6 +99,11 @@ class GNNActorCritic(nn.Module):
     @property
     def total_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def actor_parameters(self) -> Iterator[nn.Parameter]:
+        """Yield every learnable actor parameter, including the action projection."""
+        yield from self._pi.parameters()
+        yield from self._action_head.parameters()
 
     def train(self, mode=True):
         super().train(mode)

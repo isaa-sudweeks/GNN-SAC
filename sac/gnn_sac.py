@@ -27,7 +27,12 @@ class GNNSAC(torch.nn.Module):
         capturable = self.device.type in {"cuda", "xpu", "hpu", "privateuseone", "xla"}
 
         self.q_optim = torch.optim.Adam(self.model._Qs.parameters(), lr=self.cfg.lr, capturable=capturable)
-        self.pi_optim = torch.optim.Adam(self.model._pi.parameters(), lr=self.cfg.lr, eps=1e-5, capturable=capturable) # What does eps do in this case 
+        self.pi_optim = torch.optim.Adam(
+            self.model.actor_parameters(),
+            lr=self.cfg.lr,
+            eps=1e-5,
+            capturable=capturable,
+        )
 
         init_alpha = float(getattr(self.cfg, "entropy_coef", 0.2))
         self.log_alpha = torch.nn.Parameter(torch.log(torch.tensor(init_alpha, device=self.device)))
@@ -195,7 +200,9 @@ class GNNSAC(torch.nn.Module):
 
         self.pi_optim.zero_grad(set_to_none=True)
         pi_loss.backward()
-        pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._pi.parameters(), self.cfg.grad_clip_norm)
+        pi_grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.actor_parameters(), self.cfg.grad_clip_norm
+        )
         self.pi_optim.step()
 
         alpha_loss = -(self.log_alpha * (log_prob.detach() + self.target_entropy)).mean()
@@ -339,7 +346,7 @@ class GNNSAC(torch.nn.Module):
         try:
             gradients = {"critic": {}, "actor": {}}
             q_parameters = tuple(self.model._Qs.parameters())
-            pi_parameters = tuple(self.model._pi.parameters())
+            pi_parameters = tuple(self.model.actor_parameters())
             for task, batch in task_batches.items():
                 obs, action, reward, terminated, next_obs = batch
                 gradients["critic"][task] = self._parameter_gradients(
@@ -402,7 +409,7 @@ class GNNSAC(torch.nn.Module):
         )
 
     def _pcgrad_pi_and_alpha_update(self, task_batches):
-        parameters = tuple(self.model._pi.parameters())
+        parameters = tuple(self.model.actor_parameters())
         losses = []
         task_gradients = {}
         task_info = []

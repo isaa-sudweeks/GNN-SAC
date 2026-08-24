@@ -33,7 +33,7 @@ def cfg(**overrides):
         action_dim=1,
         mpl_dims=[8, 6],
         message_hidden_dims=[10, 9],
-        action_head_hidden_dims=[7],
+        action_head_hidden_dims=[],
         mpl_skip_connections=True,
         head_hidden_dims=[5],
         mlp_dim=12,
@@ -119,15 +119,32 @@ class GNNArchitectureTest(unittest.TestCase):
         values.sum().backward()
         self.assertTrue(all(parameter.grad is not None for parameter in critic.parameters()))
 
-    def test_actor_critic_uses_independent_head_and_message_widths(self):
+    def test_actor_critic_uses_linear_action_projection(self):
         model = GNNActorCritic(cfg())
         self.assertEqual(model._pi.mpl_dims, [8, 6])
         self.assertEqual(model._pi.hidden_channels, [10, 9])
-        self.assertEqual(model._action_head[0].out_features, 7)
+        self.assertEqual(len(model._action_head), 1)
+        self.assertIsInstance(model._action_head[0], torch.nn.Linear)
+        self.assertEqual(model._action_head[0].in_features, 6)
+        self.assertEqual(model._action_head[0].out_features, 2)
+        actor_parameter_ids = {id(parameter) for parameter in model.actor_parameters()}
+        self.assertTrue(
+            {id(parameter) for parameter in model._action_head.parameters()}
+            <= actor_parameter_ids
+        )
         for critic in model._Qs.modules_list:
             self.assertEqual(critic.mpl_dims, [8, 6])
             self.assertEqual(critic.head[0].out_features, 5)
         self.assertEqual(model._target_Qs.modules_list[0].mpl_dims, [8, 6])
+
+    def test_actor_critic_supports_hidden_action_head_override(self):
+        model = GNNActorCritic(cfg(action_head_hidden_dims=[7, 5]))
+
+        self.assertEqual(len(model._action_head), 3)
+        self.assertEqual(model._action_head[0].in_features, 6)
+        self.assertEqual(model._action_head[0].out_features, 7)
+        self.assertEqual(model._action_head[1].out_features, 5)
+        self.assertEqual(model._action_head[2].out_features, 2)
 
     def test_actor_critic_enables_attention_for_actor_critics_and_targets(self):
         model = GNNActorCritic(cfg(message_attention=True))
