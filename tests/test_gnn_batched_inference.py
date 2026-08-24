@@ -516,6 +516,82 @@ class VectorizedInferenceTest(unittest.TestCase):
         self.assertEqual(env.action_shapes, [(3, 1), (5, 1)])
         self.assertEqual(len(results), 2)
 
+    def test_position_logging_uses_metadata_from_matching_environment(self):
+        class ChildEnv:
+            def __init__(self, node_names, passive_node_names):
+                self.graph_node_names = node_names
+                self.passive_node_names = passive_node_names
+
+        class DummyVectorEnv:
+            num_envs = 2
+
+            def __init__(self):
+                self.envs = [
+                    ChildEnv(["first_active", "first_passive"], ["first_passive"]),
+                    ChildEnv(["second_passive", "second_active"], ["second_passive"]),
+                ]
+                self.env = self.envs[0]
+
+            def set_active_env(self, env_idx):
+                self.env = self.envs[env_idx]
+
+            def reset_many(self, env_indices):
+                observations = []
+                for env_idx in env_indices:
+                    self.set_active_env(env_idx)
+                    observations.append(graph(2))
+                return observations
+
+            def step_many(self, actions, env_indices):
+                results = []
+                for env_idx in env_indices:
+                    self.set_active_env(env_idx)
+                    results.append(
+                        (
+                            graph(2),
+                            torch.tensor(1.0),
+                            True,
+                            {
+                                "success": 0.0,
+                                "terminated": torch.tensor(0.0),
+                                "truncated": torch.tensor(1.0),
+                            },
+                        )
+                    )
+                return results
+
+        class DummyAgent:
+            def act_batch(self, observations, eval_mode=False):
+                return [torch.ones(obs.num_nodes, 1) for obs in observations]
+
+        cfg = SimpleNamespace(
+            episodes=2,
+            inference_max_steps=None,
+            deterministic=True,
+            print_position_command=True,
+            position_command_step=None,
+            position_command_dt=1.0,
+            speed=1.0,
+        )
+
+        with mock.patch("builtins.print") as print_mock:
+            _run_vectorized_inference(cfg, DummyVectorEnv(), DummyAgent())
+
+        position_lines = [
+            call.args[0]
+            for call in print_mock.call_args_list
+            if "position_command=" in call.args[0]
+        ]
+        self.assertEqual(
+            position_lines,
+            [
+                "episode=0 step=1 position_command={'first_active': 1.0, "
+                "'first_passive': 0.0}",
+                "episode=1 step=1 position_command={'second_passive': 0.0, "
+                "'second_active': 1.0}",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
