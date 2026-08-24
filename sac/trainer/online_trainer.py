@@ -654,10 +654,17 @@ class OnlineTrainer(Trainer):
                 self.agent.act(observations[env_idx], t0=len(episode_tds[env_idx]) == 1)
                 for env_idx in env_indices
             ]
-        return [
+        noisy_actions = [
             self._apply_action_noise(action, seed_action=using_seed_actions)
             for action in actions
         ]
+        project_action = getattr(type(self.agent), "project_action", None)
+        if callable(project_action):
+            return [
+                self.agent.project_action(observations[env_idx], action)
+                for env_idx, action in zip(env_indices, noisy_actions)
+            ]
+        return noisy_actions
     
     def to_td(self, obs, action=None, reward=None, terminated=None, raw_reward=None):
         """
@@ -750,6 +757,9 @@ class OnlineTrainer(Trainer):
                 else:
                     action = self.env.rand_act()
                 action = self._apply_action_noise(action, seed_action=self._step <= self.cfg.seed_steps)
+                project_action = getattr(type(self.agent), "project_action", None)
+                if callable(project_action):
+                    action = self.agent.project_action(obs, action)
             with self.performance_profiler.phase("environment_step"):
                 obs, reward, done, info = self.env.step(action)
             with self.performance_profiler.phase("transition_processing"):

@@ -27,6 +27,7 @@ from env.mujoco_gen.topology_envs import (
     _randomized_physical_parameter_overrides,
 )
 from gnn_sac import GNNSAC
+from padded_mlp_sac import PaddedMLPSAC
 from trainer.online_trainer import OnlineTrainer
 
 
@@ -1163,6 +1164,39 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             self.assertIsNotNone(agent.model._pi.attention_score.weight.grad)
             for critic in agent.model._Qs.modules_list:
                 self.assertIsNotNone(critic.attention_score.weight.grad)
+        finally:
+            env.close()
+
+    def test_padded_mlp_steps_mixed_control_graph_topologies(self):
+        cfg = graph_test_cfg(
+            task="truss-graph",
+            truss_topologies=["tetrahedron", "octahedron"],
+            multitask=False,
+            num_envs=1,
+            max_steps=2,
+            nsubsteps=1,
+            domain_randomization=False,
+            use_virtual_node=False,
+            pcgrad=False,
+            padded_mlp_max_nodes=21,
+            padded_mlp_hidden_dims=[16, 16],
+            target_entropy=-1,
+        )
+        env = make_env(cfg)
+        try:
+            observations = env.reset_many(env_indices=[0, 1])
+            agent = PaddedMLPSAC(cfg)
+            actions = agent.act_batch(observations, eval_mode=True)
+            results = env.step_many(actions, env_indices=[0, 1])
+
+            self.assertEqual([obs.num_nodes for obs in observations], [8, 12])
+            self.assertEqual([tuple(action.shape) for action in actions], [(8, 1), (12, 1)])
+            for observation, action in zip(observations, actions):
+                torch.testing.assert_close(
+                    action[~observation.action_mask],
+                    torch.zeros_like(action[~observation.action_mask]),
+                )
+            self.assertTrue(all(float(result[1]) == float(result[1]) for result in results))
         finally:
             env.close()
 

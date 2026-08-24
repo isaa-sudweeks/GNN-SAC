@@ -53,6 +53,11 @@ def run_training(cfg, trial=None):
     """
     Execute one training run and return the best objective value seen.
     """
+    sac_backend = str(getattr(cfg, "sac_backend", "gnn")).lower()
+    if sac_backend not in {"gnn", "padded_mlp"}:
+        raise ValueError(
+            f"sac/gnn_train.py supports sac_backend='gnn' or 'padded_mlp', got {sac_backend!r}."
+        )
     if getattr(cfg, 'device', 'cuda') == 'cuda':
         assert torch.cuda.is_available(), "CUDA not available, please run on a GPU"
     assert cfg.steps > 0, "Number of steps must be positive"
@@ -64,7 +69,13 @@ def run_training(cfg, trial=None):
     print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)
 
     env = make_env(cfg)
-    agent = GNNSAC(cfg)
+    if sac_backend == "gnn":
+        agent = GNNSAC(cfg)
+    else:
+        from padded_mlp_sac import PaddedMLPSAC
+
+        agent = PaddedMLPSAC(cfg)
+
     buffer = GNNBuffer(cfg)
     logger = Logger(cfg)
     trainer = OnlineTrainer(
