@@ -447,6 +447,23 @@ class ReplayRoutingTest(unittest.TestCase):
 
 
 class PCGradTest(unittest.TestCase):
+    def test_actor_optimizer_covers_gnn_and_action_projection(self):
+        agent = GNNSAC(agent_cfg())
+        optimized_parameter_ids = {
+            id(parameter)
+            for group in agent.pi_optim.param_groups
+            for parameter in group["params"]
+        }
+        actor_parameter_ids = {
+            id(parameter) for parameter in agent.model.actor_parameters()
+        }
+
+        self.assertEqual(optimized_parameter_ids, actor_parameter_ids)
+        self.assertTrue(
+            {id(parameter) for parameter in agent.model._action_head.parameters()}
+            <= optimized_parameter_ids
+        )
+
     def test_projects_conflicting_gradients(self):
         merged = GNNSAC.pcgrad_project(
             (
@@ -519,8 +536,11 @@ class PCGradTest(unittest.TestCase):
         q_before = [
             parameter.detach().clone() for parameter in agent.model._Qs.parameters()
         ]
-        pi_before = [
-            parameter.detach().clone() for parameter in agent.model._pi.parameters()
+        actor_parameters = tuple(agent.model.actor_parameters())
+        pi_before = [parameter.detach().clone() for parameter in actor_parameters]
+        action_head_before = [
+            parameter.detach().clone()
+            for parameter in agent.model._action_head.parameters()
         ]
         torch.manual_seed(123)
         info = agent.update(buffer, compute_diagnostics=True)
@@ -534,7 +554,15 @@ class PCGradTest(unittest.TestCase):
         self.assertTrue(
             any(
                 not torch.equal(before, after)
-                for before, after in zip(pi_before, agent.model._pi.parameters())
+                for before, after in zip(pi_before, actor_parameters)
+            )
+        )
+        self.assertTrue(
+            any(
+                not torch.equal(before, after)
+                for before, after in zip(
+                    action_head_before, agent.model._action_head.parameters()
+                )
             )
         )
         self.assertIn(

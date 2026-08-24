@@ -37,7 +37,7 @@ def cfg() -> SimpleNamespace:
         action_dim=1,
         mpl_dims=[8, 8],
         message_hidden_dims=[10],
-        action_head_hidden_dims=[7],
+        action_head_hidden_dims=[],
         mpl_skip_connections=True,
         head_hidden_dims=[5],
         mlp_dim=12,

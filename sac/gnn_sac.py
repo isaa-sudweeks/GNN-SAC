@@ -28,7 +28,12 @@ class GNNSAC(torch.nn.Module):
         capturable = self.device.type in {"cuda", "xpu", "hpu", "privateuseone", "xla"}
 
         self.q_optim = torch.optim.Adam(self.model._Qs.parameters(), lr=self.cfg.lr, capturable=capturable)
-        self.pi_optim = torch.optim.Adam(self.model.actor_parameters(), lr=self.cfg.lr, eps=1e-5, capturable=capturable)
+        self.pi_optim = torch.optim.Adam(
+            self.model.actor_parameters(),
+            lr=self.cfg.lr,
+            eps=1e-5,
+            capturable=capturable,
+        )
 
         init_alpha = float(getattr(self.cfg, "entropy_coef", 0.2))
         self.log_alpha = torch.nn.Parameter(torch.log(torch.tensor(init_alpha, device=self.device)))
