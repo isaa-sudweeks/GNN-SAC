@@ -201,15 +201,16 @@ class OnlineTrainer(Trainer):
         video_every_n_evals = int(getattr(self.cfg, "video_every_n_evals", 1))
         if video_every_n_evals < 1:
             raise ValueError("video_every_n_evals must be at least 1.")
+        eval_count = int(getattr(self, "_eval_count", 0))
         self._record_video_this_eval = bool(getattr(self.cfg, "save_video", False)) and (
-            self._eval_count % video_every_n_evals == 0
+            eval_count % video_every_n_evals == 0
         )
         eval_metrics = self.eval()
         eval_metrics.update(self.common_metrics())
         self.logger.log(eval_metrics, 'eval')
         self.report_eval_metrics(eval_metrics, self._step)
         self._last_eval_step = int(self._step)
-        self._eval_count += 1
+        self._eval_count = eval_count + 1
         return eval_metrics
 
     def _evaluate_final_policy(self):
@@ -584,10 +585,17 @@ class OnlineTrainer(Trainer):
                 self.agent.act(observations[env_idx], t0=len(episode_tds[env_idx]) == 1)
                 for env_idx in env_indices
             ]
-        return [
+        noisy_actions = [
             self._apply_action_noise(action, seed_action=using_seed_actions)
             for action in actions
         ]
+        project_action = getattr(type(self.agent), "project_action", None)
+        if callable(project_action):
+            return [
+                self.agent.project_action(observations[env_idx], action)
+                for env_idx, action in zip(env_indices, noisy_actions)
+            ]
+        return noisy_actions
     
     def to_td(self, obs, action=None, reward=None, terminated=None, raw_reward=None):
         """
@@ -680,6 +688,9 @@ class OnlineTrainer(Trainer):
                 else:
                     action = self.env.rand_act()
                 action = self._apply_action_noise(action, seed_action=self._step <= self.cfg.seed_steps)
+                project_action = getattr(type(self.agent), "project_action", None)
+                if callable(project_action):
+                    action = self.agent.project_action(obs, action)
             with self.performance_profiler.phase("environment_step"):
                 obs, reward, done, info = self.env.step(action)
             with self.performance_profiler.phase("transition_processing"):

@@ -115,12 +115,16 @@ python sac/train.py platform=supercomputer sac_backend=gnn sim_backend=mjx --mul
 # SAC Backend Profiles
 
 `config/config.yaml` now composes a `sac_backend` profile. The default is
-`mlp`; use `sac_backend=gnn` to switch the shared training config to graph
-observations, GNN dimensions, and the GNN SAC agent/buffer:
+`mlp`; use `sac_backend=gnn` for the graph policy or
+`sac_backend=padded_mlp` for the fixed-width shared MLP comparison. The padded
+MLP uses the same graph environment and task-balanced replay as the GNN but
+never consumes graph connectivity:
 
 ```bash
 python sac/train.py sac_backend=mlp steps=10000
 python sac/train.py sac_backend=gnn steps=10000
+python sac/train.py sac_backend=padded_mlp \
+  'truss_topologies=[tetrahedron,octahedron]' steps=10000
 ```
 
 Legacy wrapper configs live under `config/archieved/`; new runs should prefer
@@ -140,6 +144,7 @@ python sac/train.py platform=supercomputer sac_backend=gnn sim_backend=mjx --mul
 # Unified Truss Topology Environments
 - `truss-graph` is the reusable graph-observation environment for `mujoco_truss_gen` presets. It emits PyTorch Geometric graph observations through the wrapper layer and maps one scalar node action per graph node to tendon actuator commands.
 - `truss-mlp` is the reusable flat observation/action environment for standard MLP policies. It uses the same generated topology source, but keeps fixed-size vector observations and actions.
+- `sac_backend=padded_mlp` instead uses `truss-graph` and pads its control-node observations to 21 slots. Use this backend—not `truss-mlp`—for the shared multi-topology MLP-versus-GNN comparison. See `docs/padded_mlp_baseline.md`.
 - Select one generated topology with `truss_topology`. Valid names come from `mujoco_truss_gen.PRESETS`; these include the canonical `octahedron`, `tetrahedron`, `icosahedron`, and `solar_array` models plus the enumerated Henneberg and Usevitch families.
 
 For fixed-topology graph training on the cluster, select the supercomputer
@@ -255,7 +260,7 @@ truss_topologies:
 eval_task: truss-graph:icosahedron
 ```
 
-- For flat MLP baselines, different topologies are only valid together when their flat observation and action spaces match. Mismatched MLP topology lists fail early instead of padding or masking.
+- For the legacy flat `truss-mlp` baseline, different topologies are only valid together when their flat observation and action spaces match. Mismatched lists fail early. The `padded_mlp` backend supports mixed sizes through explicit existence and action masks.
 
 ```yaml
 task: truss-mlp

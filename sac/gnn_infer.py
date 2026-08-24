@@ -278,6 +278,19 @@ def _to_float(value) -> float:
     return float(value)
 
 
+def _make_agent(cfg):
+    backend = str(getattr(cfg, "sac_backend", "gnn")).lower()
+    if backend == "gnn":
+        return GNNSAC(cfg)
+    if backend == "padded_mlp":
+        from padded_mlp_sac import PaddedMLPSAC
+
+        return PaddedMLPSAC(cfg)
+    raise ValueError(
+        f"Graph inference supports sac_backend='gnn' or 'padded_mlp', got {backend!r}."
+    )
+
+
 def _unwrap_env(env):
     current = env
     while hasattr(current, "env"):
@@ -530,9 +543,10 @@ def _run_vectorized_inference(cfg, env, agent) -> list[dict]:
             active_observations = [observations[env_idx] for env_idx in active]
             actions = agent.act_batch(active_observations, eval_mode=deterministic)
             if print_position_command:
-                action_batch = torch.stack(actions).detach().cpu().numpy()
-                for action_idx, env_idx in enumerate(active):
-                    velocity_command = action_batch[action_idx] * float(getattr(cfg, "speed", 1.0))
+                for action, env_idx in zip(actions, active):
+                    if hasattr(env, "set_active_env"):
+                        env.set_active_env(env_idx)
+                    velocity_command = _velocity_command_from_action(action, cfg)
                     velocity_command, _ = _zero_passive_commands(velocity_command, env)
                     if position_commands[env_idx] is None:
                         position_commands[env_idx] = np.zeros_like(
@@ -568,6 +582,8 @@ def _run_vectorized_inference(cfg, env, agent) -> list[dict]:
                 and position_commands[env_idx] is not None
                 and not printed_position_commands[env_idx]
             ):
+                if hasattr(env, "set_active_env"):
+                    env.set_active_env(env_idx)
                 print(
                     f"episode={episode} step={lengths[env_idx]} "
                     f"position_command={_command_dict(position_commands[env_idx], env)}"
@@ -678,7 +694,7 @@ def run_inference(cfg):
 
     env = make_env(cfg)
     smooth_rendering = _enable_smooth_human_rendering(env, cfg)
-    agent = GNNSAC(cfg)
+    agent = _make_agent(cfg)
     try:
         load_agent_checkpoint(agent, checkpoint)
         agent.model.eval()
