@@ -6,6 +6,7 @@ from typing import Mapping
 import torch
 from torch_geometric.data import Batch, Data
 
+from common.config_utils import round_to_nearest_multiple
 from common.graph_transforms import graph_feature_flags, prepare_graph
 
 @dataclass(frozen=True)
@@ -252,18 +253,18 @@ class GNNBuffer:
         self.cfg = cfg
         self.task_names = self._task_names(cfg)
         self._task_count = len(self.task_names)
-        total_capacity = int(cfg.buffer_size)
-        batch_size = int(cfg.batch_size)
-        if total_capacity % self._task_count != 0:
-            raise ValueError(
-                f"buffer_size={total_capacity} must be divisible by the number of tasks "
-                f"({self._task_count})."
-            )
-        if batch_size % self._task_count != 0:
-            raise ValueError(
-                f"batch_size={batch_size} must be divisible by the number of tasks "
-                f"({self._task_count})."
-            )
+        total_capacity = round_to_nearest_multiple(
+            cfg.buffer_size,
+            self._task_count,
+            name="buffer_size",
+        )
+        batch_size = round_to_nearest_multiple(
+            cfg.batch_size,
+            self._task_count,
+            name="batch_size",
+        )
+        cfg.buffer_size = total_capacity
+        cfg.batch_size = batch_size
 
         self._batch_size = batch_size
         self._batch_size_per_task = batch_size // self._task_count

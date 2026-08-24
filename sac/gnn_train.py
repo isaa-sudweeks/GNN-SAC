@@ -76,12 +76,14 @@ def run_training(cfg, trial=None):
 
         agent = PaddedMLPSAC(cfg)
 
+    buffer = GNNBuffer(cfg)
+    logger = Logger(cfg)
     trainer = OnlineTrainer(
         cfg = cfg,
         env = env,
         agent=agent,
-        logger=Logger(cfg),
-        buffer=GNNBuffer(cfg),
+        logger=logger,
+        buffer=buffer,
         trial=trial,
     )
 

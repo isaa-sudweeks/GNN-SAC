@@ -30,6 +30,7 @@ wandb/
 tensorboard/
 checkpoints/
 logs/
+cross_validation_manifests/
 
 # Local datasets and derived data
 data/raw/

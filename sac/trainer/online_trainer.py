@@ -39,6 +39,10 @@ class OnlineTrainer(Trainer):
         self._record_video_this_eval = True
         self.reward_normalizer = self._make_reward_normalizer()
         self.performance_profiler = TrainingProfiler.from_config(self.cfg, self.logger)
+        self._eval_training_topologies = []
+        self._eval_heldout_topologies = self._topology_list(
+            getattr(self.cfg, "eval_extra_topologies", None)
+        )
         
         self.eval_env = self.env
         eval_task = getattr(self.cfg, "eval_task", None)
@@ -53,12 +57,41 @@ class OnlineTrainer(Trainer):
             )
         ).lower()
         uses_distinct_eval_backend = eval_backend != training_backend
+        if topology_bucket_metadata is not None:
+            training_topologies, _ = topology_bucket_metadata
+        else:
+            training_topologies = self._topology_list(
+                getattr(self.cfg, "truss_topologies", None)
+            )
+            if not training_topologies and self._eval_heldout_topologies:
+                training_topologies = [str(getattr(self.cfg, "truss_topology", "octahedron"))]
+        self._eval_training_topologies = list(training_topologies)
+        training_topology_set = set(self._eval_training_topologies)
+        self._eval_heldout_topologies = [
+            topology
+            for topology in self._eval_heldout_topologies
+            if topology not in training_topology_set
+        ]
+        eval_topologies = self._ordered_unique(
+            self._eval_training_topologies + self._eval_heldout_topologies
+        )
+        if self._eval_heldout_topologies and eval_task is not None:
+            raise ValueError(
+                "eval_extra_topologies cannot be combined with eval_task; the former "
+                "evaluates topology variants of the training task."
+            )
+        if self._eval_heldout_topologies and eval_backend != "mujoco":
+            raise ValueError(
+                "eval_extra_topologies currently requires eval_backend=mujoco so each "
+                "topology is evaluated in an isolated native MuJoCo environment."
+            )
         
         if (
             (eval_task is not None and eval_task != self.cfg.task)
             or has_domain_randomization
             or topology_bucket_metadata is not None
             or uses_distinct_eval_backend
+            or bool(self._eval_heldout_topologies)
         ):
             from copy import deepcopy
             from env import make_env
@@ -69,29 +102,28 @@ class OnlineTrainer(Trainer):
                 # Native evaluation needs one independent environment per task,
                 # not the accelerator-sized training batch.
                 eval_cfg.num_envs = 1
-            if topology_bucket_metadata is not None:
+            if topology_bucket_metadata is not None or self._eval_heldout_topologies:
                 # Evaluation needs one isolated slot per topology. Reusing the
                 # training buckets would overwrite live rollout state.
-                topologies, _ = topology_bucket_metadata
                 eval_cfg.num_envs = 1
                 if eval_backend == "mujoco":
                     eval_cfg.multitask = True
-                    eval_cfg.truss_topologies = list(topologies)
-                    eval_cfg.tasks = [f"truss-graph:{topology}" for topology in topologies]
+                    eval_cfg.truss_topologies = list(eval_topologies)
+                    eval_cfg.tasks = [f"truss-graph:{topology}" for topology in eval_topologies]
             if eval_task is not None:
                 eval_cfg.task = eval_task
                 eval_cfg.env_name = eval_task
                 if hasattr(eval_cfg, "tasks"):
                     eval_cfg.tasks = [eval_task]
             self.eval_env = make_env(eval_cfg)
-            if topology_bucket_metadata is not None:
+            if topology_bucket_metadata is not None or self._eval_heldout_topologies:
                 eval_topology_metadata = self._topology_bucket_metadata(self.eval_env)
                 if eval_topology_metadata is not None:
                     _, representative_indices = eval_topology_metadata
                     self._eval_topology_indices = dict(representative_indices)
                 else:
                     self._eval_topology_indices = {
-                        topology: env_idx for env_idx, topology in enumerate(topologies)
+                        topology: env_idx for env_idx, topology in enumerate(eval_topologies)
                     }
             
         self.maybe_load_checkpoint()
@@ -287,6 +319,10 @@ class OnlineTrainer(Trainer):
     def _eval_topologies(self, topology_indices):
         metrics = {}
         topology_rewards, topology_successes, topology_lengths, topology_distances = [], [], [], []
+        trained_rewards, trained_successes, trained_lengths, trained_distances = [], [], [], []
+        heldout_rewards, heldout_successes, heldout_lengths, heldout_distances = [], [], [], []
+        trained_topologies = set(self._eval_training_topologies or topology_indices)
+        heldout_topologies = set(self._eval_heldout_topologies)
         for topology, env_idx in topology_indices.items():
             topology_key = self._metric_key(topology)
             topology_metrics = self._eval_one(
@@ -301,12 +337,33 @@ class OnlineTrainer(Trainer):
             topology_successes.append(topology_metrics["episode_success"])
             topology_lengths.append(topology_metrics["episode_length"])
             topology_distances.append(topology_metrics["episode_distance"])
+            if topology in trained_topologies:
+                trained_rewards.append(topology_metrics["episode_reward"])
+                trained_successes.append(topology_metrics["episode_success"])
+                trained_lengths.append(topology_metrics["episode_length"])
+                trained_distances.append(topology_metrics["episode_distance"])
+            if topology in heldout_topologies:
+                heldout_rewards.append(topology_metrics["episode_reward"])
+                heldout_successes.append(topology_metrics["episode_success"])
+                heldout_lengths.append(topology_metrics["episode_length"])
+                heldout_distances.append(topology_metrics["episode_distance"])
         metrics.update(
-            episode_reward=np.nanmean(topology_rewards),
-            episode_success=np.nanmean(topology_successes),
-            episode_length=np.nanmean(topology_lengths),
-            episode_distance=np.nanmean(topology_distances),
+            episode_reward=np.nanmean(trained_rewards),
+            episode_success=np.nanmean(trained_successes),
+            episode_length=np.nanmean(trained_lengths),
+            episode_distance=np.nanmean(trained_distances),
+            all_episode_reward=np.nanmean(topology_rewards),
+            all_episode_success=np.nanmean(topology_successes),
+            all_episode_length=np.nanmean(topology_lengths),
+            all_episode_distance=np.nanmean(topology_distances),
         )
+        if heldout_rewards:
+            metrics.update(
+                heldout_episode_reward=np.nanmean(heldout_rewards),
+                heldout_episode_success=np.nanmean(heldout_successes),
+                heldout_episode_length=np.nanmean(heldout_lengths),
+                heldout_episode_distance=np.nanmean(heldout_distances),
+            )
         return metrics
 
     def _activate_shared_eval_env(self, env_idx):
@@ -472,6 +529,18 @@ class OnlineTrainer(Trainer):
                 )
             current = getattr(current, "env", None)
         return None
+
+    @staticmethod
+    def _topology_list(value):
+        if value in (None, "null"):
+            return []
+        if isinstance(value, str):
+            return [value]
+        return OnlineTrainer._ordered_unique(str(item) for item in value)
+
+    @staticmethod
+    def _ordered_unique(values):
+        return list(dict.fromkeys(values))
 
     def _eval_task_name(self, task_idx):
         tasks = list(getattr(self.cfg, "tasks", []))

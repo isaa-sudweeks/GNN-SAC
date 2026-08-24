@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 import unittest
+import warnings
 
 import torch
 from torch_geometric.data import Data
@@ -285,11 +286,19 @@ class TaskBalancedReplayTest(unittest.TestCase):
         self.assertTrue(buffer.ready)
         self.assertEqual(buffer.sample()[2].shape[0], 2)
 
-    def test_divisibility_is_validated(self):
-        with self.assertRaisesRegex(ValueError, "batch_size=3"):
-            GNNBuffer(cfg(batch_size=3))
-        with self.assertRaisesRegex(ValueError, "buffer_size=7"):
-            GNNBuffer(cfg(buffer_size=7))
+    def test_divisibility_values_are_rounded_and_persisted(self):
+        config = cfg(buffer_size=7, batch_size=3)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            buffer = GNNBuffer(config)
+
+        messages = [str(warning.message) for warning in caught]
+        self.assertTrue(any("buffer_size=7" in message and "using 8" in message for message in messages))
+        self.assertTrue(any("batch_size=3" in message and "using 4" in message for message in messages))
+        self.assertEqual(config.buffer_size, 8)
+        self.assertEqual(config.batch_size, 4)
+        self.assertEqual(buffer._capacity_per_task, 4)
+        self.assertEqual(buffer._batch_size_per_task, 2)
 
     def test_checkpoint_round_trip_and_layout_validation(self):
         original = GNNBuffer(cfg())
