@@ -1,4 +1,3 @@
-from collections.abc import Iterator
 from copy import deepcopy 
 
 import torch 
@@ -100,10 +99,9 @@ class GNNActorCritic(nn.Module):
     def total_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
-    def actor_parameters(self) -> Iterator[nn.Parameter]:
-        """Yield every learnable actor parameter, including the action projection."""
-        yield from self._pi.parameters()
-        yield from self._action_head.parameters()
+    def actor_parameters(self):
+        """Return every trainable actor parameter, including the action head."""
+        return tuple(self._pi.parameters()) + tuple(self._action_head.parameters())
 
     def train(self, mode=True):
         super().train(mode)
