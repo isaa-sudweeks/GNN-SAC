@@ -103,6 +103,23 @@ The hash is derived from the Hydra job override set, while the job number
 also separates duplicate configurations within one sweep. Requeued jobs retain
 the same directory and therefore resume only their own checkpoint and W&B run.
 
+Before submitting a supercomputer sweep, the Submitit launcher scans each
+resolved job directory and omits jobs whose saved checkpoint step has reached
+the configured `steps`. New checkpoints expose this progress through the small
+`checkpoints/latest.metadata.json` sidecar, so the launcher never loads the
+full replay checkpoint. Existing runs without the sidecar fall back to the
+highest complete `step_<N>.pt` filename. Missing or malformed metadata is
+treated as incomplete and the job is submitted normally.
+
+The scan preserves every job's original full-sweep number; rerun the same sweep
+in the same order to reuse its existing directories. To force submission of all
+jobs, disable the scan explicitly:
+
+```bash
+python sac/train.py platform=supercomputer --multirun \
+  hydra.launcher.skip_completed_jobs=false
+```
+
 Set `GNN_SAC_RUN_ROOT` to put runs on shared persistent storage, and override cluster-specific values on the command line as needed:
 
 ```bash
