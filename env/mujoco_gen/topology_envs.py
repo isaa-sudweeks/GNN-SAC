@@ -578,10 +578,10 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         return self._step_actuator_action(self._node_action_to_actuator_action(action))
 
     def _step_control_graph_node_action(self, action):
-        normalized_node_action, ctrl = self._control_graph_node_action_to_actuator_ctrl(action)
+        _, ctrl = self._control_graph_node_action_to_actuator_ctrl(action)
         previous_com = self._center_of_mass()
         self._advance(ctrl)
-        reward, info, terminated = self._compute_reward(normalized_node_action, previous_com)
+        reward, info, terminated = self._compute_reward(ctrl, previous_com)
         truncated = self.steps >= self.max_steps
         return self._get_obs(), reward, terminated, truncated, info
 
@@ -624,7 +624,7 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         ctrl = np.clip(ctrl, ctrlrange[:, 0], ctrlrange[:, 1])
         previous_com = self._center_of_mass()
         self._advance(ctrl)
-        reward, info, terminated = self._compute_reward(actuator_action, previous_com)
+        reward, info, terminated = self._compute_reward(ctrl, previous_com)
         truncated = self.steps >= self.max_steps
         return self._get_obs(), reward, terminated, truncated, info
 

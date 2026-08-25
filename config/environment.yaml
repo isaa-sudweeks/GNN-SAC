@@ -32,7 +32,7 @@ action_high: 1.0 # Upper bound of the normalized policy action space.
 
 # Reward and termination
 forward_weight: 19.65175423 # Reward multiplier for commanded center-of-mass velocity.
-energy_weight: 0.1 # Penalty multiplier on squared actuator command magnitude.
+energy_weight: 0.1 # Penalty multiplier on squared post-routing, clipped actuator commands.
 alive_bonus: 0.1 # Reward added each step while the structure remains valid.
 rigidity_weight: 0.1 # Reward multiplier for rigidity normalized by its initial value.
 slip_weight: 0.1215063801500649 # Penalty multiplier for horizontal velocity at low-contact nodes.
