@@ -1,5 +1,7 @@
 import json
+import os
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 import sys
 import tempfile
@@ -143,6 +145,47 @@ class FakeExecutor:
 
 
 class FilteringLauncherTest(unittest.TestCase):
+    def test_production_launcher_is_instantiated_by_hydra_plugin_registry(self):
+        script = """
+from pathlib import Path
+
+from hydra.core.plugins import Plugins
+from omegaconf import OmegaConf
+
+from common.submitit_launcher import FilteringSlurmLauncher as BaseFilteringSlurmLauncher
+
+root = Path.cwd()
+production_cfg = OmegaConf.load(
+    root / "config" / "hydra" / "launcher" / "filtering_submitit_slurm.yaml"
+)
+launcher = Plugins.instance()._instantiate(
+    OmegaConf.create(
+        {
+            "_target_": production_cfg._target_,
+            "submitit_folder": str(root / "hydra" / ".submitit" / "%j"),
+            "timeout_min": 60,
+            "skip_completed_jobs": True,
+        }
+    )
+)
+assert isinstance(launcher, BaseFilteringSlurmLauncher)
+"""
+        env = os.environ.copy()
+        python_path = [str(SAC_ROOT), str(ROOT)]
+        if env.get("PYTHONPATH"):
+            python_path.append(env["PYTHONPATH"])
+        env["PYTHONPATH"] = os.pathsep.join(python_path)
+
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+
     def make_launcher(self, root, configs, *, enabled=True):
         launcher = FilteringSlurmLauncher(
             skip_completed_jobs=enabled,

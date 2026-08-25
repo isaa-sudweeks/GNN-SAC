@@ -1,6 +1,6 @@
 # @package hydra.launcher
 
-_target_: common.submitit_launcher.FilteringSlurmLauncher
+_target_: hydra_plugins.gnn_sac_submitit_launcher.FilteringSlurmLauncher
 submitit_folder: ${hydra.sweep.dir}/.submitit/%j
 timeout_min: 60
 cpus_per_task: null
