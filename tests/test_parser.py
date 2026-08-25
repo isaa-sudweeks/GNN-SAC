@@ -17,6 +17,7 @@ from common.parser import (
     capture_launch_command,
     multirun_id,
     multirun_work_dir,
+    normalize_numeric_value,
     parse_cfg,
 )
 
@@ -85,6 +86,13 @@ class TopologyAliasTest(unittest.TestCase):
 
 
 class RunMetadataTest(unittest.TestCase):
+    def test_numeric_expression_normalization_is_shared(self):
+        self.assertEqual(normalize_numeric_value("1000*10"), 10_000)
+
+        cfg = parse_cfg(topology_cfg(steps="1000*10"))
+
+        self.assertEqual(cfg.steps, 10_000)
+
     def test_defaults_wandb_storage_to_project_root(self):
         cfg = parse_cfg(topology_cfg())
 

@@ -22,7 +22,13 @@ from common.submitit_launcher import (
 )
 
 
-def sweep_cfg(root: Path, *, override_dirname: str, steps: int = 100, resume="latest"):
+def sweep_cfg(
+    root: Path,
+    *,
+    override_dirname: str,
+    steps: int | str = 100,
+    resume="latest",
+):
     return OmegaConf.create(
         {
             "work_dir": str(root / "runs" / "experiment" / "seed_1"),
@@ -221,6 +227,19 @@ class FilteringLauncherTest(unittest.TestCase):
             launcher = self.make_launcher(root, {"job=a": increased})
             self.assertEqual(launcher._is_complete(increased, checkpoint_dir), (False, 100))
             self.assertEqual(launcher._is_complete(decreased, checkpoint_dir), (True, 100))
+
+    def test_arithmetic_step_expression_is_normalized_before_comparison(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            cfg = sweep_cfg(root, override_dirname="job=a", steps="1000*10")
+            checkpoint_dir = resolve_checkpoint_dir(cfg, 0)
+            write_metadata_checkpoint(checkpoint_dir, 10_000, 10_000)
+            launcher = self.make_launcher(root, {"job=a": cfg})
+
+            self.assertEqual(
+                launcher._is_complete(cfg, checkpoint_dir),
+                (True, 10_000),
+            )
 
 
 if __name__ == "__main__":

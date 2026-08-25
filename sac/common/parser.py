@@ -46,6 +46,22 @@ def multirun_work_dir(
 	return work_dir / multirun_id(job_num, override_dirname)
 
 
+def normalize_numeric_value(value: Any) -> Any:
+	"""Normalize the integer and single-operation expressions accepted by configs."""
+	if not isinstance(value, str):
+		return value
+	if value.replace('_', '').isdigit():
+		return int(value.replace('_', ''))
+	match = re.match(r"(\d+)([+\-*/])(\d+)", value)
+	if match is None:
+		return value
+	left, operator, right = match.groups()
+	result = eval(left + operator + right)
+	if isinstance(result, float) and result.is_integer():
+		return int(result)
+	return result
+
+
 def _hydra_multirun_identity() -> tuple[int, str] | None:
 	"""Return Hydra's job number and override identity during a multirun."""
 	from hydra.core.hydra_config import HydraConfig
@@ -100,16 +116,7 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 	# Algebraic expressions
 	for k in cfg.keys():
 		try:
-			v = cfg[k]
-			if isinstance(v, str):
-				if v.replace('_', '').isdigit():
-					cfg[k] = int(v.replace('_', ''))
-					continue
-				match = re.match(r"(\d+)([+\-*/])(\d+)", v)
-				if match:
-					cfg[k] = eval(match.group(1) + match.group(2) + match.group(3))
-					if isinstance(cfg[k], float) and cfg[k].is_integer():
-						cfg[k] = int(cfg[k])
+			cfg[k] = normalize_numeric_value(cfg[k])
 		except:
 			pass
 

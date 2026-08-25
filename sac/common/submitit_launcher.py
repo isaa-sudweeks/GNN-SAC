@@ -11,7 +11,7 @@ from hydra_plugins.hydra_submitit_launcher.config import BaseQueueConf
 from hydra_plugins.hydra_submitit_launcher.submitit_launcher import SlurmLauncher
 from omegaconf import OmegaConf, open_dict
 
-from common.parser import multirun_work_dir
+from common.parser import multirun_work_dir, normalize_numeric_value
 
 
 log = logging.getLogger(__name__)
@@ -127,7 +127,7 @@ class FilteringSlurmLauncher(SlurmLauncher):
             return False, None
         if str(cfg.get("resume_from_checkpoint", "")).lower() != "latest":
             return False, None
-        target_steps = int(cfg.steps)
+        target_steps = int(normalize_numeric_value(cfg.steps))
         saved_step = completed_checkpoint_step(checkpoint_dir)
         return saved_step is not None and saved_step >= target_steps, saved_step
 
