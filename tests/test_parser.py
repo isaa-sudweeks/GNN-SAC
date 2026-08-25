@@ -12,7 +12,13 @@ for path in (ROOT, SAC_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from common.parser import LAUNCH_COMMAND_ENV, capture_launch_command, parse_cfg
+from common.parser import (
+    LAUNCH_COMMAND_ENV,
+    capture_launch_command,
+    multirun_id,
+    multirun_work_dir,
+    parse_cfg,
+)
 
 
 def hydra_job(job_num: int, override_dirname: str):
@@ -137,6 +143,20 @@ class RunMetadataTest(unittest.TestCase):
 
 
 class MultirunWorkDirTest(unittest.TestCase):
+    def test_pure_identity_helpers_match_parser_directory_shape(self):
+        identity = multirun_id(7, "exp_name=test,seed=2")
+
+        self.assertRegex(identity, r"^job_0007_[0-9a-f]{12}$")
+        self.assertEqual(
+            multirun_work_dir(
+                "/runs/test/seed_2",
+                isolate_multirun_runs=True,
+                job_num=7,
+                override_dirname="exp_name=test,seed=2",
+            ),
+            Path("/runs/test/seed_2") / identity,
+        )
+
     def test_different_overrides_use_different_work_dirs(self):
         with patch(
             "hydra.core.hydra_config.HydraConfig.get",
