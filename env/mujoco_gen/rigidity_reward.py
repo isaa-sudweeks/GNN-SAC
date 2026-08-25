@@ -31,7 +31,12 @@ class FirstNonRigidEigenvalueRewardMixin:
         self._observation_rigidity = None
         return rigidity
 
-    def _compute_reward(self, actuator_commands, previous_com=None):
+    def _compute_reward(
+        self,
+        actuator_commands,
+        previous_com=None,
+        substeps_executed=None,
+    ):
         critical_eig_raw = float(self.mj_model._critical_eig())
         critical_eig = self._rigidity_ratio(critical_eig_raw)
         terminated = (
@@ -46,7 +51,10 @@ class FirstNonRigidEigenvalueRewardMixin:
         else:
             current_com = self._center_of_mass()
             com_delta_x = float(current_com[0] - previous_com[0])
-            dt = float(self.nsubsteps) * float(self.mj_model.model.opt.timestep)
+            elapsed_substeps = (
+                self.nsubsteps if substeps_executed is None else substeps_executed
+            )
+            dt = float(elapsed_substeps) * float(self.mj_model.model.opt.timestep)
             raw_forward_vel = 0.0 if dt <= 0.0 else com_delta_x / dt
 
         reward_forward_vel = float(raw_forward_vel) if np.isfinite(raw_forward_vel) else 0.0

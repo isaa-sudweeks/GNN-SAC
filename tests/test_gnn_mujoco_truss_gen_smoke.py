@@ -899,6 +899,43 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_graph_terminal_velocity_uses_executed_substep_duration(self):
+        cfg = graph_test_cfg(
+            rigidity_weight=0.0,
+            forward_weight=1.0,
+            energy_weight=0.0,
+            alive_bonus=0.0,
+            slip_weight=0.0,
+            collapse_penalty=0.0,
+            critical_eig_threshold=0.6,
+            max_forward_velocity=None,
+        )
+        env = make_env(cfg)
+        try:
+            unwrapped = env.unwrapped
+            unwrapped._initial_critical_eig = 0.5
+            unwrapped.mj_model._critical_eig = lambda: 0.25
+            unwrapped.mj_model.get_slip_penalty = lambda height: 0.0
+            unwrapped.mj_model.initial_bounding_box_diagonal = 1.0
+            unwrapped.mj_model.model.opt.timestep = 0.01
+            unwrapped._center_of_mass = lambda: np.array([-0.05, 0.0, 0.0])
+
+            action = np.zeros(unwrapped.mj_model.model.nu, dtype=np.float32)
+            reward, info, terminated = unwrapped._compute_reward(
+                action,
+                previous_com=np.zeros(3),
+                substeps_executed=5,
+            )
+
+            self.assertTrue(terminated)
+            self.assertAlmostEqual(info["com_delta_x"], -0.05)
+            self.assertAlmostEqual(info["forward_velocity_raw"], -1.0)
+            self.assertAlmostEqual(info["forward_velocity"], -1.0)
+            self.assertAlmostEqual(info["forward"], -1.0)
+            self.assertAlmostEqual(reward, -1.0)
+        finally:
+            env.close()
+
     def test_unified_graph_env_supports_representative_mujoco_truss_gen_presets(self):
         # PRESETS now contains hundreds of enumerated Henneberg variants. Their
         # exhaustive generation belongs to mujoco-truss-gen's own test suite;
