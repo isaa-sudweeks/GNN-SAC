@@ -477,10 +477,14 @@ def _enable_smooth_human_rendering(env, cfg) -> bool:
             else:
                 self.mj_model.data.ctrl[:] = ctrl
 
+            minimum_critical_eig = np.inf
+            terminated_during_substeps = False
+            substeps_executed = 0
             for substep in range(nsubsteps):
                 if hasattr(self.mj_model, "apply_angle_bisector_control"):
                     self.mj_model.apply_angle_bisector_control()
                 _mujoco.mj_step(self.mj_model.model, self.mj_model.data)
+                substeps_executed = substep + 1
 
                 is_render_step = (substep + 1) % render_every == 0 or substep + 1 == nsubsteps
                 if self.viewer is not None and is_render_step:
@@ -490,8 +494,27 @@ def _enable_smooth_human_rendering(env, cfg) -> bool:
                     sleep_seconds = target_time - time.perf_counter()
                     if sleep_seconds > 0:
                         time.sleep(sleep_seconds)
+
+                collapse_check = getattr(self.mj_model, "collapse_check", None)
+                if callable(collapse_check):
+                    critical_eig = float(collapse_check())
+                    if np.isfinite(critical_eig):
+                        minimum_critical_eig = min(minimum_critical_eig, critical_eig)
+                    else:
+                        minimum_critical_eig = critical_eig
+                    if (
+                        not np.isfinite(critical_eig)
+                        or critical_eig < self.config.critical_eig_threshold
+                    ):
+                        terminated_during_substeps = True
+                        break
             if _increments_steps:
                 self.steps += 1
+            return {
+                "minimum_substep_critical_eig_raw": float(minimum_critical_eig),
+                "substeps_executed": substeps_executed,
+                "terminated_during_substeps": terminated_during_substeps,
+            }
 
         env_obj._advance = types.MethodType(smooth_advance, env_obj)
         return True
