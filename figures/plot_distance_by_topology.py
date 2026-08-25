@@ -28,6 +28,7 @@ TOPOLOGIES = [
     "octahedron",
 ]
 METRIC = "eval/episode_distance"
+DEFAULT_GREEDY_METRICS = Path(__file__).with_name("greedy_metrics.csv")
 
 
 def _finite_float(value: Any) -> float | None:
@@ -93,18 +94,60 @@ def aggregate_results(seed_results: pd.DataFrame) -> pd.DataFrame:
     return aggregate.sort_values("topology").reset_index(drop=True)
 
 
-def make_figure(aggregate: pd.DataFrame):
+def load_greedy_results(path: Path = DEFAULT_GREEDY_METRICS) -> pd.DataFrame:
+    """Load and validate measured greedy-controller distance summaries."""
+    greedy = pd.read_csv(path)
+    required_columns = {"topology", "distance_m", "distance_std_m"}
+    missing_columns = required_columns - set(greedy.columns)
+    if missing_columns:
+        raise ValueError(
+            f"Greedy metrics are missing columns: {', '.join(sorted(missing_columns))}"
+        )
+
+    duplicate_topologies = sorted(
+        greedy.loc[greedy["topology"].duplicated(), "topology"].astype(str).unique()
+    )
+    if duplicate_topologies:
+        raise ValueError(
+            f"Greedy metrics contain duplicate topologies: "
+            f"{', '.join(duplicate_topologies)}"
+        )
+
+    available_topologies = set(greedy["topology"])
+    missing_topologies = [name for name in TOPOLOGIES if name not in available_topologies]
+    extra_topologies = sorted(available_topologies - set(TOPOLOGIES))
+    if missing_topologies or extra_topologies:
+        details = []
+        if missing_topologies:
+            details.append(f"missing: {', '.join(missing_topologies)}")
+        if extra_topologies:
+            details.append(f"unexpected: {', '.join(extra_topologies)}")
+        raise ValueError(f"Greedy metrics topology mismatch ({'; '.join(details)})")
+
+    for column in ("distance_m", "distance_std_m"):
+        greedy[column] = pd.to_numeric(greedy[column], errors="coerce")
+        invalid = ~greedy[column].map(lambda value: math.isfinite(float(value)))
+        if invalid.any():
+            names = ", ".join(greedy.loc[invalid, "topology"].astype(str))
+            raise ValueError(f"Greedy metrics contain invalid {column} for: {names}")
+    if (greedy["distance_std_m"] < 0).any():
+        names = ", ".join(
+            greedy.loc[greedy["distance_std_m"] < 0, "topology"].astype(str)
+        )
+        raise ValueError(f"Greedy metrics contain negative distance_std_m for: {names}")
+
+    greedy["topology"] = pd.Categorical(
+        greedy["topology"], categories=TOPOLOGIES, ordered=True
+    )
+    return greedy.sort_values("topology").reset_index(drop=True)
+
+
+def make_figure(aggregate: pd.DataFrame, greedy_metrics: pd.DataFrame | None = None):
     """Create the RA-L-style horizontal distance plot."""
     gnn_sac = aggregate.assign(controller="GNN-SAC")
-    greedy = pd.DataFrame(
-        {
-            "topology": TOPOLOGIES,
-            "distance_m": 5.0,
-            "distance_std_m": float("nan"),
-            "n_seeds": 0,
-            "controller": "Greedy",
-        }
-    )
+    greedy = (
+        load_greedy_results() if greedy_metrics is None else greedy_metrics.copy()
+    ).assign(n_seeds=float("nan"), controller="Greedy")
     plot_data = pd.concat([gnn_sac, greedy], ignore_index=True)
     fig = px.scatter(
         plot_data,
@@ -144,6 +187,14 @@ def make_figure(aggregate: pd.DataFrame):
         error_x=dict(thickness=1.5, width=3, color="dimgray"),
         selector=dict(mode="markers"),
     )
+    fig.update_traces(
+        hovertemplate=(
+            "Controller=Greedy<br>Distance Traveled (m)=%{x}<br>"
+            "Robot Configuration=%{y}<br>distance_std_m=%{customdata[1]:.3f}"
+            "<extra></extra>"
+        ),
+        selector=dict(name="Greedy"),
+    )
     return fig
 
 
@@ -153,6 +204,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--run-prefix", default="paper-v2-",
         help="Only include run names beginning with this value; pass '' for all runs.",
+    )
+    parser.add_argument(
+        "--greedy-metrics",
+        type=Path,
+        default=DEFAULT_GREEDY_METRICS,
+        help="CSV containing measured greedy distance_m and distance_std_m by topology.",
     )
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent)
     parser.add_argument("--show", action="store_true", help="Open an interactive window.")
@@ -172,7 +229,7 @@ def main() -> None:
     seed_results.to_csv(args.output_dir / "distance_by_topology_seed_results.csv", index=False)
     aggregate.to_csv(args.output_dir / "distance_by_topology_summary.csv", index=False)
 
-    fig = make_figure(aggregate)
+    fig = make_figure(aggregate, load_greedy_results(args.greedy_metrics))
     fig.write_image(args.output_dir / "distance_achieved_by_topology.png", scale=3)
     fig.write_html(
         args.output_dir / "distance_achieved_by_topology.html", include_plotlyjs="cdn"
