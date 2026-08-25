@@ -165,6 +165,13 @@ class OnlineTrainer(Trainer):
             done=done,
         )
 
+    def _reset_reward_normalizer_streams(self, streams):
+        reward_normalizer = getattr(self, "reward_normalizer", None)
+        if reward_normalizer is None:
+            return
+        for stream in streams:
+            reward_normalizer.reset_stream(stream)
+
     def common_metrics(self):
         """
         Return a dictionary of current metrics.
@@ -746,6 +753,7 @@ class OnlineTrainer(Trainer):
                             )
                             reward_metrics.update(self._episode_reward_components)
                             self.logger.log(reward_metrics, 'training_rewards')
+                    self._reset_reward_normalizer_streams([0])
                     obs = self._apply_observation_noise(self.env.reset())
                     self._tds = [self.to_td(obs)]
                     self._episode_reward_components = {}
@@ -867,6 +875,7 @@ class OnlineTrainer(Trainer):
                                 self.logger.log(reward_metrics, 'training_rewards')
                     self._episode_reward_components = previous_components
 
+                    self._reset_reward_normalizer_streams(done_indices)
                     reset_obs = [
                         self._apply_observation_noise(obs)
                         for obs in self.env.reset_many(env_indices=done_indices)
