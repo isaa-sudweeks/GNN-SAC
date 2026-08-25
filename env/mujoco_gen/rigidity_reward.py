@@ -31,7 +31,12 @@ class FirstNonRigidEigenvalueRewardMixin:
         self._observation_rigidity = None
         return rigidity
 
-    def _compute_reward(self, action, previous_com=None, substeps_executed=None):
+    def _compute_reward(
+        self,
+        actuator_commands,
+        previous_com=None,
+        substeps_executed=None,
+    ):
         critical_eig_raw = float(self.mj_model._critical_eig())
         critical_eig = self._rigidity_ratio(critical_eig_raw)
         terminated = (
@@ -62,7 +67,7 @@ class FirstNonRigidEigenvalueRewardMixin:
         if terminated and self.config.zero_positive_forward_reward_on_termination:
             forward_vel = min(forward_vel, 0.0)
 
-        energy_penalty = float(np.sum(np.square(action)))
+        energy_penalty = float(np.sum(np.square(actuator_commands)))
         if terminated and self.config.zero_velocity_shaping_on_termination:
             slip_penalty = 0.0
         else:
@@ -100,6 +105,7 @@ class FirstNonRigidEigenvalueRewardMixin:
             "com_delta_x": com_delta_x,
             "alive": alive_reward,
             "energy": energy_reward,
+            "energy_penalty_raw": energy_penalty,
             "rigidity": rigidity_reward,
             "slip": slip_reward,
             "critical_eig": critical_eig,

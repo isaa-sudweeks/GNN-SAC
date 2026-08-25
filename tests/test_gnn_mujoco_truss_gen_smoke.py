@@ -804,6 +804,43 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_control_graph_energy_penalizes_routed_actuator_commands(self):
+        cfg = graph_test_cfg(
+            task="truss-graph",
+            truss_topology="octahedron",
+            use_control_graph=True,
+            speed=0.05,
+            forward_weight=0.0,
+            energy_weight=0.1,
+            alive_bonus=0.0,
+            rigidity_weight=0.0,
+            slip_weight=0.0,
+            collapse_penalty=0.0,
+            critical_eig_threshold=0.0,
+            max_steps=2,
+            nsubsteps=1,
+            domain_randomization=False,
+        )
+        env = make_env(cfg)
+        try:
+            env.reset()
+            action = np.linspace(-1.0, 1.0, env.action_space.shape[0], dtype=np.float32)
+            action = action.reshape(env.action_space.shape)
+            _, expected_ctrl = env.unwrapped._control_graph_node_action_to_actuator_ctrl(action)
+
+            _, reward, _, info = env.step(torch.as_tensor(action))
+
+            expected_penalty = float(np.sum(np.square(expected_ctrl)))
+            self.assertAlmostEqual(float(info["energy_penalty_raw"]), expected_penalty)
+            self.assertAlmostEqual(float(info["energy"]), -cfg.energy_weight * expected_penalty)
+            self.assertAlmostEqual(float(reward), float(info["energy"]), places=6)
+            self.assertNotAlmostEqual(
+                expected_penalty,
+                float(np.sum(np.square(action))),
+            )
+        finally:
+            env.close()
+
     def test_graph_rigidity_reward_uses_first_non_rigid_eigenvalue(self):
         cfg = graph_test_cfg(
             rigidity_weight=2.5,

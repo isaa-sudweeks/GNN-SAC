@@ -83,6 +83,45 @@ class MjxVectorEnvTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_energy_penalizes_routed_actuator_commands(self):
+        cfg = mjx_cfg(
+            num_envs=1,
+            speed=0.05,
+            forward_weight=0.0,
+            energy_weight=0.1,
+            alive_bonus=0.0,
+            rigidity_weight=0.0,
+            slip_weight=0.0,
+            collapse_penalty=0.0,
+            critical_eig_threshold=0.0,
+        )
+        env = make_env(cfg)
+        try:
+            env.reset_many()
+            action = torch.linspace(
+                -1.0,
+                1.0,
+                env.action_space.shape[0],
+                dtype=torch.float32,
+            ).reshape(env.action_space.shape)
+
+            _, reward, _, info = env.step_many([action], env_indices=[0])[0]
+
+            core = env.env._core
+            ctrl = env.env._state.data.ctrl[0, core._actuator_ids]
+            expected_penalty = float(
+                env.env._jax.device_get(env.env._jnp.sum(env.env._jnp.square(ctrl)))
+            )
+            self.assertAlmostEqual(float(info["energy_penalty_raw"]), expected_penalty)
+            self.assertAlmostEqual(float(info["energy"]), -cfg.energy_weight * expected_penalty)
+            self.assertAlmostEqual(float(reward), float(info["energy"]), places=6)
+            self.assertNotAlmostEqual(
+                expected_penalty,
+                float(torch.sum(torch.square(action * cfg.speed))),
+            )
+        finally:
+            env.close()
+
     def test_configurable_graph_features_flow_through_mjx_policy(self):
         cfg = mjx_cfg(
             num_envs=1,

@@ -578,11 +578,11 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         return self._step_actuator_action(self._node_action_to_actuator_action(action))
 
     def _step_control_graph_node_action(self, action):
-        normalized_node_action, ctrl = self._control_graph_node_action_to_actuator_ctrl(action)
+        _, ctrl = self._control_graph_node_action_to_actuator_ctrl(action)
         previous_com = self._center_of_mass()
         advance_info = self._advance(ctrl)
         reward, info, terminated = self._compute_reward(
-            normalized_node_action,
+            ctrl,
             previous_com,
             substeps_executed=int(advance_info["substeps_executed"]),
         )
@@ -630,7 +630,7 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         previous_com = self._center_of_mass()
         advance_info = self._advance(ctrl)
         reward, info, terminated = self._compute_reward(
-            actuator_action,
+            ctrl,
             previous_com,
             substeps_executed=int(advance_info["substeps_executed"]),
         )
