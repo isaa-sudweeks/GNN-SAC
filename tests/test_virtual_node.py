@@ -268,6 +268,32 @@ class VirtualNodeTest(unittest.TestCase):
 
         self.assertEqual(values.shape, (2,))
 
+    def test_actor_critic_uses_cached_action_counts_without_host_scalar_conversion(self):
+        batch = Batch.from_data_list([
+            prepare_graph(graph(3), use_virtual_node=True),
+            prepare_graph(graph(5), use_virtual_node=True),
+        ])
+        object.__setattr__(batch, "_physical_node_count_cache", 8)
+        object.__setattr__(batch, "_policy_action_count_cache", 8)
+        model = GNNActorCritic(cfg())
+        action = torch.randn(8, 1)
+
+        with (
+            patch.object(
+                torch.Tensor,
+                "__int__",
+                side_effect=AssertionError("critic synchronized a mask count"),
+            ),
+            patch.object(
+                model._Qs,
+                "forward",
+                return_value=torch.zeros(2, 2),
+            ),
+        ):
+            values = model.Q(batch, action, return_type="all")
+
+        self.assertEqual(values.shape, (2, 2))
+
     def test_critic_can_concatenate_physical_mean_and_virtual_node(self):
         batch = Batch.from_data_list([
             prepare_graph(graph(3), use_virtual_node=True),

@@ -166,18 +166,38 @@ class GNNActorCritic(nn.Module):
         action_mask = policy_action_mask(obs)
         pool_mask = physical_node_mask(obs)
         node_action = action.new_zeros((obs.x.size(0), action.size(-1)))
+        physical_node_count = getattr(
+            obs, "_physical_node_count_cache", None
+        )
+        if physical_node_count is None:
+            if bool(getattr(self.cfg, "use_virtual_node", False)):
+                graph_count = int(getattr(obs, "num_graphs", 1))
+                physical_node_count = obs.x.size(0) - graph_count
+            else:
+                physical_node_count = obs.x.size(0)
+        policy_action_count = getattr(
+            obs, "_policy_action_count_cache", None
+        )
         if action.size(0) == obs.x.size(0):
             node_action[action_mask] = action[action_mask]
-        elif action.size(0) == int(pool_mask.sum()):
+        elif action.size(0) == physical_node_count:
             node_action[action_mask] = action[action_mask[pool_mask]]
-        elif action.size(0) == int(action_mask.sum()):
+        elif (
+            policy_action_count is not None
+            and action.size(0) == policy_action_count
+        ):
             node_action[action_mask] = action
         else:
-            raise ValueError(
-                f"Got {action.size(0)} node actions for {int(action_mask.sum())} "
-                f"actuated nodes, {int(pool_mask.sum())} physical nodes, and "
-                f"{obs.x.size(0)} total nodes."
-            )
+            if policy_action_count is None:
+                policy_action_count = int(action_mask.sum())
+            if action.size(0) == policy_action_count:
+                node_action[action_mask] = action
+            else:
+                raise ValueError(
+                    f"Got {action.size(0)} node actions for {policy_action_count} "
+                    f"actuated nodes, {physical_node_count} physical nodes, and "
+                    f"{obs.x.size(0)} total nodes."
+                )
         q_values = qnet(
             torch.cat([obs.x, node_action], dim=-1),
             obs.edge_index,

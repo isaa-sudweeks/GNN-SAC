@@ -289,6 +289,12 @@ class TaskBalancedReplayTest(unittest.TestCase):
         self.assertEqual(list(replay_batch.by_task), ["truss-graph:a", "truss-graph:b"])
         self.assertEqual([batch[2].shape[0] for batch in replay_batch.by_task.values()], [2, 2])
         self.assertEqual(replay_batch.combined[2].shape[0], 4)
+        self.assertEqual(
+            replay_batch.combined[0]._physical_node_count_cache, 12
+        )
+        self.assertEqual(
+            replay_batch.combined[0]._policy_action_count_cache, 12
+        )
 
     def test_reports_multitask_replay_subphases(self):
         class PhaseRecorder:

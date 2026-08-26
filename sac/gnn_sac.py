@@ -346,45 +346,16 @@ class GNNSAC(torch.nn.Module):
                     continue
                 other_gradient = task_gradients[other_idx]
                 other_norm_squared = original_norm_squared[other_idx]
-                if other_norm_squared.device.type == "cpu":
-                    if float(other_norm_squared) == 0.0:
-                        continue
-                    dot = cls._gradient_dot_native(
-                        task_gradient, other_gradient
-                    )
-                    if float(dot) >= 0.0:
-                        continue
-                    coefficient = dot / other_norm_squared
-                    task_gradient[:] = [
-                        gradient
-                        - coefficient.to(
-                            device=gradient.device, dtype=gradient.dtype
-                        )
-                        * other.to(
-                            device=gradient.device, dtype=gradient.dtype
-                        )
-                        for gradient, other in zip(
-                            task_gradient, other_gradient
-                        )
-                    ]
+                if float(other_norm_squared) == 0.0:
                     continue
                 dot = cls._gradient_dot_native(task_gradient, other_gradient)
-                nonzero_norm = other_norm_squared != 0
-                should_project = nonzero_norm & ~(dot >= 0)
-                safe_norm_squared = torch.where(
-                    nonzero_norm,
-                    other_norm_squared,
-                    torch.ones_like(other_norm_squared),
-                )
-                coefficient = dot / safe_norm_squared
+                if float(dot) >= 0.0:
+                    continue
+                coefficient = dot / other_norm_squared
                 task_gradient[:] = [
-                    torch.where(
-                        should_project,
-                        gradient
-                        - coefficient.to(device=gradient.device, dtype=gradient.dtype)
-                        * other.to(device=gradient.device, dtype=gradient.dtype),
-                        gradient,
-                    )
+                    gradient
+                    - coefficient.to(device=gradient.device, dtype=gradient.dtype)
+                    * other.to(device=gradient.device, dtype=gradient.dtype)
                     for gradient, other in zip(task_gradient, other_gradient)
                 ]
 

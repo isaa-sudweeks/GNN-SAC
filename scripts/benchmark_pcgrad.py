@@ -440,6 +440,23 @@ def make_static_task_batches(
         next_observation_batch = Batch.from_data_list(next_observations).to(
             device
         )
+        physical_count = per_task * node_count
+        object.__setattr__(
+            observation_batch, "_physical_node_count_cache", physical_count
+        )
+        object.__setattr__(
+            observation_batch, "_policy_action_count_cache", physical_count
+        )
+        object.__setattr__(
+            next_observation_batch,
+            "_physical_node_count_cache",
+            physical_count,
+        )
+        object.__setattr__(
+            next_observation_batch,
+            "_policy_action_count_cache",
+            physical_count,
+        )
         action = torch.randn(
             per_task * node_count,
             cfg.action_dim,
