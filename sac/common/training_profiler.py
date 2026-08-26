@@ -56,6 +56,7 @@ class TrainingProfiler:
 
         self._samples: dict[str, list[float]] = defaultdict(list)
         self._subsamples: dict[str, list[float]] = defaultdict(list)
+        self._optimization_subsamples: dict[str, list[float]] = defaultdict(list)
         self._vector_steps_seen = 0
         self._measured_vector_steps = 0
         self._measured_transitions = 0
@@ -204,6 +205,27 @@ class TrainingProfiler:
                 self.synchronize()
                 self._subsamples[name].append(self.clock() - started_at)
 
+    @contextmanager
+    def optimization_subphase(self, name: str) -> Iterator[None]:
+        """Time an optimizer subphase without double-counting the hot path."""
+        if not self._active:
+            yield
+            return
+        with ExitStack() as stack:
+            if self._torch_profiler is not None:
+                stack.enter_context(
+                    torch.profiler.record_function(f"training/optimization/{name}")
+                )
+            self.synchronize()
+            started_at = self.clock()
+            try:
+                yield
+            finally:
+                self.synchronize()
+                self._optimization_subsamples[name].append(
+                    self.clock() - started_at
+                )
+
     def _start_trace(self) -> None:
         activities = [torch.profiler.ProfilerActivity.CPU]
         if self.device.type == "cuda" and torch.cuda.is_available():
@@ -273,6 +295,21 @@ class TrainingProfiler:
         }
         for stats in replay_subphases.values():
             stats["parent_phase_percent"] = stats.pop("hot_path_percent")
+        optimization_total = sum(self._samples.get("optimization", ()))
+        optimization_subphases = {
+            name: {
+                **self._phase_statistics(
+                    samples,
+                    optimization_total,
+                    included_in_hot_path=True,
+                ),
+                "parent_phase": "optimization",
+            }
+            for name, samples in sorted(self._optimization_subsamples.items())
+            if samples
+        }
+        for stats in optimization_subphases.values():
+            stats["parent_phase_percent"] = stats.pop("hot_path_percent")
         throughput = {
             "environment_transitions_per_second": (
                 self._measured_transitions / hot_path_total if hot_path_total > 0.0 else 0.0
@@ -321,6 +358,7 @@ class TrainingProfiler:
             ),
             "phases": phases,
             "replay_subphases": replay_subphases,
+            "optimization_subphases": optimization_subphases,
             "throughput": throughput,
             "trace_path": str(self._trace_path) if self._trace_path is not None else None,
         }
@@ -343,6 +381,10 @@ class TrainingProfiler:
             for key, value in stats.items():
                 if isinstance(value, (float, int)):
                     metrics[f"replay_subphase/{name}/{key}"] = value
+        for name, stats in summary["optimization_subphases"].items():
+            for key, value in stats.items():
+                if isinstance(value, (float, int)):
+                    metrics[f"optimization_subphase/{name}/{key}"] = value
         for key, value in summary["throughput"].items():
             metrics[f"throughput/{key}"] = value
         return metrics
