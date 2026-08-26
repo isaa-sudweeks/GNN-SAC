@@ -7,7 +7,12 @@ import torch
 from torch_geometric.data import Batch, Data
 
 from common.config_utils import round_to_nearest_multiple
-from common.graph_transforms import graph_feature_flags, prepare_graph
+from common.graph_transforms import (
+    graph_feature_flags,
+    physical_node_mask,
+    policy_action_mask,
+    prepare_graph,
+)
 
 @dataclass(frozen=True)
 class ReplayBatch:
@@ -365,14 +370,22 @@ class GNNBuffer:
                     for sample in samples
                     for graph in sample.observations
                 ]
-            ).to(self.cfg.device, non_blocking=True)
+            )
+            self._attach_action_counts(observations)
+            observations = observations.to(
+                self.cfg.device, non_blocking=True
+            )
             next_observations = Batch.from_data_list(
                 [
                     graph
                     for sample in samples
                     for graph in sample.next_observations
                 ]
-            ).to(self.cfg.device, non_blocking=True)
+            )
+            self._attach_action_counts(next_observations)
+            next_observations = next_observations.to(
+                self.cfg.device, non_blocking=True
+            )
             actions = torch.cat(
                 [action for sample in samples for action in sample.actions],
                 dim=0,
@@ -390,6 +403,20 @@ class GNNBuffer:
                 dim=0,
             ).to(self.cfg.device, non_blocking=True)
         return observations, actions, rewards, terminated, next_observations
+
+    @staticmethod
+    def _attach_action_counts(batch):
+        """Cache CPU-derived mask counts used by the CUDA critic hot path."""
+        object.__setattr__(
+            batch,
+            "_physical_node_count_cache",
+            int(physical_node_mask(batch).sum()),
+        )
+        object.__setattr__(
+            batch,
+            "_policy_action_count_cache",
+            int(policy_action_mask(batch).sum()),
+        )
 
     def sample_task_batches(self, performance_profiler=None):
         raw_by_task = self._sample_raw_by_task(

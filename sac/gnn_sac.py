@@ -25,11 +25,13 @@ class GNNSAC(torch.nn.Module):
         self.cfg = cfg
         self.device = torch.device(getattr(cfg, "device", "cuda"))
         self.model = self._make_model(cfg).to(self.device)
+        self._q_parameters = tuple(self.model._Qs.parameters())
+        self._actor_parameters = tuple(self.model.actor_parameters())
         capturable = self.device.type in {"cuda", "xpu", "hpu", "privateuseone", "xla"}
 
-        self.q_optim = torch.optim.Adam(self.model._Qs.parameters(), lr=self.cfg.lr, capturable=capturable)
+        self.q_optim = torch.optim.Adam(self._q_parameters, lr=self.cfg.lr, capturable=capturable)
         self.pi_optim = torch.optim.Adam(
-            self.model.actor_parameters(),
+            self._actor_parameters,
             lr=self.cfg.lr,
             eps=1e-5,
             capturable=capturable,
@@ -334,15 +336,16 @@ class GNNSAC(torch.nn.Module):
             [gradient.detach().clone() for gradient in gradients]
             for gradients in task_gradients
         ]
+        original_norm_squared = tuple(
+            cls._gradient_dot_native(gradients, gradients)
+            for gradients in task_gradients
+        )
         for task_idx, task_gradient in enumerate(projected):
             for other_idx in torch.randperm(len(task_gradients)).tolist():
                 if other_idx == task_idx:
                     continue
                 other_gradient = task_gradients[other_idx]
-                other_norm_squared = cls._gradient_dot_native(
-                    other_gradient,
-                    other_gradient,
-                )
+                other_norm_squared = original_norm_squared[other_idx]
                 if float(other_norm_squared) == 0.0:
                     continue
                 dot = cls._gradient_dot_native(task_gradient, other_gradient)
@@ -368,7 +371,15 @@ class GNNSAC(torch.nn.Module):
     @staticmethod
     def _set_parameter_gradients(parameters, gradients):
         for parameter, gradient in zip(parameters, gradients):
-            parameter.grad = gradient.detach().clone()
+            parameter.grad = gradient
+
+    @staticmethod
+    def _optimization_subphase(performance_profiler, name):
+        if performance_profiler is None or not hasattr(
+            performance_profiler, "optimization_subphase"
+        ):
+            return contextlib.nullcontext()
+        return performance_profiler.optimization_subphase(name)
 
     @classmethod
     def gradient_pair_metrics(cls, first, second):
@@ -443,66 +454,111 @@ class GNNSAC(torch.nn.Module):
                     metrics[f"{objective}/norm_agreement/{pair_key}"] = pair["norm_agreement"]
         return metrics
 
-    def _pcgrad_q_update(self, task_batches):
-        parameters = tuple(self.model._Qs.parameters())
+    def _pcgrad_q_update(
+        self,
+        task_batches,
+        *,
+        retain_task_gradients=False,
+        performance_profiler=None,
+    ):
+        parameters = self._q_parameters
         losses = []
-        task_gradients = {}
-        for task, batch in task_batches.items():
-            obs, action, reward, terminated, next_obs = batch
-            loss = self._q_loss(obs, action, reward, terminated, next_obs)
-            losses.append(loss)
-            task_gradients[task] = self._parameter_gradients(loss, parameters)
-
         self.q_optim.zero_grad(set_to_none=True)
-        self._set_parameter_gradients(
-            parameters,
-            self.pcgrad_project(task_gradients.values()),
-        )
-        grad_norm = torch.nn.utils.clip_grad_norm_(parameters, self.cfg.grad_clip_norm)
-        self.q_optim.step()
+        task_gradient_values = []
+        retained_gradients = {} if retain_task_gradients else None
+        with self._optimization_subphase(
+            performance_profiler, "pcgrad_critic_gradients"
+        ):
+            for task, batch in task_batches.items():
+                obs, action, reward, terminated, next_obs = batch
+                loss = self._q_loss(obs, action, reward, terminated, next_obs)
+                losses.append(loss.detach())
+                gradients = self._parameter_gradients(loss, parameters)
+                task_gradient_values.append(gradients)
+                if retained_gradients is not None:
+                    retained_gradients[task] = gradients
+
+        with self._optimization_subphase(
+            performance_profiler, "pcgrad_critic_projection"
+        ):
+            projected_gradients = self.pcgrad_project(task_gradient_values)
+            self._set_parameter_gradients(parameters, projected_gradients)
+        with self._optimization_subphase(
+            performance_profiler, "pcgrad_critic_step"
+        ):
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                parameters, self.cfg.grad_clip_norm
+            )
+            self.q_optim.step()
         return (
-            torch.stack([loss.detach() for loss in losses]).mean(),
+            torch.stack(losses).mean(),
             grad_norm.detach(),
-            task_gradients,
+            retained_gradients,
         )
 
-    def _pcgrad_pi_and_alpha_update(self, task_batches):
-        parameters = tuple(self.model.actor_parameters())
+    def _pcgrad_pi_and_alpha_update(
+        self,
+        task_batches,
+        *,
+        retain_task_gradients=False,
+        performance_profiler=None,
+    ):
+        parameters = self._actor_parameters
         losses = []
-        task_gradients = {}
-        task_info = []
-        for task, batch in task_batches.items():
-            pi_loss, info = self._pi_loss(batch[0])
-            losses.append(pi_loss)
-            task_info.append(info)
-            task_gradients[task] = self._parameter_gradients(pi_loss, parameters)
-
         self.pi_optim.zero_grad(set_to_none=True)
-        self._set_parameter_gradients(
-            parameters,
-            self.pcgrad_project(task_gradients.values()),
-        )
-        pi_grad_norm = torch.nn.utils.clip_grad_norm_(parameters, self.cfg.grad_clip_norm)
-        self.pi_optim.step()
+        task_gradient_values = []
+        retained_gradients = {} if retain_task_gradients else None
+        log_probabilities = []
+        entropies = []
+        with self._optimization_subphase(
+            performance_profiler, "pcgrad_actor_gradients"
+        ):
+            for task, batch in task_batches.items():
+                pi_loss, info = self._pi_loss(batch[0])
+                losses.append(pi_loss.detach())
+                log_probabilities.append(info["log_prob"].detach())
+                entropies.append(info["entropy"].detach().mean())
+                gradients = self._parameter_gradients(pi_loss, parameters)
+                task_gradient_values.append(gradients)
+                if retained_gradients is not None:
+                    retained_gradients[task] = gradients
 
-        log_prob = torch.cat([info["log_prob"].reshape(-1) for info in task_info])
-        alpha_loss = -(self.log_alpha * (log_prob.detach() + self.target_entropy)).mean()
-        self.alpha_optim.zero_grad(set_to_none=True)
-        alpha_loss.backward()
-        self.alpha_optim.step()
+        with self._optimization_subphase(
+            performance_profiler, "pcgrad_actor_projection"
+        ):
+            projected_gradients = self.pcgrad_project(task_gradient_values)
+            self._set_parameter_gradients(parameters, projected_gradients)
+        with self._optimization_subphase(
+            performance_profiler, "pcgrad_actor_step"
+        ):
+            pi_grad_norm = torch.nn.utils.clip_grad_norm_(
+                parameters, self.cfg.grad_clip_norm
+            )
+            self.pi_optim.step()
 
-        entropy = torch.stack(
-            [info["entropy"].detach().mean() for info in task_info]
-        ).mean()
+        with self._optimization_subphase(
+            performance_profiler, "pcgrad_entropy_step"
+        ):
+            log_prob = torch.cat(
+                [value.reshape(-1) for value in log_probabilities]
+            )
+            alpha_loss = -(
+                self.log_alpha * (log_prob + self.target_entropy)
+            ).mean()
+            self.alpha_optim.zero_grad(set_to_none=True)
+            alpha_loss.backward()
+            self.alpha_optim.step()
+
+        entropy = torch.stack(entropies).mean()
         return (
             {
-                "pi_loss": torch.stack([loss.detach() for loss in losses]).mean(),
+                "pi_loss": torch.stack(losses).mean(),
                 "pi_grad_norm": pi_grad_norm.detach(),
                 "alpha_loss": alpha_loss.detach(),
                 "alpha": self.alpha.detach(),
                 "entropy": entropy,
             },
-            task_gradients,
+            retained_gradients,
         )
 
     def update(self, buffer, compute_diagnostics=False, performance_profiler=None):
@@ -552,8 +608,16 @@ class GNNSAC(torch.nn.Module):
         with optimization_phase:
             self.model.train()
             if pcgrad_enabled:
-                q_loss, q_grad_norm, q_task_gradients = self._pcgrad_q_update(task_batches)
-                pi_info, pi_task_gradients = self._pcgrad_pi_and_alpha_update(task_batches)
+                q_loss, q_grad_norm, q_task_gradients = self._pcgrad_q_update(
+                    task_batches,
+                    retain_task_gradients=compute_diagnostics,
+                    performance_profiler=performance_profiler,
+                )
+                pi_info, pi_task_gradients = self._pcgrad_pi_and_alpha_update(
+                    task_batches,
+                    retain_task_gradients=compute_diagnostics,
+                    performance_profiler=performance_profiler,
+                )
                 diagnostics = (
                     self._gradient_metrics(
                         {"critic": q_task_gradients, "actor": pi_task_gradients}
@@ -569,7 +633,10 @@ class GNNSAC(torch.nn.Module):
                 )
                 q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
                 pi_info = self.update_pi_and_alpha(obs)
-            self.model.soft_update_target_Q()
+            with GNNSAC._optimization_subphase(
+                performance_profiler, "target_update"
+            ):
+                self.model.soft_update_target_Q()
             self.model.eval()
 
         info = {
