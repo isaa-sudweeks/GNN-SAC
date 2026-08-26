@@ -500,6 +500,32 @@ def assert_nested_exact(first, second, path="state") -> None:
         raise RuntimeError(f"{path} differs: {first!r} != {second!r}")
 
 
+def nested_max_abs_difference(first, second) -> float:
+    if isinstance(first, torch.Tensor):
+        if first.numel() == 0:
+            return 0.0
+        if first.dtype == torch.bool:
+            return float(not torch.equal(first, second))
+        return float((first - second).abs().max())
+    if isinstance(first, dict):
+        return max(
+            (
+                nested_max_abs_difference(first[key], second[key])
+                for key in first
+            ),
+            default=0.0,
+        )
+    if isinstance(first, (tuple, list)):
+        return max(
+            (
+                nested_max_abs_difference(a, b)
+                for a, b in zip(first, second)
+            ),
+            default=0.0,
+        )
+    return 0.0 if first == second else float("inf")
+
+
 def benchmark_full_update(
     cfg,
     *,
@@ -514,7 +540,11 @@ def benchmark_full_update(
     cfg.batch_size = batch_size
     cfg.pcgrad = True
     reference_agent = FrozenLegacyGNNSAC(cfg)
+    control_agent = FrozenLegacyGNNSAC(cfg)
     optimized_agent = GNNSAC(cfg)
+    control_agent.load_training_state_dict(
+        reference_agent.training_state_dict()
+    )
     optimized_agent.load_training_state_dict(
         reference_agent.training_state_dict()
     )
@@ -529,7 +559,15 @@ def benchmark_full_update(
         )
     )
     samples = {"legacy": [], "optimized": []}
-    agents = {"legacy": reference_agent, "optimized": optimized_agent}
+    agents = {
+        "legacy": reference_agent,
+        "control": control_agent,
+        "optimized": optimized_agent,
+    }
+    control_differences = []
+    optimized_differences = []
+    control_metric_differences = []
+    optimized_metric_differences = []
     total_iterations = warmup + repeats
     torch.manual_seed(seed + 1)
     if device.type == "cuda":
@@ -541,11 +579,9 @@ def benchmark_full_update(
         cuda_rng_state = (
             torch.cuda.get_rng_state_all() if device.type == "cuda" else None
         )
-        names = (
-            ("legacy", "optimized")
-            if iteration % 2 == 0
-            else ("optimized", "legacy")
-        )
+        base_names = ("legacy", "control", "optimized")
+        offset = iteration % len(base_names)
+        names = base_names[offset:] + base_names[:offset]
         expected_cpu_rng_state = None
         expected_cuda_rng_state = None
         metrics = {}
@@ -571,7 +607,7 @@ def benchmark_full_update(
                     if device.type == "cuda"
                     else None
                 )
-            if iteration >= warmup:
+            if iteration >= warmup and name != "control":
                 samples[name].append(elapsed)
 
         if not torch.equal(
@@ -584,11 +620,23 @@ def benchmark_full_update(
             ):
                 if not torch.equal(expected, actual):
                     raise RuntimeError("Full update changed CUDA RNG consumption")
-        assert_nested_exact(
-            reference_agent.training_state_dict(),
-            optimized_agent.training_state_dict(),
+        reference_state = reference_agent.training_state_dict()
+        control_differences.append(
+            nested_max_abs_difference(
+                reference_state, control_agent.training_state_dict()
+            )
         )
-        assert_nested_exact(metrics["legacy"], metrics["optimized"], "metrics")
+        optimized_differences.append(
+            nested_max_abs_difference(
+                reference_state, optimized_agent.training_state_dict()
+            )
+        )
+        control_metric_differences.append(
+            nested_max_abs_difference(metrics["legacy"], metrics["control"])
+        )
+        optimized_metric_differences.append(
+            nested_max_abs_difference(metrics["legacy"], metrics["optimized"])
+        )
         torch.random.set_rng_state(expected_cpu_rng_state)
         if expected_cuda_rng_state is not None:
             torch.cuda.set_rng_state_all(expected_cuda_rng_state)
@@ -603,7 +651,20 @@ def benchmark_full_update(
         "optimized": optimized,
         "speedup": legacy["mean_ms"] / optimized["mean_ms"],
         "mean_ms_saved": legacy["mean_ms"] - optimized["mean_ms"],
-        "exact_match": True,
+        "exact_match": max(optimized_differences, default=0.0) == 0.0,
+        "legacy_control_exact": max(control_differences, default=0.0) == 0.0,
+        "legacy_control_max_abs_difference": max(
+            control_differences, default=0.0
+        ),
+        "optimized_max_abs_difference": max(
+            optimized_differences, default=0.0
+        ),
+        "legacy_control_metric_max_abs_difference": max(
+            control_metric_differences, default=0.0
+        ),
+        "optimized_metric_max_abs_difference": max(
+            optimized_metric_differences, default=0.0
+        ),
         "peak_allocated_mib": (
             torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0)
             if device.type == "cuda"
