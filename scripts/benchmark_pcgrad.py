@@ -11,6 +11,7 @@ import time
 import numpy as np
 import torch
 from hydra import compose, initialize_config_dir
+from torch_geometric.data import Batch, Data
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +21,88 @@ for path in (ROOT, SAC_ROOT):
         sys.path.insert(0, str(path))
 
 from gnn_sac import GNNSAC
+from common.graph_transforms import graph_feature_flags, prepare_graph
+
+
+class FrozenLegacyGNNSAC(GNNSAC):
+    """Pre-optimization PCGrad update retained only for matched benchmarks."""
+
+    @classmethod
+    def pcgrad_project(cls, task_gradients):
+        return legacy_pcgrad_project(task_gradients)
+
+    @staticmethod
+    def _set_parameter_gradients(parameters, gradients):
+        for parameter, gradient in zip(parameters, gradients):
+            parameter.grad = gradient.detach().clone()
+
+    def _pcgrad_q_update(self, task_batches, **_kwargs):
+        parameters = tuple(self.model._Qs.parameters())
+        losses = []
+        task_gradients = {}
+        for task, batch in task_batches.items():
+            obs, action, reward, terminated, next_obs = batch
+            loss = self._q_loss(obs, action, reward, terminated, next_obs)
+            losses.append(loss)
+            task_gradients[task] = self._parameter_gradients(loss, parameters)
+        self.q_optim.zero_grad(set_to_none=True)
+        self._set_parameter_gradients(
+            parameters, self.pcgrad_project(task_gradients.values())
+        )
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            parameters, self.cfg.grad_clip_norm
+        )
+        self.q_optim.step()
+        return (
+            torch.stack([loss.detach() for loss in losses]).mean(),
+            grad_norm.detach(),
+            task_gradients,
+        )
+
+    def _pcgrad_pi_and_alpha_update(self, task_batches, **_kwargs):
+        parameters = tuple(self.model.actor_parameters())
+        losses = []
+        task_gradients = {}
+        task_info = []
+        for task, batch in task_batches.items():
+            pi_loss, info = self._pi_loss(batch[0])
+            losses.append(pi_loss)
+            task_info.append(info)
+            task_gradients[task] = self._parameter_gradients(
+                pi_loss, parameters
+            )
+        self.pi_optim.zero_grad(set_to_none=True)
+        self._set_parameter_gradients(
+            parameters, self.pcgrad_project(task_gradients.values())
+        )
+        pi_grad_norm = torch.nn.utils.clip_grad_norm_(
+            parameters, self.cfg.grad_clip_norm
+        )
+        self.pi_optim.step()
+        log_prob = torch.cat(
+            [info["log_prob"].reshape(-1) for info in task_info]
+        )
+        alpha_loss = -(
+            self.log_alpha * (log_prob.detach() + self.target_entropy)
+        ).mean()
+        self.alpha_optim.zero_grad(set_to_none=True)
+        alpha_loss.backward()
+        self.alpha_optim.step()
+        entropy = torch.stack(
+            [info["entropy"].detach().mean() for info in task_info]
+        ).mean()
+        return (
+            {
+                "pi_loss": torch.stack(
+                    [loss.detach() for loss in losses]
+                ).mean(),
+                "pi_grad_norm": pi_grad_norm.detach(),
+                "alpha_loss": alpha_loss.detach(),
+                "alpha": self.alpha.detach(),
+                "entropy": entropy,
+            },
+            task_gradients,
+        )
 
 
 def legacy_pcgrad_project(task_gradients):
@@ -293,6 +376,225 @@ def benchmark_projection(
     return result
 
 
+class StaticTaskBuffer:
+    supports_replay_profiling = True
+
+    def __init__(self, task_batches):
+        self.task_batches = task_batches
+
+    def sample_task_batches(self, performance_profiler=None):
+        return self.task_batches
+
+
+def make_ring_graph(node_count: int, feature_dim: int, generator) -> Data:
+    nodes = torch.arange(node_count, dtype=torch.long)
+    next_nodes = nodes.roll(-1)
+    return Data(
+        x=torch.randn(node_count, feature_dim, generator=generator),
+        edge_index=torch.stack(
+            (
+                torch.cat((nodes, next_nodes)),
+                torch.cat((next_nodes, nodes)),
+            ),
+            dim=0,
+        ),
+        action_mask=torch.ones(node_count, dtype=torch.bool),
+        rigidity=torch.tensor(0.75),
+    )
+
+
+def make_static_task_batches(
+    cfg,
+    *,
+    task_count: int,
+    node_counts: list[int],
+    batch_size: int,
+    device: torch.device,
+    seed: int,
+):
+    if batch_size % task_count != 0:
+        raise ValueError("Full-update batch size must be divisible by task count")
+    per_task = batch_size // task_count
+    generator = torch.Generator().manual_seed(seed)
+    flags = graph_feature_flags(cfg)
+    task_batches = {}
+    for task_index in range(task_count):
+        node_count = node_counts[task_index % len(node_counts)]
+        observations = [
+            prepare_graph(
+                make_ring_graph(node_count, cfg.obs_dim, generator),
+                use_virtual_node=bool(cfg.use_virtual_node),
+                **flags,
+            )
+            for _ in range(per_task)
+        ]
+        next_observations = [
+            prepare_graph(
+                make_ring_graph(node_count, cfg.obs_dim, generator),
+                use_virtual_node=bool(cfg.use_virtual_node),
+                **flags,
+            )
+            for _ in range(per_task)
+        ]
+        observation_batch = Batch.from_data_list(observations).to(device)
+        next_observation_batch = Batch.from_data_list(next_observations).to(
+            device
+        )
+        action = torch.randn(
+            per_task * node_count,
+            cfg.action_dim,
+            generator=generator,
+        ).to(device)
+        reward = torch.randn(per_task, generator=generator).to(device)
+        terminated = torch.zeros(per_task, device=device)
+        task_batches[f"benchmark:task-{task_index}"] = (
+            observation_batch,
+            action,
+            reward,
+            terminated,
+            next_observation_batch,
+        )
+    return task_batches
+
+
+def assert_nested_exact(first, second, path="state") -> None:
+    if isinstance(first, torch.Tensor):
+        if not torch.equal(first, second):
+            difference = float((first - second).abs().max())
+            raise RuntimeError(
+                f"{path} differs; max_abs_difference={difference}"
+            )
+        return
+    if isinstance(first, dict):
+        if first.keys() != second.keys():
+            raise RuntimeError(f"{path} has different keys")
+        for key in first:
+            assert_nested_exact(first[key], second[key], f"{path}.{key}")
+        return
+    if isinstance(first, (tuple, list)):
+        if len(first) != len(second):
+            raise RuntimeError(f"{path} has different lengths")
+        for index, (first_value, second_value) in enumerate(zip(first, second)):
+            assert_nested_exact(
+                first_value, second_value, f"{path}[{index}]"
+            )
+        return
+    if first != second:
+        raise RuntimeError(f"{path} differs: {first!r} != {second!r}")
+
+
+def benchmark_full_update(
+    cfg,
+    *,
+    task_count: int,
+    node_counts: list[int],
+    batch_size: int,
+    warmup: int,
+    repeats: int,
+    seed: int,
+    device: torch.device,
+) -> dict:
+    cfg.batch_size = batch_size
+    cfg.pcgrad = True
+    reference_agent = FrozenLegacyGNNSAC(cfg)
+    optimized_agent = GNNSAC(cfg)
+    optimized_agent.load_training_state_dict(
+        reference_agent.training_state_dict()
+    )
+    buffer = StaticTaskBuffer(
+        make_static_task_batches(
+            cfg,
+            task_count=task_count,
+            node_counts=node_counts,
+            batch_size=batch_size,
+            device=device,
+            seed=seed,
+        )
+    )
+    samples = {"legacy": [], "optimized": []}
+    agents = {"legacy": reference_agent, "optimized": optimized_agent}
+    total_iterations = warmup + repeats
+    torch.manual_seed(seed + 1)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(seed + 1)
+        torch.cuda.reset_peak_memory_stats(device)
+
+    for iteration in range(total_iterations):
+        cpu_rng_state = torch.random.get_rng_state()
+        cuda_rng_state = (
+            torch.cuda.get_rng_state_all() if device.type == "cuda" else None
+        )
+        names = (
+            ("legacy", "optimized")
+            if iteration % 2 == 0
+            else ("optimized", "legacy")
+        )
+        expected_cpu_rng_state = None
+        expected_cuda_rng_state = None
+        metrics = {}
+        for position, name in enumerate(names):
+            if position:
+                torch.random.set_rng_state(cpu_rng_state)
+                if cuda_rng_state is not None:
+                    torch.cuda.set_rng_state_all(cuda_rng_state)
+            result = {}
+
+            def run_update(agent=agents[name]):
+                result.update(agent.update(buffer))
+
+            elapsed = timed_call(run_update, device)
+            metrics[name] = {
+                key: value.detach().clone()
+                for key, value in result.items()
+            }
+            if position == 0:
+                expected_cpu_rng_state = torch.random.get_rng_state()
+                expected_cuda_rng_state = (
+                    torch.cuda.get_rng_state_all()
+                    if device.type == "cuda"
+                    else None
+                )
+            if iteration >= warmup:
+                samples[name].append(elapsed)
+
+        if not torch.equal(
+            expected_cpu_rng_state, torch.random.get_rng_state()
+        ):
+            raise RuntimeError("Full update changed CPU RNG consumption")
+        if expected_cuda_rng_state is not None:
+            for expected, actual in zip(
+                expected_cuda_rng_state, torch.cuda.get_rng_state_all()
+            ):
+                if not torch.equal(expected, actual):
+                    raise RuntimeError("Full update changed CUDA RNG consumption")
+        assert_nested_exact(
+            reference_agent.training_state_dict(),
+            optimized_agent.training_state_dict(),
+        )
+        assert_nested_exact(metrics["legacy"], metrics["optimized"], "metrics")
+        torch.random.set_rng_state(expected_cpu_rng_state)
+        if expected_cuda_rng_state is not None:
+            torch.cuda.set_rng_state_all(expected_cuda_rng_state)
+
+    legacy = statistics_for(samples["legacy"])
+    optimized = statistics_for(samples["optimized"])
+    return {
+        "task_count": task_count,
+        "batch_size": batch_size,
+        "node_counts": node_counts,
+        "legacy": legacy,
+        "optimized": optimized,
+        "speedup": legacy["mean_ms"] / optimized["mean_ms"],
+        "mean_ms_saved": legacy["mean_ms"] - optimized["mean_ms"],
+        "exact_match": True,
+        "peak_allocated_mib": (
+            torch.cuda.max_memory_allocated(device) / (1024.0 * 1024.0)
+            if device.type == "cuda"
+            else None
+        ),
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -301,6 +603,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repeats", type=int, default=50)
     parser.add_argument("--seed", type=int, default=173)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--full-update-repeats", type=int, default=0)
+    parser.add_argument("--full-update-warmup", type=int, default=5)
+    parser.add_argument("--full-update-task-count", type=int, default=3)
+    parser.add_argument("--full-update-batch-size", type=int, default=256)
+    parser.add_argument("--node-counts", default="6,4,8")
     return parser.parse_args()
 
 
@@ -310,10 +617,15 @@ def main() -> None:
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
     task_counts = [int(value) for value in args.task_counts.split(",")]
+    node_counts = [int(value) for value in args.node_counts.split(",")]
     if not task_counts or any(value <= 0 for value in task_counts):
         raise ValueError("--task-counts must contain positive integers")
     if args.warmup < 0 or args.repeats <= 0:
         raise ValueError("--warmup must be nonnegative and --repeats must be positive")
+    if not node_counts or any(value <= 0 for value in node_counts):
+        raise ValueError("--node-counts must contain positive integers")
+    if args.full_update_repeats < 0 or args.full_update_warmup < 0:
+        raise ValueError("Full-update repeat counts must be nonnegative")
 
     with initialize_config_dir(config_dir=str(ROOT / "config"), version_base=None):
         cfg = compose(
@@ -351,6 +663,17 @@ def main() -> None:
             )
         },
     }
+    if args.full_update_repeats:
+        results["full_update"] = benchmark_full_update(
+            cfg,
+            task_count=args.full_update_task_count,
+            node_counts=node_counts,
+            batch_size=args.full_update_batch_size,
+            warmup=args.full_update_warmup,
+            repeats=args.full_update_repeats,
+            seed=args.seed + 900_000,
+            device=device,
+        )
     rendered = json.dumps(results, indent=2, sort_keys=True)
     print(rendered)
     if args.output is not None:
