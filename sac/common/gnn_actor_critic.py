@@ -133,9 +133,13 @@ class GNNActorCritic(nn.Module):
         batch = getattr(obs, "batch", None)
         if batch is None:
             batch = log_prob.new_zeros(log_prob.size(0), dtype=torch.long)
+            graph_count = 1
         else:
             batch = batch[action_mask]
-        log_prob = global_mean_pool(log_prob, batch).squeeze(-1) # Using a global mean pool means that the entropy then becomes normalized by the number of nodes.
+            graph_count = int(obs.num_graphs)
+        log_prob = global_mean_pool(
+            log_prob, batch, size=graph_count
+        ).squeeze(-1) # Using a global mean pool means that the entropy then becomes normalized by the number of nodes.
         entropy = -log_prob
         return action, {
             "mean": mean,
@@ -204,6 +208,7 @@ class GNNActorCritic(nn.Module):
             getattr(obs, "batch", None),
             pool_mask,
             getattr(obs, "edge_attr", None),
+            num_graphs=int(getattr(obs, "num_graphs", 1)),
         )
 
         if return_type == "all":

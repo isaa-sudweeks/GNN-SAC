@@ -294,6 +294,32 @@ class VirtualNodeTest(unittest.TestCase):
 
         self.assertEqual(values.shape, (2, 2))
 
+    def test_actor_pooling_uses_batch_graph_count_without_host_scalar_conversion(self):
+        batch = Batch.from_data_list([
+            prepare_graph(graph(3), use_virtual_node=True),
+            prepare_graph(graph(5), use_virtual_node=True),
+        ])
+        model = GNNActorCritic(cfg())
+
+        with patch.object(
+            torch.Tensor,
+            "__int__",
+            side_effect=AssertionError("actor pooling inferred a CUDA graph count"),
+        ):
+            action, info = model.pi(batch)
+
+        self.assertEqual(action.shape, (8, 1))
+        self.assertEqual(info["log_prob"].shape, (2,))
+
+    def test_explicit_pool_size_matches_inferred_pool_size_exactly(self):
+        values = torch.tensor([[1.25], [-2.0], [4.5], [3.0], [-0.75]])
+        batch = torch.tensor([0, 0, 1, 1, 1])
+
+        inferred = global_mean_pool(values, batch)
+        explicit = global_mean_pool(values, batch, size=2)
+
+        self.assertTrue(torch.equal(inferred, explicit))
+
     def test_critic_can_concatenate_physical_mean_and_virtual_node(self):
         batch = Batch.from_data_list([
             prepare_graph(graph(3), use_virtual_node=True),
