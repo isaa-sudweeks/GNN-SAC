@@ -31,6 +31,7 @@ class TrainingProfiler:
         warmup_vector_steps: int,
         active_vector_steps: int,
         trace_enabled: bool,
+        optimization_subphases: bool = True,
         output_dir: str | Path,
         logger: Any,
         metadata: Mapping[str, Any],
@@ -47,6 +48,7 @@ class TrainingProfiler:
         self.warmup_vector_steps = int(warmup_vector_steps)
         self.active_vector_steps = int(active_vector_steps)
         self.trace_enabled = bool(trace_enabled)
+        self.optimization_subphases_enabled = bool(optimization_subphases)
         self.output_dir = Path(output_dir)
         self.logger = logger
         self.metadata = dict(metadata)
@@ -94,6 +96,9 @@ class TrainingProfiler:
             warmup_vector_steps=int(_get(profile_cfg, "warmup_vector_steps", 10)),
             active_vector_steps=int(_get(profile_cfg, "active_vector_steps", 100)),
             trace_enabled=bool(_get(profile_cfg, "trace_enabled", False)),
+            optimization_subphases=bool(
+                _get(profile_cfg, "optimization_subphases", False)
+            ),
             output_dir=output_dir,
             logger=logger,
             metadata={
@@ -114,6 +119,9 @@ class TrainingProfiler:
                 "pcgrad": bool(_get(cfg, "pcgrad", False)),
                 "gradient_diagnostics": bool(
                     _get(cfg, "gradient_diagnostics", False)
+                ),
+                "optimization_subphases": bool(
+                    _get(profile_cfg, "optimization_subphases", False)
                 ),
                 "replay_batching_strategy": "direct_balanced_collation",
             },
@@ -208,7 +216,7 @@ class TrainingProfiler:
     @contextmanager
     def optimization_subphase(self, name: str) -> Iterator[None]:
         """Time an optimizer subphase without double-counting the hot path."""
-        if not self._active:
+        if not self._active or not self.optimization_subphases_enabled:
             yield
             return
         with ExitStack() as stack:
