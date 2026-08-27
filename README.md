@@ -209,7 +209,7 @@ python sac/gnn_infer.py --config-name inference/gnn_mjx \
   model=/path/to/final.pt episodes=256 num_envs=256
 ```
 
-The MJX training path requires `mujoco-truss-gen>=0.12.0` and
+The MJX training path requires `mujoco-truss-gen==0.12.4` and
 training-environment rendering disabled. Native MuJoCo evaluation can render
 and record videos. MJX owns one compiled model and one fixed environment batch
 per topology, so realistic models and fixed-shape runtime domain randomization
@@ -222,7 +222,7 @@ JAX remains the default MJX physics implementation. On an NVIDIA CUDA host,
 install the Warp extra and select the upstream Warp implementation explicitly:
 
 ```bash
-python -m pip install 'mujoco-truss-gen[warp]>=0.12.0'
+python -m pip install 'mujoco-truss-gen[warp]==0.12.4'
 python sac/gnn_train.py sim_backend=mjx mjx_impl=warp device=cuda
 ```
 
@@ -285,8 +285,8 @@ truss_topology: octahedron
 eval_task: truss-mlp:tetrahedron
 ```
 
-- `truss_realistic` requests realistic generated models. `truss_graph_view: auto` uses physical graph nodes by default and logical graph nodes for realistic models; set it explicitly to `physical` or `logical` only when needed.
-- Generated model physical values live in `config/physics/physical_parameters.yaml` under `physical_parameters` and apply to both training and inference. Set `physical_parameters_enabled: false` to skip this config and use the `mujoco-truss-gen` package defaults. Domain randomization lives in `config/physics/domain_randomization.yaml`; use `domain_randomization` as the master switch. MJX and native MuJoCo support fixed-shape runtime ranges for body mass/inertia, DOF damping/armature/friction loss, actuator gain/bias/dynamics, all three geom-friction axes, tendon stiffness/damping/armature/friction loss, and vertical gravity. Native MuJoCo also supports model-level `length_scale` and `physical_parameters` randomization.
+- `truss_realistic` requests realistic generated models. `truss_graph_view: auto` uses physical graph nodes by default and logical graph nodes for realistic models; set it explicitly to `physical` or `logical` only when needed. With `use_control_graph=true`, the default `control_node_observation_source: connector_ball` observes each realistic logical node through its connector ball while preserving control-graph identity, routing, and action shape. Abstract models automatically use physical-node kinematics because they do not contain connector balls; set `physical_node` explicitly to retain that source for realistic models too.
+- Generated model physical values live in `config/physics/physical_parameters.yaml` under `physical_parameters` and apply to both training and inference. Set `physical_parameters_enabled: false` to skip this config and use the `mujoco-truss-gen` package defaults. Domain randomization lives in `config/physics/domain_randomization.yaml`; use `domain_randomization` as the master switch. MJX and native MuJoCo support fixed-shape runtime ranges for body mass/inertia, independent abstract-node mass, DOF damping/armature/friction loss, actuator gain/bias/dynamics, all three geom-friction axes, tendon stiffness/damping/armature/friction loss, and vertical gravity. `abstract_node_mass_multiplier` draws a separate multiplier for every node and is valid only with `truss_realistic=false`; it composes with the global `body_mass_multiplier`. Native MuJoCo also supports model-level `length_scale` and `physical_parameters` randomization.
 
 ```yaml
 physical_parameters_enabled: true
@@ -298,6 +298,10 @@ domain_randomization_params:
   length_scale:
     enabled: false
   body_mass_multiplier:
+    enabled: true
+    min: 0.8
+    max: 1.2
+  abstract_node_mass_multiplier:
     enabled: true
     min: 0.8
     max: 1.2
