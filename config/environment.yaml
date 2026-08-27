@@ -11,6 +11,7 @@ topologies: null # Alias for truss_topologies; useful for CLI sweeps.
 eval_extra_topologies: null # Additional held-out presets to evaluate without adding them to training or replay.
 truss_realistic: false # Whether unified truss envs should request realistic generated models.
 truss_graph_view: auto # Graph view for unified graph envs: auto, physical, or logical.
+control_node_observation_source: connector_ball # Prefer connector-ball kinematics for realistic models; abstract models use physical nodes.
 
 # Simulation timing
 mujoco_backend: mujoco # Backend: mjx selects batch-native fixed-topology graph simulation; mujoco uses Gym environments.

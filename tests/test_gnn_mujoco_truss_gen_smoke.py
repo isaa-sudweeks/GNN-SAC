@@ -15,7 +15,12 @@ for path in (ROOT, SAC_ROOT):
 
 from omegaconf import OmegaConf
 from torch_geometric.data import Data
-from mujoco_truss_gen import DomainRandomizationConfig, PRESETS, TrussPhysicalParameters
+from mujoco_truss_gen import (
+    DomainRandomizationConfig,
+    PRESETS,
+    TrussPhysicalParameters,
+    get_node_features,
+)
 
 from common.gnn_buffer import GNNBuffer
 from common.parser import parse_cfg
@@ -23,6 +28,7 @@ from env import make_env
 from env.mujoco_gen.topology_envs import (
     _RUNTIME_DOMAIN_RANDOMIZATION_FIELDS,
     _domain_randomization,
+    make_truss_env_config,
     _physical_parameters_from_config,
     _randomized_physical_parameter_overrides,
 )
@@ -579,6 +585,118 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
 
         for index, field_name in enumerate(_RUNTIME_DOMAIN_RANDOMIZATION_FIELDS.values()):
             self.assertEqual(getattr(randomization, field_name), (index + 0.25, index + 0.75))
+
+    def test_abstract_node_mass_randomization_is_independent_per_node(self):
+        cfg = graph_test_cfg(
+            domain_randomization=True,
+            domain_randomization_params={
+                "length_scale": {"enabled": False},
+                "abstract_node_mass_multiplier": {
+                    "enabled": True,
+                    "min": 0.5,
+                    "max": 1.5,
+                },
+            },
+        )
+        env = make_env(cfg)
+        try:
+            unwrapped = env.unwrapped
+            nominal_masses = {
+                node_name: float(
+                    unwrapped.mj_model.model.body_mass[
+                        unwrapped.mj_model.node_body_ids[node_name]
+                    ]
+                )
+                for node_name in unwrapped.mj_model.node_names
+            }
+
+            _, info = unwrapped.reset(seed=7)
+            multipliers = info["domain_randomization"][
+                "abstract_node_mass_multipliers"
+            ]
+
+            self.assertEqual(list(multipliers), unwrapped.mj_model.node_names)
+            self.assertGreater(len({round(value, 8) for value in multipliers.values()}), 1)
+            for node_name, multiplier in multipliers.items():
+                body_id = unwrapped.mj_model.node_body_ids[node_name]
+                self.assertAlmostEqual(
+                    float(unwrapped.mj_model.model.body_mass[body_id]),
+                    nominal_masses[node_name] * multiplier,
+                )
+        finally:
+            env.close()
+
+    def test_connector_ball_control_observations_flow_into_native_graph(self):
+        cfg = graph_test_cfg(
+            truss_realistic=True,
+            use_control_graph=True,
+            control_node_observation_source="connector_ball",
+            normalize_observations=False,
+            obs_norm=False,
+            domain_randomization=False,
+            nsubsteps=1,
+        )
+        env = make_env(cfg)
+        try:
+            observation = env.reset()
+            unwrapped = env.unwrapped
+            self.assertEqual(
+                unwrapped.config.control_node_observation_source,
+                "connector_ball",
+            )
+            connector_features = get_node_features(
+                unwrapped.mj_model,
+                graph_view="control",
+                control_node_observation_source="connector_ball",
+            )
+            physical_features = get_node_features(
+                unwrapped.mj_model,
+                graph_view="control",
+                control_node_observation_source="physical_node",
+            )
+            expected = connector_features.copy()
+            expected[:, 0] -= np.mean(connector_features[:, 0])
+            expected[:, 1] -= np.mean(connector_features[:, 1])
+            np.testing.assert_allclose(observation.x.numpy(), expected, atol=1e-6)
+            self.assertFalse(np.allclose(connector_features[:, :3], physical_features[:, :3]))
+        finally:
+            env.close()
+
+    def test_control_node_observation_source_rejects_unknown_values(self):
+        cfg = graph_test_cfg(
+            truss_realistic=True,
+            use_control_graph=True,
+            control_node_observation_source="centroid",
+            domain_randomization=False,
+        )
+        with self.assertRaisesRegex(ValueError, "control_node_observation_source"):
+            make_truss_env_config(cfg)
+
+    def test_release_features_reject_incompatible_model_variants(self):
+        connector_cfg = graph_test_cfg(
+            truss_realistic=False,
+            control_node_observation_source="connector_ball",
+            domain_randomization=False,
+        )
+        self.assertEqual(
+            make_truss_env_config(connector_cfg).control_node_observation_source,
+            "physical_node",
+        )
+
+        mass_cfg = graph_test_cfg(
+            truss_realistic=True,
+            domain_randomization=True,
+            domain_randomization_params={
+                "length_scale": {"enabled": False},
+                "abstract_node_mass_multiplier": {
+                    "enabled": True,
+                    "min": 0.8,
+                    "max": 1.2,
+                },
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "truss_realistic=false"):
+            make_truss_env_config(mass_cfg)
 
     def test_eval_interval_crossing_with_batched_steps(self):
         self.assertFalse(OnlineTrainer._crossed_eval_interval(0, 3, 5))

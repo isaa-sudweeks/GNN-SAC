@@ -187,6 +187,11 @@ class MjxVectorEnvTest(unittest.TestCase):
                     name: {"enabled": True, "min": value, "max": value}
                     for name, value in fixed_ranges.items()
                 },
+                "abstract_node_mass_multiplier": {
+                    "enabled": True,
+                    "min": 1.25,
+                    "max": 1.25,
+                },
             },
         )
         env = make_env(cfg)
@@ -204,6 +209,19 @@ class MjxVectorEnvTest(unittest.TestCase):
                     ),
                     msg=f"unexpected samples for {name}: {sampled}",
                 )
+            node_mass_multipliers = env.env._jax.device_get(
+                state.abstract_node_mass_multipliers
+            )
+            self.assertEqual(
+                node_mass_multipliers.shape,
+                (2, len(env.env._core.mujoco_model.node_names)),
+            )
+            self.assertTrue(
+                torch.allclose(
+                    torch.tensor(node_mass_multipliers.tolist()),
+                    torch.full(node_mass_multipliers.shape, 1.25),
+                )
+            )
         finally:
             env.close()
 
@@ -222,6 +240,25 @@ class MjxVectorEnvTest(unittest.TestCase):
             result = env.step_many([env.rand_act(env_idx=0)], env_indices=[0])[0]
             self.assertEqual(result[0].num_nodes, observations[0].num_nodes)
             self.assertTrue(torch.isfinite(result[1]))
+        finally:
+            env.close()
+
+    def test_realistic_mjx_uses_connector_ball_control_observations(self):
+        cfg = mjx_cfg(
+            num_envs=1,
+            truss_realistic=True,
+            control_node_observation_source="connector_ball",
+        )
+        env = make_env(cfg)
+        try:
+            observations = env.reset_many()
+            core = env.env._core
+            expected_body_ids = core.mujoco_model.get_control_node_body_ids(
+                "connector_ball"
+            )
+            actual_body_ids = env.env._jax.device_get(core._control_body_ids)
+            self.assertEqual(actual_body_ids.tolist(), expected_body_ids.tolist())
+            self.assertTrue(torch.isfinite(observations[0].x).all())
         finally:
             env.close()
 

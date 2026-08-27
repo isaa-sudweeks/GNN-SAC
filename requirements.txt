@@ -15,5 +15,5 @@ pandas
 plotly
 kaleido
 wandb[media]
-mujoco-truss-gen>=0.12.2
+mujoco-truss-gen==0.12.4
 torch_geometric
