@@ -20,7 +20,7 @@ for path in (PROJECT_ROOT, SAC_ROOT):
 import hydra
 import numpy as np
 import torch
-from omegaconf import open_dict
+from omegaconf import OmegaConf, open_dict
 from torch_geometric.data import Data
 
 from common.parser import parse_cfg
@@ -28,6 +28,13 @@ from common.seed import set_seed
 from env import make_env
 from gnn_infer import load_agent_checkpoint, resolve_checkpoint
 from gnn_sac import GNNSAC
+from sim_to_real_io import (
+    JsonlWriter,
+    numpy_value,
+    parse_firmware_command,
+    resolve_triangle_graph_definition,
+    utc_now_iso,
+)
 
 
 @dataclass(frozen=True)
@@ -139,8 +146,12 @@ class PrintCommandTransport:
 
     acknowledgment_gated = False
 
+    def __init__(self):
+        self.last_delivery_result: dict[str, object] | None = None
+
     def send(self, command: str) -> None:
         print(command, flush=True)
+        self.last_delivery_result = {"status": "printed"}
 
     def emergency_stop(self, command: str, *, reason: str) -> None:
         print(command, flush=True)
@@ -224,6 +235,7 @@ class SerialCommandTransport:
         self.expected_node_deliveries = 0
         self.dropped_node_deliveries = 0
         self.node_drop_counts: Counter[int] = Counter()
+        self.last_delivery_result: dict[str, object] | None = None
         if self.startup_delay_seconds > 0.0:
             self._sleep(self.startup_delay_seconds)
         reset_input_buffer = getattr(self._serial, "reset_input_buffer", None)
@@ -305,6 +317,7 @@ class SerialCommandTransport:
             raise RuntimeError("Cannot send a new command while another is awaiting ACK")
         send_time = self._monotonic()
         self._in_flight_command = command
+        self.last_delivery_result = None
         failures: dict[int, int] = {}
         try:
             print(f"serial tx: {command}", flush=True)
@@ -313,6 +326,13 @@ class SerialCommandTransport:
             while True:
                 if self._monotonic() >= deadline:
                     self.ack_timeouts += 1
+                    self.last_delivery_result = {
+                        "status": "acknowledgment_timeout",
+                        "failed_nodes": {
+                            self._node_label(index): attempts
+                            for index, attempts in sorted(failures.items())
+                        },
+                    }
                     raise SerialAcknowledgmentTimeout(
                         command, self.ack_timeout_seconds
                     )
@@ -350,6 +370,15 @@ class SerialCommandTransport:
                     self.commands_with_failures += 1
                     self.dropped_node_deliveries += len(failures)
                     self.node_drop_counts.update(failures.keys())
+                self.last_delivery_result = {
+                    "status": "acknowledged",
+                    "firmware_duration_ms": int(completion.group(1)),
+                    "round_trip_ms": 1000.0 * (completion_time - send_time),
+                    "failed_nodes": {
+                        self._node_label(index): attempts
+                        for index, attempts in sorted(failures.items())
+                    },
+                }
                 print(
                     self._format_stats(
                         round_trip_ms=1000.0 * (completion_time - send_time),
@@ -497,10 +526,14 @@ class TrackerLayout:
     tracker_mounts: dict[str, TrackerMount] | None = None
     plane_parallel_tolerance: float = 1e-6
     serial_node_order: tuple[str, ...] | None = None
+    graph_definition: dict[str, object] | None = None
+    graph_definition_sha256: str | None = None
+    routed_actuator_edges: tuple[tuple[str, str], ...] | None = None
 
     @staticmethod
     def _expand_triangle_definition(layout: Mapping[str, object]) -> dict:
         """Generate a MuJoCo-style control graph from logical triangles."""
+        shared = resolve_triangle_graph_definition(layout)
         raw_triangles = layout.get("triangles")
         if not isinstance(raw_triangles, list) or not raw_triangles:
             raise ValueError("triangles must be a nonempty list")
@@ -762,6 +795,10 @@ class TrackerLayout:
         )
         if serial_node_order is not None:
             expanded["serial_node_order"] = serial_node_order
+        if tuple(control_node_names) != shared.control_node_names:
+            raise RuntimeError("Tracker and shared graph expansion produced different node order")
+        if tuple(serial_node_order or ()) != tuple(shared.serial_node_order or ()):
+            raise RuntimeError("Tracker and shared graph expansion produced different roller order")
         return expanded
 
     @classmethod
@@ -769,8 +806,11 @@ class TrackerLayout:
         """Load a complete hand-authored graph and tracker definition."""
         serial_data = _load_json(serial_map_file)
         serial_map = serial_data.get("serial_to_tracker_id", serial_data)
-        layout = _load_json(layout_file)
+        raw_layout = _load_json(layout_file)
+        shared_graph = None
+        layout = raw_layout
         if "triangles" in layout:
+            shared_graph = resolve_triangle_graph_definition(layout)
             layout = cls._expand_triangle_definition(layout)
         assignment_mode = str(
             layout.get("tracker_assignment", layout.get("assignment_mode", "manual"))
@@ -842,6 +882,11 @@ class TrackerLayout:
             tracker_mounts=tracker_mounts,
             plane_parallel_tolerance=plane_parallel_tolerance,
             serial_node_order=serial_node_order,
+            graph_definition=(shared_graph.raw if shared_graph is not None else None),
+            graph_definition_sha256=(shared_graph.sha256 if shared_graph is not None else None),
+            routed_actuator_edges=(
+                shared_graph.actuator_edges if shared_graph is not None else None
+            ),
         )
         result._validate_tracker_map()
         return result
@@ -1144,9 +1189,13 @@ class TrackerLayout:
             raise ValueError(f"Tracker {serial!r} rotation_matrix must be a proper rotation")
         return TrackerPose(position=position, rotation_matrix=rotation)
 
-    def _triangle_planes(
+    def _triangle_planes_with_diagnostics(
         self, poses_by_serial: Mapping[str, object]
-    ) -> tuple[dict[str, tuple[np.ndarray, np.ndarray]], dict[str, np.ndarray]]:
+    ) -> tuple[
+        dict[str, tuple[np.ndarray, np.ndarray]],
+        dict[str, np.ndarray],
+        dict[str, object],
+    ]:
         mounts = self.tracker_mounts or {}
         pose_by_tracker = {}
         for serial, raw_pose in poses_by_serial.items():
@@ -1182,6 +1231,7 @@ class TrackerLayout:
             )
             anchor_positions[tracker_id] = position
         planes = {}
+        triangle_diagnostics = {}
         for triangle, estimates in plane_estimates.items():
             reference_normal = estimates[0][1]
             aligned_normals = [
@@ -1199,14 +1249,42 @@ class TrackerLayout:
                 np.mean([fused_normal @ point for point, _ in estimates])
             )
             planes[triangle] = (fused_normal * fused_offset, fused_normal)
-        return planes, anchor_positions
+            angular_errors = [
+                float(
+                    np.degrees(
+                        np.arccos(np.clip(abs(float(normal @ fused_normal)), 0.0, 1.0))
+                    )
+                )
+                for _, normal in estimates
+            ]
+            triangle_diagnostics[triangle] = {
+                "contributing_trackers": [
+                    tracker_id
+                    for tracker_id, mount in mounts.items()
+                    if mount.triangle == triangle
+                ],
+                "normal_disagreement_degrees": angular_errors,
+                "max_normal_disagreement_degrees": max(angular_errors, default=0.0),
+            }
+        return planes, anchor_positions, {"triangles": triangle_diagnostics}
 
-    def reconstructed_positions(self, poses_by_serial: Mapping[str, object]) -> np.ndarray:
-        """Recover abstract joints and expand them into preset control-graph order."""
+    def _triangle_planes(
+        self, poses_by_serial: Mapping[str, object]
+    ) -> tuple[dict[str, tuple[np.ndarray, np.ndarray]], dict[str, np.ndarray]]:
+        planes, anchors, _ = self._triangle_planes_with_diagnostics(poses_by_serial)
+        return planes, anchors
+
+    def reconstructed_positions_with_diagnostics(
+        self, poses_by_serial: Mapping[str, object]
+    ) -> tuple[np.ndarray, dict[str, object]]:
+        """Recover abstract joints and return plane-conditioning diagnostics."""
         if not self.requires_orientations:
             raise ValueError("Joint reconstruction requires triangle_planes assignment")
-        planes, anchor_positions = self._triangle_planes(poses_by_serial)
+        planes, anchor_positions, diagnostics = self._triangle_planes_with_diagnostics(
+            poses_by_serial
+        )
         positions_by_abstract_node = {}
+        joint_diagnostics = {}
         for mount in (self.tracker_mounts or {}).values():
             triangle_i, triangle_j = mount.joint_triangles
             point_i, normal_i = planes[triangle_i]
@@ -1223,21 +1301,44 @@ class TrackerLayout:
             right_hand_side = np.asarray(
                 [normal_i @ point_i, normal_j @ point_j], dtype=np.float64
             )
-            line_point = np.linalg.lstsq(
-                constraints, right_hand_side, rcond=None
-            )[0]
+            line_point = np.linalg.lstsq(constraints, right_hand_side, rcond=None)[0]
             anchor = anchor_positions[mount.tracker_id]
             joint_position = line_point + line_direction * (
                 line_direction @ (anchor - line_point)
             )
             positions_by_abstract_node[mount.abstract_node] = joint_position
-
-        return np.stack(
-            [
-                positions_by_abstract_node[self._abstract_node_name(node_name)]
-                for node_name in self.node_names
-            ]
+            joint_diagnostics[mount.abstract_node] = {
+                "tracker_id": mount.tracker_id,
+                "triangles": [triangle_i, triangle_j],
+                "cross_normal_magnitude": float(line_scale),
+                "plane_residuals_m": [
+                    float(abs(normal_i @ (joint_position - point_i))),
+                    float(abs(normal_j @ (joint_position - point_j))),
+                ],
+                "anchor_projection_distance_m": float(np.linalg.norm(anchor - joint_position)),
+            }
+        diagnostics["joints"] = joint_diagnostics
+        return (
+            np.stack(
+                [
+                    positions_by_abstract_node[self._abstract_node_name(node_name)]
+                    for node_name in self.node_names
+                ]
+            ),
+            diagnostics,
         )
+
+    def reconstructed_positions(self, poses_by_serial: Mapping[str, object]) -> np.ndarray:
+        """Recover abstract joints and expand them into preset control-graph order."""
+        positions, _ = self.reconstructed_positions_with_diagnostics(poses_by_serial)
+        return positions
+
+    def ordered_positions_with_diagnostics(
+        self, positions_by_serial: Mapping[str, object]
+    ) -> tuple[np.ndarray, dict[str, object]]:
+        if self.requires_orientations:
+            return self.reconstructed_positions_with_diagnostics(positions_by_serial)
+        return self.ordered_positions(positions_by_serial), {}
 
     def ordered_positions(self, positions_by_serial: Mapping[str, object]) -> np.ndarray:
         if self.requires_orientations:
@@ -1345,6 +1446,79 @@ class RealRobotObservationBuilder:
         return graph
 
 
+def _serializable_tracker_frame(frame: Mapping[str, object] | None) -> dict[str, object]:
+    serialized = {}
+    for serial, value in (frame or {}).items():
+        if isinstance(value, TrackerPose):
+            serialized[str(serial)] = {
+                "position": numpy_value(value.position),
+                "rotation_matrix": numpy_value(value.rotation_matrix),
+            }
+        elif isinstance(value, Mapping) and "position" in value:
+            serialized[str(serial)] = {
+                "position": numpy_value(value.get("position")),
+                "rotation_matrix": numpy_value(
+                    value.get("rotation_matrix", value.get("rotation"))
+                ),
+            }
+        else:
+            serialized[str(serial)] = {
+                "position": numpy_value(value),
+                "rotation_matrix": None,
+            }
+    return serialized
+
+
+def _read_tracker_sample(source, layout) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    """Read full poses when possible and return both raw and layout-ready frames."""
+    poses_method = getattr(source, "poses_by_serial", None)
+    if callable(poses_method):
+        raw = poses_method()
+        if layout.requires_orientations:
+            return raw, raw
+        positions = {}
+        for serial, value in raw.items():
+            if isinstance(value, TrackerPose):
+                positions[serial] = value.position
+            elif isinstance(value, Mapping) and "position" in value:
+                positions[serial] = value["position"]
+            else:
+                positions[serial] = value
+        return raw, positions
+    positions = source.positions_by_serial()
+    return positions, positions
+
+
+class RealRobotSessionRecorder:
+    """Versioned recorder for raw tracker samples and command delivery events."""
+
+    def __init__(self, path: str | Path, metadata: Mapping[str, object]):
+        self.writer = JsonlWriter(path)
+        self.path = self.writer.path
+        self.started_at = time.monotonic()
+        self.writer.write(
+            "session",
+            started_at_utc=utc_now_iso(),
+            **numpy_value(dict(metadata)),
+        )
+
+    def relative_time(self, timestamp: float | None = None) -> float:
+        return float((time.monotonic() if timestamp is None else timestamp) - self.started_at)
+
+    def write(self, record_type: str, **payload: object) -> None:
+        self.writer.write(record_type, **numpy_value(payload))
+
+    def close(self, *, reason: str = "complete") -> None:
+        if not self.writer.closed:
+            self.write(
+                "session_end",
+                relative_time_s=self.relative_time(),
+                ended_at_utc=utc_now_iso(),
+                reason=reason,
+            )
+        self.writer.close()
+
+
 def _run_control_loop(
     cfg,
     source,
@@ -1353,29 +1527,42 @@ def _run_control_loop(
     agent,
     formatter,
     transport: CommandTransport,
-) -> None:
+    recorder: RealRobotSessionRecorder | None = None,
+) -> str:
     frequency_hz = float(cfg.control_frequency_hz)
     if not np.isfinite(frequency_hz) or frequency_hz <= 0.0:
         raise ValueError("control_frequency_hz must be positive and finite")
     period = 1.0 / frequency_hz
     next_tick = time.monotonic()
     step = 0
+    last_raw_frame: Mapping[str, object] | None = None
     try:
         while cfg.control_steps is None or step < int(cfg.control_steps):
             time.sleep(max(0.0, next_tick - time.monotonic()))
             now = time.monotonic()
+            last_raw_frame = None
             try:
-                if getattr(layout, "requires_orientations", False):
-                    poses_method = getattr(source, "poses_by_serial", None)
-                    if poses_method is None:
-                        raise RuntimeError(
-                            "triangle_planes assignment requires a tracker source that provides orientations"
-                        )
-                    tracker_frame = poses_method()
-                else:
-                    tracker_frame = source.positions_by_serial()
-                positions = layout.ordered_positions(tracker_frame)
+                raw_frame, tracker_frame = _read_tracker_sample(source, layout)
+                last_raw_frame = raw_frame
+                positions, reconstruction_diagnostics = (
+                    layout.ordered_positions_with_diagnostics(tracker_frame)
+                    if hasattr(layout, "ordered_positions_with_diagnostics")
+                    else (layout.ordered_positions(tracker_frame), {})
+                )
                 observation = builder.build(positions, now)
+                if recorder is not None:
+                    recorder.write(
+                        "tracker_frame",
+                        step=step,
+                        status="complete",
+                        relative_time_s=recorder.relative_time(now),
+                        sampled_at_utc=utc_now_iso(),
+                        raw_poses_by_serial=_serializable_tracker_frame(raw_frame),
+                        node_order=list(layout.node_names),
+                        node_positions=numpy_value(positions),
+                        rigidity=float(observation.rigidity.detach().cpu().numpy()[0]),
+                        reconstruction_diagnostics=reconstruction_diagnostics,
+                    )
                 action = agent.act(
                     observation,
                     t0=step == 0,
@@ -1383,28 +1570,96 @@ def _run_control_loop(
                 )
                 normalized_node_velocity = action.detach().cpu().numpy()
                 send_time = time.monotonic()
-                transport.send(formatter.velocity_command(normalized_node_velocity))
+                command = formatter.velocity_command(normalized_node_velocity)
+                parsed_command = parse_firmware_command(
+                    command, limit=formatter.max_velocity_ticks_per_second
+                )
+                if recorder is not None:
+                    recorder.write(
+                        "command_attempt",
+                        step=step,
+                        relative_time_s=recorder.relative_time(send_time),
+                        normalized_action=numpy_value(normalized_node_velocity),
+                        graph_node_order=list(formatter.graph_node_names),
+                        serial_node_order=list(formatter.serial_node_order),
+                        ticks=list(parsed_command.ticks),
+                        duration_s=parsed_command.duration_seconds,
+                        command=command,
+                        transport=("serial" if transport.acknowledgment_gated else "print"),
+                    )
+                transport.send(command)
+                completed_time = time.monotonic()
+                if recorder is not None:
+                    recorder.write(
+                        "command_result",
+                        step=step,
+                        relative_time_s=recorder.relative_time(completed_time),
+                        command=command,
+                        status=("acknowledged" if transport.acknowledgment_gated else "printed"),
+                        elapsed_s=float(completed_time - send_time),
+                        delivery=getattr(transport, "last_delivery_result", None),
+                    )
                 step += 1
                 if transport.acknowledgment_gated:
                     next_tick = send_time + period
                 else:
                     next_tick += period
             except MissingTrackerFrame as exc:
+                if recorder is not None:
+                    recorder.write(
+                        "tracker_frame",
+                        step=step,
+                        status="skipped",
+                        relative_time_s=recorder.relative_time(now),
+                        sampled_at_utc=utc_now_iso(),
+                        raw_poses_by_serial=_serializable_tracker_frame(last_raw_frame),
+                        error=str(exc),
+                    )
                 print(f"tracker frame skipped: {exc}", file=sys.stderr, flush=True)
                 if transport.acknowledgment_gated:
                     next_tick = now + period
                 else:
                     next_tick += period
             except SerialAcknowledgmentTimeout as exc:
+                if recorder is not None:
+                    recorder.write(
+                        "command_result",
+                        step=step,
+                        relative_time_s=recorder.relative_time(),
+                        command=exc.command,
+                        status="acknowledgment_timeout",
+                        error=str(exc),
+                        delivery=getattr(transport, "last_delivery_result", None),
+                    )
                 if isinstance(transport, SerialCommandTransport):
                     transport.report_timeout(exc)
+                emergency_command = formatter.emergency_stop_command()
                 transport.emergency_stop(
-                    formatter.emergency_stop_command(),
+                    emergency_command,
                     reason="acknowledgment timeout",
                 )
-                return
+                if recorder is not None:
+                    recorder.write(
+                        "emergency_command",
+                        step=step,
+                        relative_time_s=recorder.relative_time(),
+                        command=emergency_command,
+                        reason="acknowledgment timeout",
+                    )
+                return "acknowledgment_timeout"
     except KeyboardInterrupt:
-        transport.emergency_stop(formatter.emergency_stop_command(), reason="Ctrl-C")
+        emergency_command = formatter.emergency_stop_command()
+        transport.emergency_stop(emergency_command, reason="Ctrl-C")
+        if recorder is not None:
+            recorder.write(
+                "emergency_command",
+                step=step,
+                relative_time_s=recorder.relative_time(),
+                command=emergency_command,
+                reason="Ctrl-C",
+            )
+        return "ctrl_c"
+    return "control_steps_complete"
 
 
 def _run_print_only_control_loop(cfg, source, layout, builder, agent, formatter) -> None:
@@ -1433,6 +1688,75 @@ def _make_command_transport(cfg, formatter) -> CommandTransport:
         ack_timeout_seconds=float(cfg.serial_ack_timeout_s),
         startup_delay_seconds=float(cfg.serial_startup_delay_s),
     )
+
+
+def _recording_path(cfg) -> Path:
+    configured = getattr(cfg, "record_output", None)
+    if configured not in (None, "", "null"):
+        return Path(str(configured)).expanduser()
+    try:
+        from hydra.core.hydra_config import HydraConfig
+
+        if HydraConfig.initialized():
+            return Path(HydraConfig.get().runtime.output_dir) / "real_robot_session.jsonl"
+    except (ImportError, AttributeError, ValueError):
+        pass
+    return Path(str(getattr(cfg, "work_dir", "outputs"))) / "real_robot_session.jsonl"
+
+
+def _session_metadata(cfg, layout: TrackerLayout, formatter: SerialVelocityCommandFormatter) -> dict:
+    physical_parameters = getattr(cfg, "physical_parameters", None)
+    if OmegaConf.is_config(physical_parameters):
+        physical_parameters = OmegaConf.to_container(physical_parameters, resolve=True)
+    edges = []
+    seen = set()
+    role_names = {0: "tube", 1: "connector"}
+    for edge_number, (source, target) in enumerate(layout.edge_index.T):
+        key = tuple(sorted((int(source), int(target))))
+        if key in seen:
+            continue
+        seen.add(key)
+        edge = [layout.node_names[key[0]], layout.node_names[key[1]]]
+        if layout.edge_role is not None:
+            edge.append(role_names[int(layout.edge_role[edge_number])])
+        edges.append(edge)
+    shared_graph = (
+        resolve_triangle_graph_definition(layout.graph_definition)
+        if layout.graph_definition is not None else None
+    )
+    if shared_graph is not None:
+        if tuple(layout.node_names) != shared_graph.control_node_names:
+            raise RuntimeError("Inference node order differs from the recorded graph definition")
+        edges = [list(edge) for edge in shared_graph.edges]
+    return {
+        "graph_definition": layout.graph_definition,
+        "graph_definition_sha256": layout.graph_definition_sha256,
+        "truss_topology": str(getattr(cfg, "truss_topology", "")),
+        "truss_realistic": bool(getattr(cfg, "truss_realistic", False)),
+        "scale": float(getattr(cfg, "scale", 1.0)),
+        "physical_parameters": physical_parameters,
+        "node_order": list(layout.node_names),
+        "control_node_mapping": (
+            [
+                {"triangle": triangle, "logical_node": logical, "control_node": control}
+                for triangle, logical, control in shared_graph.control_node_occurrences
+            ]
+            if shared_graph is not None else None
+        ),
+        "action_mask": layout.action_mask.astype(bool).tolist(),
+        "passive_nodes": [
+            name for name, active in zip(layout.node_names, layout.action_mask) if not active
+        ],
+        "edges": edges,
+        "routed_actuator_edges": list(layout.routed_actuator_edges or ()),
+        "serial_node_order": list(formatter.serial_node_order),
+        "steamvr_to_policy_matrix": layout.steamvr_to_policy_matrix.tolist(),
+        "max_velocity_ticks_per_second": formatter.max_velocity_ticks_per_second,
+        "command_duration_s": formatter.duration_seconds,
+        "control_frequency_hz": float(cfg.control_frequency_hz),
+        "tracker_assignment": layout.assignment_mode,
+        "serial_to_tracker_id": dict(layout.serial_to_tracker_id),
+    }
 
 
 def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
@@ -1495,10 +1819,21 @@ def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
     agent.model.eval()
     source = source or SteamVRTrackerSource()
     transport = None
+    recorder = None
+    session_reason = "error"
     try:
         transport = _make_command_transport(cfg, formatter)
-        _run_control_loop(cfg, source, layout, builder, agent, formatter, transport)
+        if bool(getattr(cfg, "record_session", True)):
+            recorder = RealRobotSessionRecorder(
+                _recording_path(cfg), _session_metadata(cfg, layout, formatter)
+            )
+            print(f"Recording sim-to-real session to {recorder.path}", flush=True)
+        session_reason = _run_control_loop(
+            cfg, source, layout, builder, agent, formatter, transport, recorder
+        )
     finally:
+        if recorder is not None:
+            recorder.close(reason=session_reason)
         if transport is not None:
             transport.close()
         source.close()
