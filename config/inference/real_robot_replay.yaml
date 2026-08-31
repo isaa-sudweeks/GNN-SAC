@@ -1,0 +1,22 @@
+# @package _global_
+
+defaults:
+  - /config # Load the repository-wide environment and physical-parameter defaults.
+  - override /sac_backend: gnn # Use graph observations/actions, matching real inference.
+  - _self_ # Apply the replay-specific values below after the shared defaults.
+
+input_file: ??? # Recorded real-robot JSONL session or plain VEL_DUR command file.
+graph_definition_file: ??? # Exact triangle/passive/roller JSON used by real inference.
+output_file: null # null writes mujoco_replay.jsonl under the Hydra run directory.
+visualize: false # true opens MuJoCo's interactive viewer; false runs headlessly.
+domain_randomization: false # Keep replay deterministic and use the configured nominal physics.
+use_graph_observations: true # Emit controller-node graph observations from MuJoCo.
+use_control_graph: true # Apply node commands through graph-defined actuator routing.
+task: truss-graph # Select the graph-based truss environment and reward contract.
+mujoco_backend: mujoco # Force native MuJoCo; replay does not use the MJX/Warp backends.
+max_velocity_ticks_per_second: 1800 # Firmware tick magnitude corresponding to action ±1.
+
+enable_wandb: false # Do not create a W&B run for this offline diagnostic.
+save_agent: false # Replay never writes a policy checkpoint.
+save_csv: false # Disable the training pipeline's CSV output; replay writes JSONL itself.
+save_video: false # Disable environment video capture; use visualize for live viewing.
