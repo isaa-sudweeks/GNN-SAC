@@ -1,0 +1,29 @@
+# @package _global_
+
+# Leave-one-node-count-out development split.
+# Replace every placeholder below with an exact mujoco-truss-gen preset name.
+# Keep all seven-node configurations exclusively in final_test.
+cross_validation:
+  enabled: true
+  name: node_count_loso
+  groups:
+    node_4:
+      - tetrahedron
+    node_5:
+      - henneberg_n5_1tube_1
+    node_6:
+      - henneberg_n6_1tube_2
+      - henneberg_n6_2tube_1
+      - octahedron
+    node_8:
+      - henneberg_n8_1tube_57
+      - henneberg_n8_2tube_187
+      - henneberg_n8_3tube_64
+      - usevitch_210272254_p1
+    node_9:
+      - usevitch_60243677150_p1
+  final_test:
+    - henneberg_n7_1tube_3
+    - henneberg_n7_3tube_1
+    - usevitch_1514879
+  held_out_group: null

@@ -10,6 +10,8 @@ from typing import Any
 import hydra
 from omegaconf import OmegaConf, open_dict
 
+from common.cross_validation import resolve_cross_validation
+
 
 LAUNCH_COMMAND_ENV = "GNN_SAC_LAUNCH_COMMAND"
 
@@ -26,8 +28,44 @@ def capture_launch_command(argv: list[str] | None = None) -> str:
 	return os.environ.get(LAUNCH_COMMAND_ENV, command)
 
 
-def _hydra_multirun_id() -> str | None:
-	"""Return a stable, collision-resistant identity for one Hydra sweep job."""
+def multirun_id(job_num: int, override_dirname: str) -> str:
+	"""Return the stable, collision-resistant identity for one Hydra sweep job."""
+	digest = hashlib.sha256(str(override_dirname).encode("utf-8")).hexdigest()[:12]
+	return f"job_{int(job_num):04d}_{digest}"
+
+
+def multirun_work_dir(
+	work_dir: str | Path,
+	*,
+	isolate_multirun_runs: bool,
+	job_num: int | None,
+	override_dirname: str,
+) -> Path:
+	"""Resolve the run directory shared by Hydra workers and pre-submit checks."""
+	work_dir = Path(work_dir)
+	if not isolate_multirun_runs or job_num is None:
+		return work_dir
+	return work_dir / multirun_id(job_num, override_dirname)
+
+
+def normalize_numeric_value(value: Any) -> Any:
+	"""Normalize the integer and single-operation expressions accepted by configs."""
+	if not isinstance(value, str):
+		return value
+	if value.replace('_', '').isdigit():
+		return int(value.replace('_', ''))
+	match = re.match(r"(\d+)([+\-*/])(\d+)", value)
+	if match is None:
+		return value
+	left, operator, right = match.groups()
+	result = eval(left + operator + right)
+	if isinstance(result, float) and result.is_integer():
+		return int(result)
+	return result
+
+
+def _hydra_multirun_identity() -> tuple[int, str] | None:
+	"""Return Hydra's job number and override identity during a multirun."""
 	from hydra.core.hydra_config import HydraConfig
 
 	try:
@@ -43,8 +81,7 @@ def _hydra_multirun_id() -> str | None:
 		"job.override_dirname",
 		default="",
 	)
-	digest = hashlib.sha256(str(override_dirname).encode("utf-8")).hexdigest()[:12]
-	return f"job_{int(job_num):04d}_{digest}"
+	return int(job_num), str(override_dirname)
 
 
 def cfg_to_dataclass(cfg, frozen=False):
@@ -81,16 +118,7 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 	# Algebraic expressions
 	for k in cfg.keys():
 		try:
-			v = cfg[k]
-			if isinstance(v, str):
-				if v.replace('_', '').isdigit():
-					cfg[k] = int(v.replace('_', ''))
-					continue
-				match = re.match(r"(\d+)([+\-*/])(\d+)", v)
-				if match:
-					cfg[k] = eval(match.group(1) + match.group(2) + match.group(3))
-					if isinstance(cfg[k], float) and cfg[k].is_integer():
-						cfg[k] = int(cfg[k])
+			cfg[k] = normalize_numeric_value(cfg[k])
 		except:
 			pass
 
@@ -110,6 +138,7 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 			if truss_topologies is not None and list(topologies) != list(truss_topologies):
 				raise ValueError("Use either topologies or truss_topologies, not both with different values.")
 			cfg.truss_topologies = topologies
+		resolve_cross_validation(cfg)
 		if cfg.get("work_dir", None) not in {None, "???"}:
 			cfg.work_dir = Path(cfg.work_dir)
 		else:
@@ -119,10 +148,16 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 			except Exception:
 				cfg.work_dir = Path(hydra.utils.get_original_cwd()) / 'logs' / cfg.task / str(cfg.seed) / cfg.exp_name
 		if bool(cfg.get("isolate_multirun_runs", False)):
-			multirun_id = _hydra_multirun_id()
-			if multirun_id is not None:
-				cfg.multirun_id = multirun_id
-				cfg.work_dir = Path(cfg.work_dir) / multirun_id
+			identity = _hydra_multirun_identity()
+			if identity is not None:
+				job_num, override_dirname = identity
+				cfg.multirun_id = multirun_id(job_num, override_dirname)
+				cfg.work_dir = multirun_work_dir(
+					cfg.work_dir,
+					isolate_multirun_runs=True,
+					job_num=job_num,
+					override_dirname=override_dirname,
+				)
 		cfg.task_title = cfg.task.replace("-", " ").title()
 
 

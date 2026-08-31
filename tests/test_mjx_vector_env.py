@@ -83,6 +83,45 @@ class MjxVectorEnvTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_energy_penalizes_routed_actuator_commands(self):
+        cfg = mjx_cfg(
+            num_envs=1,
+            speed=0.05,
+            forward_weight=0.0,
+            energy_weight=0.1,
+            alive_bonus=0.0,
+            rigidity_weight=0.0,
+            slip_weight=0.0,
+            collapse_penalty=0.0,
+            critical_eig_threshold=0.0,
+        )
+        env = make_env(cfg)
+        try:
+            env.reset_many()
+            action = torch.linspace(
+                -1.0,
+                1.0,
+                env.action_space.shape[0],
+                dtype=torch.float32,
+            ).reshape(env.action_space.shape)
+
+            _, reward, _, info = env.step_many([action], env_indices=[0])[0]
+
+            core = env.env._core
+            ctrl = env.env._state.data.ctrl[0, core._actuator_ids]
+            expected_penalty = float(
+                env.env._jax.device_get(env.env._jnp.sum(env.env._jnp.square(ctrl)))
+            )
+            self.assertAlmostEqual(float(info["energy_penalty_raw"]), expected_penalty)
+            self.assertAlmostEqual(float(info["energy"]), -cfg.energy_weight * expected_penalty)
+            self.assertAlmostEqual(float(reward), float(info["energy"]), places=6)
+            self.assertNotAlmostEqual(
+                expected_penalty,
+                float(torch.sum(torch.square(action * cfg.speed))),
+            )
+        finally:
+            env.close()
+
     def test_configurable_graph_features_flow_through_mjx_policy(self):
         cfg = mjx_cfg(
             num_envs=1,
@@ -148,6 +187,11 @@ class MjxVectorEnvTest(unittest.TestCase):
                     name: {"enabled": True, "min": value, "max": value}
                     for name, value in fixed_ranges.items()
                 },
+                "abstract_node_mass_multiplier": {
+                    "enabled": True,
+                    "min": 1.25,
+                    "max": 1.25,
+                },
             },
         )
         env = make_env(cfg)
@@ -165,6 +209,19 @@ class MjxVectorEnvTest(unittest.TestCase):
                     ),
                     msg=f"unexpected samples for {name}: {sampled}",
                 )
+            node_mass_multipliers = env.env._jax.device_get(
+                state.abstract_node_mass_multipliers
+            )
+            self.assertEqual(
+                node_mass_multipliers.shape,
+                (2, len(env.env._core.mujoco_model.node_names)),
+            )
+            self.assertTrue(
+                torch.allclose(
+                    torch.tensor(node_mass_multipliers.tolist()),
+                    torch.full(node_mass_multipliers.shape, 1.25),
+                )
+            )
         finally:
             env.close()
 
@@ -183,6 +240,25 @@ class MjxVectorEnvTest(unittest.TestCase):
             result = env.step_many([env.rand_act(env_idx=0)], env_indices=[0])[0]
             self.assertEqual(result[0].num_nodes, observations[0].num_nodes)
             self.assertTrue(torch.isfinite(result[1]))
+        finally:
+            env.close()
+
+    def test_realistic_mjx_uses_connector_ball_control_observations(self):
+        cfg = mjx_cfg(
+            num_envs=1,
+            truss_realistic=True,
+            control_node_observation_source="connector_ball",
+        )
+        env = make_env(cfg)
+        try:
+            observations = env.reset_many()
+            core = env.env._core
+            expected_body_ids = core.mujoco_model.get_control_node_body_ids(
+                "connector_ball"
+            )
+            actual_body_ids = env.env._jax.device_get(core._control_body_ids)
+            self.assertEqual(actual_body_ids.tolist(), expected_body_ids.tolist())
+            self.assertTrue(torch.isfinite(observations[0].x).all())
         finally:
             env.close()
 
@@ -281,8 +357,8 @@ class MjxVectorEnvTest(unittest.TestCase):
         finally:
             env.close()
 
-    def test_topology_buckets_require_at_least_one_environment_per_topology(self):
-        with self.assertRaisesRegex(ValueError, "at least one"):
+    def test_topology_buckets_require_positive_num_envs(self):
+        with self.assertRaisesRegex(ValueError, "num_envs must be positive"):
             make_env(
                 mjx_cfg(
                     num_envs=0,
@@ -290,14 +366,22 @@ class MjxVectorEnvTest(unittest.TestCase):
                 )
             )
 
-    def test_topology_buckets_require_even_total_environment_split(self):
-        with self.assertRaisesRegex(ValueError, "divisible"):
-            make_env(
-                mjx_cfg(
-                    num_envs=3,
-                    truss_topologies=["octahedron", "tetrahedron"],
-                )
+    def test_topology_buckets_round_and_persist_total_environment_count(self):
+        cfg = mjx_cfg(
+            num_envs=3,
+            truss_topologies=["octahedron", "tetrahedron"],
+        )
+        with self.assertWarnsRegex(RuntimeWarning, "num_envs=3.*using 4"):
+            env = make_env(cfg)
+        try:
+            self.assertEqual(cfg.num_envs, 4)
+            self.assertEqual(env.num_envs, 4)
+            self.assertEqual(
+                env.env.topology_allocations,
+                {"octahedron": 2, "tetrahedron": 2},
             )
+        finally:
+            env.close()
 
 
 if __name__ == "__main__":

@@ -786,7 +786,7 @@ requires-dist = [
     { name = "matplotlib" },
     { name = "mujoco" },
     { name = "mujoco-mjx" },
-    { name = "mujoco-truss-gen", specifier = ">=0.12.2" },
+    { name = "mujoco-truss-gen", specifier = "==0.12.4" },
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "openvr", specifier = "==2.5.102" },
@@ -1396,7 +1396,7 @@ wheels = [
 
 [[package]]
 name = "mujoco-truss-gen"
-version = "0.12.2"
+version = "0.12.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gymnasium" },
@@ -1406,9 +1406,9 @@ dependencies = [
     { name = "numpy" },
     { name = "scipy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2c/92/9f89ed1727aee1c2853b9ea8353803eba23bc6a1f502146b7a443535538e/mujoco_truss_gen-0.12.2.tar.gz", hash = "sha256:80a9e027e01326a330d478a98ea7b0cf1d7a983bd110e64fec49e83d3373ca99", size = 131945, upload-time = "2026-08-17T18:45:17.157Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d7/03/e07364a6c99cfd8192df143c70afed78e163f16a0c6496d0babcd20c6828/mujoco_truss_gen-0.12.4.tar.gz", hash = "sha256:4ba879c4ad8f20b2cdc06e0c998a3893849655d9c014dae8e80f15bbc0df4054", size = 137408, upload-time = "2026-08-27T14:44:56.977Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/3e/21/5771b344ca80be0bd354544b08969f3383a7aaa022d73658445962f9c35e/mujoco_truss_gen-0.12.2-py3-none-any.whl", hash = "sha256:303a075b3332be9d85df8b3525b4f0a18bdb7c367720d96b710cd4011d700ee5", size = 104394, upload-time = "2026-08-17T18:45:15.915Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/b1/78d1cf858724595d6fc504561ce1971b8050fa5f98bfcbe69fcac4f5c5ab/mujoco_truss_gen-0.12.4-py3-none-any.whl", hash = "sha256:7485cff7a440eff0bda40afa961fac8854e3f7fc1d8a410cade53c983c7c5aa2", size = 107327, upload-time = "2026-08-27T14:44:55.434Z" },
 ]
 
 [[package]]

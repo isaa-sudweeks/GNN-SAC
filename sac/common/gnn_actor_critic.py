@@ -63,8 +63,10 @@ class GNNActorCritic(nn.Module):
         )
 
         self._action_head = layers.mlp(
-            actor_mpl_dims[-1], action_head_hidden, 2*cfg.action_dim,
-            dropout=cfg.dropout
+            actor_mpl_dims[-1],
+            action_head_hidden,
+            2 * cfg.action_dim,
+            dropout=cfg.dropout,
         )
 
         self._Qs = layers.Ensemble(
@@ -88,6 +90,7 @@ class GNNActorCritic(nn.Module):
     def __repr__(self):
         repr_str = "Graph Neural Network based Soft Actor Critic Network \n"
         repr_str += f"Actor: {self._pi}\n"
+        repr_str += f"Action head: {self._action_head}\n"
         repr_str += f"Critics: {self._Qs}\n"
         repr_str += "Total Learnable Parameters: {:,}".format(self.total_params)
         return repr_str
@@ -95,6 +98,10 @@ class GNNActorCritic(nn.Module):
     @property
     def total_params(self):
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def actor_parameters(self):
+        """Return every trainable actor parameter, including the action head."""
+        return tuple(self._pi.parameters()) + tuple(self._action_head.parameters())
 
     def train(self, mode=True):
         super().train(mode)
@@ -126,9 +133,13 @@ class GNNActorCritic(nn.Module):
         batch = getattr(obs, "batch", None)
         if batch is None:
             batch = log_prob.new_zeros(log_prob.size(0), dtype=torch.long)
+            graph_count = 1
         else:
             batch = batch[action_mask]
-        log_prob = global_mean_pool(log_prob, batch).squeeze(-1) # Using a global mean pool means that the entropy then becomes normalized by the number of nodes.
+            graph_count = int(obs.num_graphs)
+        log_prob = global_mean_pool(
+            log_prob, batch, size=graph_count
+        ).squeeze(-1) # Using a global mean pool means that the entropy then becomes normalized by the number of nodes.
         entropy = -log_prob
         return action, {
             "mean": mean,
@@ -159,24 +170,45 @@ class GNNActorCritic(nn.Module):
         action_mask = policy_action_mask(obs)
         pool_mask = physical_node_mask(obs)
         node_action = action.new_zeros((obs.x.size(0), action.size(-1)))
+        physical_node_count = getattr(
+            obs, "_physical_node_count_cache", None
+        )
+        if physical_node_count is None:
+            if bool(getattr(self.cfg, "use_virtual_node", False)):
+                graph_count = int(getattr(obs, "num_graphs", 1))
+                physical_node_count = obs.x.size(0) - graph_count
+            else:
+                physical_node_count = obs.x.size(0)
+        policy_action_count = getattr(
+            obs, "_policy_action_count_cache", None
+        )
         if action.size(0) == obs.x.size(0):
             node_action[action_mask] = action[action_mask]
-        elif action.size(0) == int(pool_mask.sum()):
+        elif action.size(0) == physical_node_count:
             node_action[action_mask] = action[action_mask[pool_mask]]
-        elif action.size(0) == int(action_mask.sum()):
+        elif (
+            policy_action_count is not None
+            and action.size(0) == policy_action_count
+        ):
             node_action[action_mask] = action
         else:
-            raise ValueError(
-                f"Got {action.size(0)} node actions for {int(action_mask.sum())} "
-                f"actuated nodes, {int(pool_mask.sum())} physical nodes, and "
-                f"{obs.x.size(0)} total nodes."
-            )
+            if policy_action_count is None:
+                policy_action_count = int(action_mask.sum())
+            if action.size(0) == policy_action_count:
+                node_action[action_mask] = action
+            else:
+                raise ValueError(
+                    f"Got {action.size(0)} node actions for {policy_action_count} "
+                    f"actuated nodes, {physical_node_count} physical nodes, and "
+                    f"{obs.x.size(0)} total nodes."
+                )
         q_values = qnet(
             torch.cat([obs.x, node_action], dim=-1),
             obs.edge_index,
             getattr(obs, "batch", None),
             pool_mask,
             getattr(obs, "edge_attr", None),
+            num_graphs=int(getattr(obs, "num_graphs", 1)),
         )
 
         if return_type == "all":

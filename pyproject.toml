@@ -12,7 +12,7 @@ dependencies = [
     "jax>=0.11.0; sys_platform != 'linux'",
     "mujoco",
     "mujoco-mjx",
-    "mujoco-truss-gen>=0.12.2",
+    "mujoco-truss-gen==0.12.4",
     "matplotlib",
     "imageio",
     "imageio-ffmpeg",

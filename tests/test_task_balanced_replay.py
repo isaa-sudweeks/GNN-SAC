@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 import unittest
+import warnings
 
 import torch
 from torch_geometric.data import Data
@@ -17,6 +18,121 @@ for path in (ROOT, SAC_ROOT):
 from common.gnn_buffer import GNNBuffer, ReplayBatch
 from gnn_sac import GNNSAC
 from trainer.online_trainer import OnlineTrainer
+
+
+class LegacyProjectionGNNSAC(GNNSAC):
+    """Frozen pre-optimization PCGrad projection used as an exact oracle."""
+
+    @staticmethod
+    def _set_parameter_gradients(parameters, gradients):
+        for parameter, gradient in zip(parameters, gradients):
+            parameter.grad = gradient.detach().clone()
+
+    @classmethod
+    def pcgrad_project(cls, task_gradients):
+        task_gradients = tuple(tuple(gradients) for gradients in task_gradients)
+        projected = [
+            [gradient.detach().clone() for gradient in gradients]
+            for gradients in task_gradients
+        ]
+        for task_idx, task_gradient in enumerate(projected):
+            for other_idx in torch.randperm(len(task_gradients)).tolist():
+                if other_idx == task_idx:
+                    continue
+                other_gradient = task_gradients[other_idx]
+                other_norm_squared = cls._gradient_dot_native(
+                    other_gradient, other_gradient
+                )
+                if float(other_norm_squared) == 0.0:
+                    continue
+                dot = cls._gradient_dot_native(task_gradient, other_gradient)
+                if float(dot) >= 0.0:
+                    continue
+                coefficient = dot / other_norm_squared
+                task_gradient[:] = [
+                    gradient
+                    - coefficient.to(device=gradient.device, dtype=gradient.dtype)
+                    * other.to(device=gradient.device, dtype=gradient.dtype)
+                    for gradient, other in zip(task_gradient, other_gradient)
+                ]
+        return tuple(
+            sum(
+                (task_gradient[param_idx] for task_gradient in projected),
+                start=torch.zeros_like(projected[0][param_idx]),
+            )
+            / len(projected)
+            for param_idx in range(len(projected[0]))
+        )
+
+    def _pcgrad_q_update(self, task_batches, **_kwargs):
+        parameters = tuple(self.model._Qs.parameters())
+        losses = []
+        task_gradients = {}
+        for task, batch in task_batches.items():
+            obs, action, reward, terminated, next_obs = batch
+            loss = self._q_loss(obs, action, reward, terminated, next_obs)
+            losses.append(loss)
+            task_gradients[task] = self._parameter_gradients(loss, parameters)
+
+        self.q_optim.zero_grad(set_to_none=True)
+        self._set_parameter_gradients(
+            parameters,
+            self.pcgrad_project(task_gradients.values()),
+        )
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            parameters, self.cfg.grad_clip_norm
+        )
+        self.q_optim.step()
+        return (
+            torch.stack([loss.detach() for loss in losses]).mean(),
+            grad_norm.detach(),
+            task_gradients,
+        )
+
+    def _pcgrad_pi_and_alpha_update(self, task_batches, **_kwargs):
+        parameters = tuple(self.model.actor_parameters())
+        losses = []
+        task_gradients = {}
+        task_info = []
+        for task, batch in task_batches.items():
+            pi_loss, info = self._pi_loss(batch[0])
+            losses.append(pi_loss)
+            task_info.append(info)
+            task_gradients[task] = self._parameter_gradients(pi_loss, parameters)
+
+        self.pi_optim.zero_grad(set_to_none=True)
+        self._set_parameter_gradients(
+            parameters,
+            self.pcgrad_project(task_gradients.values()),
+        )
+        pi_grad_norm = torch.nn.utils.clip_grad_norm_(
+            parameters, self.cfg.grad_clip_norm
+        )
+        self.pi_optim.step()
+
+        log_prob = torch.cat([info["log_prob"].reshape(-1) for info in task_info])
+        alpha_loss = -(
+            self.log_alpha * (log_prob.detach() + self.target_entropy)
+        ).mean()
+        self.alpha_optim.zero_grad(set_to_none=True)
+        alpha_loss.backward()
+        self.alpha_optim.step()
+
+        entropy = torch.stack(
+            [info["entropy"].detach().mean() for info in task_info]
+        ).mean()
+        return (
+            {
+                "pi_loss": torch.stack(
+                    [loss.detach() for loss in losses]
+                ).mean(),
+                "pi_grad_norm": pi_grad_norm.detach(),
+                "alpha_loss": alpha_loss.detach(),
+                "alpha": self.alpha.detach(),
+                "entropy": entropy,
+            },
+            task_gradients,
+        )
 
 
 def graph(marker, node_count=3):
@@ -173,6 +289,12 @@ class TaskBalancedReplayTest(unittest.TestCase):
         self.assertEqual(list(replay_batch.by_task), ["truss-graph:a", "truss-graph:b"])
         self.assertEqual([batch[2].shape[0] for batch in replay_batch.by_task.values()], [2, 2])
         self.assertEqual(replay_batch.combined[2].shape[0], 4)
+        self.assertEqual(
+            replay_batch.combined[0]._physical_node_count_cache, 12
+        )
+        self.assertEqual(
+            replay_batch.combined[0]._policy_action_count_cache, 12
+        )
 
     def test_reports_multitask_replay_subphases(self):
         class PhaseRecorder:
@@ -285,11 +407,19 @@ class TaskBalancedReplayTest(unittest.TestCase):
         self.assertTrue(buffer.ready)
         self.assertEqual(buffer.sample()[2].shape[0], 2)
 
-    def test_divisibility_is_validated(self):
-        with self.assertRaisesRegex(ValueError, "batch_size=3"):
-            GNNBuffer(cfg(batch_size=3))
-        with self.assertRaisesRegex(ValueError, "buffer_size=7"):
-            GNNBuffer(cfg(buffer_size=7))
+    def test_divisibility_values_are_rounded_and_persisted(self):
+        config = cfg(buffer_size=7, batch_size=3)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            buffer = GNNBuffer(config)
+
+        messages = [str(warning.message) for warning in caught]
+        self.assertTrue(any("buffer_size=7" in message and "using 8" in message for message in messages))
+        self.assertTrue(any("batch_size=3" in message and "using 4" in message for message in messages))
+        self.assertEqual(config.buffer_size, 8)
+        self.assertEqual(config.batch_size, 4)
+        self.assertEqual(buffer._capacity_per_task, 4)
+        self.assertEqual(buffer._batch_size_per_task, 2)
 
     def test_checkpoint_round_trip_and_layout_validation(self):
         original = GNNBuffer(cfg())
@@ -427,12 +557,12 @@ class ReplayRoutingTest(unittest.TestCase):
         pcgrad_agent = SimpleNamespace(
             cfg=SimpleNamespace(pcgrad=True),
             model=self.Model(),
-            _pcgrad_q_update=lambda batches: (
+            _pcgrad_q_update=lambda batches, **_kwargs: (
                 torch.tensor(1.0),
                 torch.tensor(2.0),
                 {"task": (torch.tensor(1.0),)},
             ),
-            _pcgrad_pi_and_alpha_update=lambda batches: (
+            _pcgrad_pi_and_alpha_update=lambda batches, **_kwargs: (
                 {"pi_loss": torch.tensor(3.0)},
                 {"task": (torch.tensor(1.0),)},
             ),
@@ -447,6 +577,46 @@ class ReplayRoutingTest(unittest.TestCase):
 
 
 class PCGradTest(unittest.TestCase):
+    def test_optimized_projection_matches_frozen_reference_exactly(self):
+        generator = torch.Generator().manual_seed(812)
+        for task_count in (1, 2, 3, 7):
+            gradients = tuple(
+                tuple(
+                    torch.randn(shape, generator=generator)
+                    for shape in ((11,), (3, 5), (2,))
+                )
+                for _ in range(task_count)
+            )
+            torch.manual_seed(900 + task_count)
+            rng_state = torch.random.get_rng_state()
+            reference = LegacyProjectionGNNSAC.pcgrad_project(gradients)
+            expected_rng_state = torch.random.get_rng_state()
+            torch.random.set_rng_state(rng_state)
+            optimized = GNNSAC.pcgrad_project(gradients)
+
+            for expected, actual in zip(reference, optimized):
+                self.assertTrue(torch.equal(expected, actual))
+            self.assertTrue(
+                torch.equal(expected_rng_state, torch.random.get_rng_state())
+            )
+
+    def test_actor_optimizer_covers_gnn_and_action_projection(self):
+        agent = GNNSAC(agent_cfg())
+        optimized_parameter_ids = {
+            id(parameter)
+            for group in agent.pi_optim.param_groups
+            for parameter in group["params"]
+        }
+        actor_parameter_ids = {
+            id(parameter) for parameter in agent.model.actor_parameters()
+        }
+
+        self.assertEqual(optimized_parameter_ids, actor_parameter_ids)
+        self.assertTrue(
+            {id(parameter) for parameter in agent.model._action_head.parameters()}
+            <= optimized_parameter_ids
+        )
+
     def test_projects_conflicting_gradients(self):
         merged = GNNSAC.pcgrad_project(
             (
@@ -519,8 +689,11 @@ class PCGradTest(unittest.TestCase):
         q_before = [
             parameter.detach().clone() for parameter in agent.model._Qs.parameters()
         ]
-        pi_before = [
-            parameter.detach().clone() for parameter in agent.model._pi.parameters()
+        actor_parameters = tuple(agent.model.actor_parameters())
+        pi_before = [parameter.detach().clone() for parameter in actor_parameters]
+        action_head_before = [
+            parameter.detach().clone()
+            for parameter in agent.model._action_head.parameters()
         ]
         torch.manual_seed(123)
         info = agent.update(buffer, compute_diagnostics=True)
@@ -534,7 +707,15 @@ class PCGradTest(unittest.TestCase):
         self.assertTrue(
             any(
                 not torch.equal(before, after)
-                for before, after in zip(pi_before, agent.model._pi.parameters())
+                for before, after in zip(pi_before, actor_parameters)
+            )
+        )
+        self.assertTrue(
+            any(
+                not torch.equal(before, after)
+                for before, after in zip(
+                    action_head_before, agent.model._action_head.parameters()
+                )
             )
         )
         self.assertIn(
@@ -574,6 +755,40 @@ class PCGradTest(unittest.TestCase):
             legacy_agent.training_state_dict(),
             optimized_agent.training_state_dict(),
         )
+
+    def test_repeated_updates_match_frozen_projection_exactly(self):
+        config = agent_cfg(pcgrad=True, buffer_size=16)
+        reference_agent = LegacyProjectionGNNSAC(config)
+        optimized_agent = GNNSAC(config)
+        optimized_agent.load_training_state_dict(
+            reference_agent.training_state_dict()
+        )
+        reference_buffer = populate_buffer(config)
+        optimized_buffer = populate_buffer(config)
+
+        torch.manual_seed(1441)
+        for _ in range(100):
+            rng_state = torch.random.get_rng_state()
+            reference_metrics = reference_agent.update(reference_buffer)
+            expected_rng_state = torch.random.get_rng_state()
+            torch.random.set_rng_state(rng_state)
+            optimized_metrics = optimized_agent.update(optimized_buffer)
+
+            self.assertEqual(reference_metrics.keys(), optimized_metrics.keys())
+            for key in reference_metrics:
+                self.assertTrue(
+                    torch.equal(reference_metrics[key], optimized_metrics[key]),
+                    key,
+                )
+            assert_nested_equal(
+                self,
+                reference_agent.training_state_dict(),
+                optimized_agent.training_state_dict(),
+            )
+            self.assertTrue(
+                torch.equal(expected_rng_state, torch.random.get_rng_state())
+            )
+            torch.random.set_rng_state(expected_rng_state)
 
     def test_pcgrad_requires_task_aware_batches(self):
         class BufferWithoutTasks:

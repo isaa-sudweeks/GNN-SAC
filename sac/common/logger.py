@@ -320,6 +320,16 @@ class Logger:
         if self._multirun_id not in (None, "", "???"):
             name = f"{name}-{self._multirun_id}"
         tags = cfg_to_group(cfg, return_list=True) + [f"seed:{self._seed}"]
+        cross_validation = _cfg_get(cfg, "cross_validation", None)
+        if bool(_cfg_get(cross_validation, "enabled", False)):
+            cv_name = _cfg_get(cross_validation, "name", "cross-validation")
+            fold_name = _cfg_get(cross_validation, "fold_name", None)
+            held_out = _cfg_get(cross_validation, "held_out_group", None)
+            tags.append(f"cross-validation:{cv_name}")
+            if held_out not in (None, "", "null"):
+                tags.append(f"held-out:{held_out}")
+            if fold_name not in (None, "", "null"):
+                name = f"{name}-{fold_name}"
         wandb_dir = Path(_cfg_get(cfg, "wandb_dir", Path(__file__).resolve().parents[2]))
         if not wandb_dir.is_absolute():
             wandb_dir = Path(__file__).resolve().parents[2] / wandb_dir

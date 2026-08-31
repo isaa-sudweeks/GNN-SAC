@@ -8,8 +8,10 @@ xml_path: env/truss/assets/Baseline/octahedron_velocity_integrated_ctr.xml # MuJ
 truss_topology: octahedron # mujoco-truss-gen preset used by unified truss envs.
 truss_topologies: null # Optional list of mujoco-truss-gen presets for multi-topology runs.
 topologies: null # Alias for truss_topologies; useful for CLI sweeps.
+eval_extra_topologies: null # Additional held-out presets to evaluate without adding them to training or replay.
 truss_realistic: false # Whether unified truss envs should request realistic generated models.
 truss_graph_view: auto # Graph view for unified graph envs: auto, physical, or logical.
+control_node_observation_source: connector_ball # Prefer connector-ball kinematics for realistic models; abstract models use physical nodes.
 
 # Simulation timing
 mujoco_backend: mujoco # Backend: mjx selects batch-native fixed-topology graph simulation; mujoco uses Gym environments.
@@ -31,7 +33,7 @@ action_high: 1.0 # Upper bound of the normalized policy action space.
 
 # Reward and termination
 forward_weight: 19.65175423 # Reward multiplier for commanded center-of-mass velocity.
-energy_weight: 0.1 # Penalty multiplier on squared actuator command magnitude.
+energy_weight: 0.1 # Penalty multiplier on squared post-routing, clipped actuator commands.
 alive_bonus: 0.1 # Reward added each step while the structure remains valid.
 rigidity_weight: 0.1 # Reward multiplier for rigidity normalized by its initial value.
 slip_weight: 0.1215063801500649 # Penalty multiplier for horizontal velocity at low-contact nodes.

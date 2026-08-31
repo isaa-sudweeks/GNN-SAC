@@ -1,0 +1,29 @@
+# @package hydra.launcher
+
+_target_: hydra_plugins.gnn_sac_submitit_launcher.FilteringSlurmLauncher
+submitit_folder: ${hydra.sweep.dir}/.submitit/%j
+timeout_min: 60
+cpus_per_task: null
+gpus_per_node: null
+tasks_per_node: 1
+mem_gb: null
+nodes: 1
+name: ${hydra.job.name}
+stderr_to_stdout: false
+partition: null
+qos: null
+comment: null
+constraint: null
+exclude: null
+gres: null
+cpus_per_gpu: null
+gpus_per_task: null
+mem_per_gpu: null
+mem_per_cpu: null
+account: null
+signal_delay_s: 120
+max_num_timeout: 0
+additional_parameters: {}
+array_parallelism: 256
+setup: null
+skip_completed_jobs: true

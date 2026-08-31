@@ -1,0 +1,31 @@
+# @package _global_
+
+sac_backend: padded_mlp
+exp_name: padded-mlp-multitopology
+pcgrad: false
+
+# Use the same graph/control environment as the GNN. Graph connectivity is
+# transported through replay but intentionally ignored by the MLP networks.
+task: truss-graph
+env_name: ${task}
+use_graph_observations: true
+use_control_graph: true
+use_virtual_node: false
+truss_topology: octahedron
+topology_id: ${truss_topology}
+node_feature_dim: 6
+obs_dim: 6
+node_action_dim: 1
+action_dim: ${node_action_dim}
+
+# Fixed capacity for the selected thesis topology distribution. This value is
+# validated against every observation; graphs are never silently truncated.
+padded_mlp_max_nodes: 21
+# Width 736 gives 2,074,828 trainable actor/critic parameters for the 21-node
+# schema, within 0.2% of the current production GNN's 2,078,008 parameters.
+padded_mlp_hidden_dims:
+  - 736
+  - 736
+
+# Log probability is averaged across active node actions, matching the GNN.
+target_entropy: -1

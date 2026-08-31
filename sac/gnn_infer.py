@@ -278,6 +278,19 @@ def _to_float(value) -> float:
     return float(value)
 
 
+def _make_agent(cfg):
+    backend = str(getattr(cfg, "sac_backend", "gnn")).lower()
+    if backend == "gnn":
+        return GNNSAC(cfg)
+    if backend == "padded_mlp":
+        from padded_mlp_sac import PaddedMLPSAC
+
+        return PaddedMLPSAC(cfg)
+    raise ValueError(
+        f"Graph inference supports sac_backend='gnn' or 'padded_mlp', got {backend!r}."
+    )
+
+
 def _unwrap_env(env):
     current = env
     while hasattr(current, "env"):
@@ -464,10 +477,14 @@ def _enable_smooth_human_rendering(env, cfg) -> bool:
             else:
                 self.mj_model.data.ctrl[:] = ctrl
 
+            minimum_critical_eig = np.inf
+            terminated_during_substeps = False
+            substeps_executed = 0
             for substep in range(nsubsteps):
                 if hasattr(self.mj_model, "apply_angle_bisector_control"):
                     self.mj_model.apply_angle_bisector_control()
                 _mujoco.mj_step(self.mj_model.model, self.mj_model.data)
+                substeps_executed = substep + 1
 
                 is_render_step = (substep + 1) % render_every == 0 or substep + 1 == nsubsteps
                 if self.viewer is not None and is_render_step:
@@ -477,8 +494,27 @@ def _enable_smooth_human_rendering(env, cfg) -> bool:
                     sleep_seconds = target_time - time.perf_counter()
                     if sleep_seconds > 0:
                         time.sleep(sleep_seconds)
+
+                collapse_check = getattr(self.mj_model, "collapse_check", None)
+                if callable(collapse_check):
+                    critical_eig = float(collapse_check())
+                    if np.isfinite(critical_eig):
+                        minimum_critical_eig = min(minimum_critical_eig, critical_eig)
+                    else:
+                        minimum_critical_eig = critical_eig
+                    if (
+                        not np.isfinite(critical_eig)
+                        or critical_eig < self.config.critical_eig_threshold
+                    ):
+                        terminated_during_substeps = True
+                        break
             if _increments_steps:
                 self.steps += 1
+            return {
+                "minimum_substep_critical_eig_raw": float(minimum_critical_eig),
+                "substeps_executed": substeps_executed,
+                "terminated_during_substeps": terminated_during_substeps,
+            }
 
         env_obj._advance = types.MethodType(smooth_advance, env_obj)
         return True
@@ -530,9 +566,10 @@ def _run_vectorized_inference(cfg, env, agent) -> list[dict]:
             active_observations = [observations[env_idx] for env_idx in active]
             actions = agent.act_batch(active_observations, eval_mode=deterministic)
             if print_position_command:
-                action_batch = torch.stack(actions).detach().cpu().numpy()
-                for action_idx, env_idx in enumerate(active):
-                    velocity_command = action_batch[action_idx] * float(getattr(cfg, "speed", 1.0))
+                for action, env_idx in zip(actions, active):
+                    if hasattr(env, "set_active_env"):
+                        env.set_active_env(env_idx)
+                    velocity_command = _velocity_command_from_action(action, cfg)
                     velocity_command, _ = _zero_passive_commands(velocity_command, env)
                     if position_commands[env_idx] is None:
                         position_commands[env_idx] = np.zeros_like(
@@ -568,6 +605,8 @@ def _run_vectorized_inference(cfg, env, agent) -> list[dict]:
                 and position_commands[env_idx] is not None
                 and not printed_position_commands[env_idx]
             ):
+                if hasattr(env, "set_active_env"):
+                    env.set_active_env(env_idx)
                 print(
                     f"episode={episode} step={lengths[env_idx]} "
                     f"position_command={_command_dict(position_commands[env_idx], env)}"
@@ -678,7 +717,7 @@ def run_inference(cfg):
 
     env = make_env(cfg)
     smooth_rendering = _enable_smooth_human_rendering(env, cfg)
-    agent = GNNSAC(cfg)
+    agent = _make_agent(cfg)
     try:
         load_agent_checkpoint(agent, checkpoint)
         agent.model.eval()
