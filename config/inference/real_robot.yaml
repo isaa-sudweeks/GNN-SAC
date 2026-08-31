@@ -12,7 +12,7 @@ tracker_assignment: automatic # automatic, manual, or triangle_planes
 tracker_layout_file: null # Required for manual/triangle_planes; optional calibration for automatic.
 graph_definition_file: null # Complete hand-authored graph; replaces the preset and tracker_layout_file.
 plane_parallel_tolerance: 1.0e-6
-control_frequency_hz: 10.0
+control_frequency_hz: 5.0
 control_steps: null
 velocity_filter_alpha: 1.0
 deterministic: true
@@ -20,7 +20,7 @@ deterministic: true
 # USB transmitter command output. Keep print mode until graph/channel ordering and
 # tracker calibration have been verified; serial mode actuates the physical robot.
 command_transport: print # print or serial
-serial_port: null
+serial_port: "/dev/ttyUSB0"
 serial_baud_rate: 115200
 serial_ack_timeout_s: 5.0
 serial_startup_delay_s: 2.0 # Allow an Arduino reset triggered by opening USB serial.
