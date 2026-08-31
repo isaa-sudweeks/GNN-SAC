@@ -346,15 +346,16 @@ def _fixed_model_scale(config):
     return scale
 
 
-def make_truss_env_config(config):
+def make_truss_env_config(config, *, model_source=None):
     topology = resolve_truss_topology(config)
     realistic = resolve_truss_realistic(config)
-    model_source = get_mujoco_spec(
-        topology,
-        realistic=realistic,
-        scale=_fixed_model_scale(config),
-        physical_params=_physical_parameters_from_config(config),
-    )
+    if model_source is None:
+        model_source = get_mujoco_spec(
+            topology,
+            realistic=realistic,
+            scale=_fixed_model_scale(config),
+            physical_params=_physical_parameters_from_config(config),
+        )
     config_values = {
         "model_source": model_source,
         "max_steps": int(_cfg_get(config, "max_steps", 10000)),
@@ -403,12 +404,16 @@ class MujocoPresetMLPEnv(MujocoRelativeObsEnv):
 class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObsEnv):
     """Graph observation environment for any mujoco-truss-gen preset."""
 
-    def __init__(self, config, render_mode=None, rank=0):
+    def __init__(self, config, render_mode=None, rank=0, model_source=None):
         self.source_config = config
         self.topology = resolve_truss_topology(config)
         self.node_action_dim = int(_cfg_get(config, "node_action_dim", 1))
         self.node_feature_dim = 6
-        super().__init__(make_truss_env_config(config), render_mode=render_mode, rank=rank)
+        super().__init__(
+            make_truss_env_config(config, model_source=model_source),
+            render_mode=render_mode,
+            rank=rank,
+        )
 
     def _use_control_graph(self):
         return bool(_cfg_get(self.source_config, "use_control_graph", False))

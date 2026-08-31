@@ -1,6 +1,10 @@
 # Real-robot GNN inference
 
-`sac/real_robot_infer.py` replaces the MuJoCo observation/step loop with SteamVR tracker input. It obtains the policy node order, control graph, action mask, and edge roles from either a selected `mujoco-truss-gen` preset or a hand-authored triangle definition. Preset mode constructs MuJoCo once for this metadata and then closes it; every closed-loop observation comes from SteamVR. The physical tracker positions in the first complete frame establish the observation bounding box and rigidity reference. Commands are printed as JSON and are not sent to hardware.
+`sac/real_robot_infer.py` replaces the MuJoCo observation/step loop with SteamVR tracker input. It obtains the policy node order, control graph, action mask, and edge roles from either a selected `mujoco-truss-gen` preset or a hand-authored triangle definition. Preset mode constructs MuJoCo once for this metadata and then closes it; every closed-loop observation comes from SteamVR. The physical tracker positions in the first complete frame establish the observation bounding box and rigidity reference. Firmware-compatible commands are printed unless serial transport is explicitly enabled.
+
+Real inference also records a JSONL diagnostic session by default. See
+`docs/sim_to_real_diagnostics.md` for stationary tracker checks, exact graph-defined
+MuJoCo command replay, paired comparison, and repeated-trial variance analysis.
 
 Keep the permanent serial mapping in one JSON file:
 

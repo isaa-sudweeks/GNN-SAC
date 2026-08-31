@@ -16,6 +16,8 @@ control_frequency_hz: 10.0
 control_steps: null
 velocity_filter_alpha: 1.0
 deterministic: true
+record_session: true
+record_output: null # null writes real_robot_session.jsonl under the Hydra run directory.
 
 # USB transmitter command output. Keep print mode until graph/channel ordering and
 # tracker calibration have been verified; serial mode actuates the physical robot.
