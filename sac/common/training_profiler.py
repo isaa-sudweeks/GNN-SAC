@@ -31,6 +31,7 @@ class TrainingProfiler:
         warmup_vector_steps: int,
         active_vector_steps: int,
         trace_enabled: bool,
+        optimization_subphases: bool = True,
         output_dir: str | Path,
         logger: Any,
         metadata: Mapping[str, Any],
@@ -47,6 +48,7 @@ class TrainingProfiler:
         self.warmup_vector_steps = int(warmup_vector_steps)
         self.active_vector_steps = int(active_vector_steps)
         self.trace_enabled = bool(trace_enabled)
+        self.optimization_subphases_enabled = bool(optimization_subphases)
         self.output_dir = Path(output_dir)
         self.logger = logger
         self.metadata = dict(metadata)
@@ -56,6 +58,7 @@ class TrainingProfiler:
 
         self._samples: dict[str, list[float]] = defaultdict(list)
         self._subsamples: dict[str, list[float]] = defaultdict(list)
+        self._optimization_subsamples: dict[str, list[float]] = defaultdict(list)
         self._vector_steps_seen = 0
         self._measured_vector_steps = 0
         self._measured_transitions = 0
@@ -93,6 +96,9 @@ class TrainingProfiler:
             warmup_vector_steps=int(_get(profile_cfg, "warmup_vector_steps", 10)),
             active_vector_steps=int(_get(profile_cfg, "active_vector_steps", 100)),
             trace_enabled=bool(_get(profile_cfg, "trace_enabled", False)),
+            optimization_subphases=bool(
+                _get(profile_cfg, "optimization_subphases", False)
+            ),
             output_dir=output_dir,
             logger=logger,
             metadata={
@@ -113,6 +119,9 @@ class TrainingProfiler:
                 "pcgrad": bool(_get(cfg, "pcgrad", False)),
                 "gradient_diagnostics": bool(
                     _get(cfg, "gradient_diagnostics", False)
+                ),
+                "optimization_subphases": bool(
+                    _get(profile_cfg, "optimization_subphases", False)
                 ),
                 "replay_batching_strategy": "direct_balanced_collation",
             },
@@ -204,6 +213,27 @@ class TrainingProfiler:
                 self.synchronize()
                 self._subsamples[name].append(self.clock() - started_at)
 
+    @contextmanager
+    def optimization_subphase(self, name: str) -> Iterator[None]:
+        """Time an optimizer subphase without double-counting the hot path."""
+        if not self._active or not self.optimization_subphases_enabled:
+            yield
+            return
+        with ExitStack() as stack:
+            if self._torch_profiler is not None:
+                stack.enter_context(
+                    torch.profiler.record_function(f"training/optimization/{name}")
+                )
+            self.synchronize()
+            started_at = self.clock()
+            try:
+                yield
+            finally:
+                self.synchronize()
+                self._optimization_subsamples[name].append(
+                    self.clock() - started_at
+                )
+
     def _start_trace(self) -> None:
         activities = [torch.profiler.ProfilerActivity.CPU]
         if self.device.type == "cuda" and torch.cuda.is_available():
@@ -273,6 +303,21 @@ class TrainingProfiler:
         }
         for stats in replay_subphases.values():
             stats["parent_phase_percent"] = stats.pop("hot_path_percent")
+        optimization_total = sum(self._samples.get("optimization", ()))
+        optimization_subphases = {
+            name: {
+                **self._phase_statistics(
+                    samples,
+                    optimization_total,
+                    included_in_hot_path=True,
+                ),
+                "parent_phase": "optimization",
+            }
+            for name, samples in sorted(self._optimization_subsamples.items())
+            if samples
+        }
+        for stats in optimization_subphases.values():
+            stats["parent_phase_percent"] = stats.pop("hot_path_percent")
         throughput = {
             "environment_transitions_per_second": (
                 self._measured_transitions / hot_path_total if hot_path_total > 0.0 else 0.0
@@ -321,6 +366,7 @@ class TrainingProfiler:
             ),
             "phases": phases,
             "replay_subphases": replay_subphases,
+            "optimization_subphases": optimization_subphases,
             "throughput": throughput,
             "trace_path": str(self._trace_path) if self._trace_path is not None else None,
         }
@@ -343,6 +389,10 @@ class TrainingProfiler:
             for key, value in stats.items():
                 if isinstance(value, (float, int)):
                     metrics[f"replay_subphase/{name}/{key}"] = value
+        for name, stats in summary["optimization_subphases"].items():
+            for key, value in stats.items():
+                if isinstance(value, (float, int)):
+                    metrics[f"optimization_subphase/{name}/{key}"] = value
         for key, value in summary["throughput"].items():
             metrics[f"throughput/{key}"] = value
         return metrics

@@ -77,6 +77,7 @@ def make_trainer(work_dir, **overrides):
             "checkpoint_freq": 10,
             "checkpoint_keep_last": 2,
             "resume_from_checkpoint": None,
+            "steps": 100,
             **overrides,
         }
     )
@@ -155,6 +156,17 @@ class CheckpointingTest(unittest.TestCase):
             self.assertTrue((checkpoint_dir / "step_20.agent.pt").exists())
             self.assertTrue((checkpoint_dir / "step_30.pt").exists())
             self.assertTrue((checkpoint_dir / "step_30.agent.pt").exists())
+            metadata = json.loads((checkpoint_dir / "latest.metadata.json").read_text())
+            self.assertFalse((checkpoint_dir / ".latest.metadata.tmp").exists())
+            self.assertEqual(
+                metadata,
+                {
+                    "format_version": 1,
+                    "step": 30,
+                    "target_steps": 100,
+                    "checkpoint": "step_30.pt",
+                },
+            )
 
     def test_older_checkpoint_starts_enabled_normalizer_with_empty_statistics(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

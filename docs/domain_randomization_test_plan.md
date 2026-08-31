@@ -21,6 +21,9 @@ robustness without hiding regressions in the nominal environment.
 
 - Enable all fixed-shape ranges with distinct deterministic values, reset a batch,
   and assert every value in `MjxDomainRandomizationState` for every environment.
+- For `abstract_node_mass_multiplier`, assert the state shape is
+  `[batch_size, node_count]`, node samples are independent, and selective resets
+  replace only masked batch rows.
 - Reset with non-degenerate ranges and assert samples are in bounds and that at
   least two batch members differ for each field.
 - Repeat the deterministic-value test with native MuJoCo and inspect the compiled
@@ -34,7 +37,8 @@ robustness without hiding regressions in the nominal environment.
 Run 100 resets and 100 steps per case for `octahedron` and one realistic topology:
 
 1. nominal/no randomization;
-2. each randomization family alone (body, DOF, actuator, geom, tendon, gravity);
+2. each randomization family alone (global/per-node body, DOF, actuator, geom,
+   tendon, gravity);
 3. all fixed-shape fields together at the intended training ranges;
 4. native model-level geometry and physical-parameter randomization;
 5. all native randomization together.

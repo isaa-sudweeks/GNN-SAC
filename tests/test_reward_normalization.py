@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -50,6 +51,20 @@ class TaskRewardNormalizerTest(unittest.TestCase):
         self.assertEqual(normalizer._returns[1], 5.0)
         normalizer.normalize(1.0, task="task", stream=0)
         self.assertEqual(normalizer._returns[0], 1.0)
+
+    def test_explicit_stream_reset_preserves_statistics_and_other_streams(self):
+        normalizer = TaskRewardNormalizer(gamma=0.9, epsilon=1e-8, clip=10.0)
+        normalizer.normalize(2.0, task="task", stream=0)
+        normalizer.normalize(5.0, task="task", stream=1)
+        metrics_before_reset = normalizer.metrics()
+
+        normalizer.reset_stream(0)
+
+        self.assertNotIn(0, normalizer._returns)
+        self.assertNotIn(0, normalizer._stream_tasks)
+        self.assertEqual(normalizer._returns[1], 5.0)
+        self.assertEqual(normalizer._stream_tasks[1], "task")
+        self.assertEqual(normalizer.metrics(), metrics_before_reset)
 
     def test_rejects_invalid_settings_unknown_tasks_and_mid_episode_task_changes(self):
         with self.assertRaisesRegex(ValueError, "gamma"):
@@ -116,6 +131,104 @@ class OnlineTrainerRewardNormalizationTest(unittest.TestCase):
 
         self.assertEqual(td["reward"].item(), 2.0)
         self.assertEqual(td["raw_reward"].item(), 20.0)
+
+    def test_environment_reset_discards_restored_active_returns(self):
+        original = TaskRewardNormalizer(gamma=0.9, allowed_tasks=["only"])
+        original.normalize(2.0, task="only", stream=0)
+
+        trainer = self._trainer()
+        trainer.reward_normalizer = TaskRewardNormalizer(
+            gamma=0.9,
+            allowed_tasks=["only"],
+        )
+        trainer.reward_normalizer.load_state_dict(original.state_dict())
+        metrics_before_reset = trainer.reward_normalizer.metrics()
+
+        trainer._reset_reward_normalizer_streams([0])
+        trainer.reward_normalizer.normalize(1.0, task="only", stream=0)
+
+        self.assertEqual(trainer.reward_normalizer._returns[0], 1.0)
+        self.assertEqual(
+            trainer.reward_normalizer.metrics()["only"]["count"],
+            metrics_before_reset["only"]["count"] + 1,
+        )
+
+    def test_single_env_training_reset_clears_restored_stream(self):
+        class ResetReached(Exception):
+            pass
+
+        class Profiler:
+            def begin_vector_step(self, **kwargs):
+                return None
+
+            def phase(self, name):
+                return nullcontext()
+
+        trainer = self._trainer()
+        trainer.cfg.steps = 1
+        trainer.cfg.num_envs = 1
+        trainer.cfg.seed_steps = 0
+        trainer.cfg.pretrain_steps = 0
+        trainer.cfg.eval_freq = 1000
+        trainer._step = 0
+        trainer._optimizer_updates = 0
+        trainer.performance_profiler = Profiler()
+        trainer.reward_normalizer = TaskRewardNormalizer(
+            gamma=0.9,
+            allowed_tasks=["only"],
+        )
+        trainer.reward_normalizer.normalize(2.0, task="only", stream=0)
+        trainer._evaluate_and_log = lambda: None
+
+        def reset():
+            self.assertNotIn(0, trainer.reward_normalizer._returns)
+            self.assertNotIn(0, trainer.reward_normalizer._stream_tasks)
+            raise ResetReached
+
+        trainer.env = SimpleNamespace(num_envs=1, reset=reset)
+
+        with self.assertRaises(ResetReached):
+            trainer.train()
+
+    def test_multi_env_training_reset_clears_all_restored_streams(self):
+        class ResetReached(Exception):
+            pass
+
+        class Profiler:
+            def begin_vector_step(self, **kwargs):
+                return None
+
+            def phase(self, name):
+                return nullcontext()
+
+        trainer = self._trainer()
+        trainer.cfg.steps = 2
+        trainer.cfg.seed_steps = 0
+        trainer.cfg.pretrain_steps = 0
+        trainer.cfg.eval_freq = 1000
+        trainer._step = 0
+        trainer._optimizer_updates = 0
+        trainer._episode_reward_components = {}
+        trainer.performance_profiler = Profiler()
+        trainer.reward_normalizer = TaskRewardNormalizer(
+            gamma=0.9,
+            allowed_tasks=["only"],
+        )
+        trainer.reward_normalizer.normalize(2.0, task="only", stream=0)
+        trainer.reward_normalizer.normalize(3.0, task="only", stream=1)
+        trainer._evaluate_and_log = lambda: None
+
+        def reset_many(env_indices):
+            self.assertEqual(list(env_indices), [0, 1])
+            self.assertEqual(trainer.reward_normalizer._returns, {})
+            self.assertEqual(trainer.reward_normalizer._stream_tasks, {})
+            raise ResetReached
+
+        trainer.env = SimpleNamespace(num_envs=2, reset_many=reset_many)
+        trainer.eval_env = trainer.env
+
+        with self.assertRaises(ResetReached):
+            trainer._train_multi_env(num_envs=2)
 
 
 if __name__ == "__main__":

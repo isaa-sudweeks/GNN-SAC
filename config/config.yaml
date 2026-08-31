@@ -3,6 +3,7 @@ defaults:
   - environment
   - physics/physical_parameters
   - physics/domain_randomization
+  - cross_validation: disabled
   - training
   - sac_backend: mlp
   - sim_backend: mujoco

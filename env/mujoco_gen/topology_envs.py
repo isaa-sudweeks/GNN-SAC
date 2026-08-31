@@ -56,6 +56,7 @@ _MISSING = object()
 # gains non-range bookkeeping fields.
 _RUNTIME_DOMAIN_RANDOMIZATION_FIELDS = {
     "body_mass_multiplier": "body_mass_multiplier_range",
+    "abstract_node_mass_multiplier": "abstract_node_mass_multiplier_range",
     "body_inertia_multiplier": "body_inertia_multiplier_range",
     "dof_damping_multiplier": "dof_damping_multiplier_range",
     "dof_armature": "dof_armature_range",
@@ -301,6 +302,11 @@ def _domain_randomization(config, topology, realistic):
                 f"domain_randomization_params.{config_name} is enabled, but the installed "
                 f"mujoco-truss-gen does not support {randomization_name}. Upgrade the package."
             )
+        if realistic and randomization_name == "abstract_node_mass_multiplier_range":
+            raise ValueError(
+                "domain_randomization_params.abstract_node_mass_multiplier is only "
+                "supported when truss_realistic=false."
+            )
         randomization_kwargs[randomization_name] = value_range
 
     if not scale_enabled and not physical_randomization_enabled:
@@ -349,6 +355,16 @@ def _fixed_model_scale(config):
 def make_truss_env_config(config, *, model_source=None):
     topology = resolve_truss_topology(config)
     realistic = resolve_truss_realistic(config)
+    control_node_observation_source = str(
+        _cfg_get(config, "control_node_observation_source", "physical_node")
+    )
+    if control_node_observation_source not in {"physical_node", "connector_ball"}:
+        raise ValueError(
+            "control_node_observation_source must be 'physical_node' or "
+            f"'connector_ball'; got {control_node_observation_source!r}."
+        )
+    if control_node_observation_source == "connector_ball" and not realistic:
+        control_node_observation_source = "physical_node"
     if model_source is None:
         model_source = get_mujoco_spec(
             topology,
@@ -372,6 +388,7 @@ def make_truss_env_config(config, *, model_source=None):
         "normalize_observations": bool(
             _cfg_get(config, "normalize_observations", _cfg_get(config, "obs_norm", False))
         ),
+        "control_node_observation_source": control_node_observation_source,
     }
     optional_fields = {
         "control_noise_std": float,
@@ -541,6 +558,7 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
             self.mj_model,
             graph_view=graph_view,
             aggregation="connector_ball",
+            control_node_observation_source=self.config.control_node_observation_source,
         )
 
         normalize_observations = bool(self.config.normalize_observations)
@@ -583,10 +601,15 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         return self._step_actuator_action(self._node_action_to_actuator_action(action))
 
     def _step_control_graph_node_action(self, action):
-        normalized_node_action, ctrl = self._control_graph_node_action_to_actuator_ctrl(action)
+        _, ctrl = self._control_graph_node_action_to_actuator_ctrl(action)
         previous_com = self._center_of_mass()
-        self._advance(ctrl)
-        reward, info, terminated = self._compute_reward(normalized_node_action, previous_com)
+        advance_info = self._advance(ctrl)
+        reward, info, terminated = self._compute_reward(
+            ctrl,
+            previous_com,
+            substeps_executed=int(advance_info["substeps_executed"]),
+        )
+        info.update(advance_info)
         truncated = self.steps >= self.max_steps
         return self._get_obs(), reward, terminated, truncated, info
 
@@ -628,8 +651,13 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         ctrlrange = self.mj_model.get_external_ctrlrange()
         ctrl = np.clip(ctrl, ctrlrange[:, 0], ctrlrange[:, 1])
         previous_com = self._center_of_mass()
-        self._advance(ctrl)
-        reward, info, terminated = self._compute_reward(actuator_action, previous_com)
+        advance_info = self._advance(ctrl)
+        reward, info, terminated = self._compute_reward(
+            ctrl,
+            previous_com,
+            substeps_executed=int(advance_info["substeps_executed"]),
+        )
+        info.update(advance_info)
         truncated = self.steps >= self.max_steps
         return self._get_obs(), reward, terminated, truncated, info
 

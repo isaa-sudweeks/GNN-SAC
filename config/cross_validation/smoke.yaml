@@ -1,0 +1,13 @@
+# @package _global_
+
+# Tiny leave-one-group-out definition for launcher dry runs and CPU smoke tests.
+cross_validation:
+  enabled: true
+  name: smoke
+  groups:
+    octahedron_group:
+      - octahedron
+    tetrahedron_group:
+      - tetrahedron
+  final_test: []
+  held_out_group: null

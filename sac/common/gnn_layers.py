@@ -209,7 +209,15 @@ class Q_GNN(GNN):
         )
         self.head = mlp(head_input_dim, self.head_hidden_dims, 1)
 
-    def forward(self, x, edge_index, batch=None, physical_mask=None, edge_attr=None):
+    def forward(
+        self,
+        x,
+        edge_index,
+        batch=None,
+        physical_mask=None,
+        edge_attr=None,
+        num_graphs=None,
+    ):
         x = super().forward(x, edge_index, edge_attr)
         if batch is None:
             batch = x.new_zeros(x.size(0), dtype=torch.long)
@@ -219,7 +227,7 @@ class Q_GNN(GNN):
                 raise ValueError(
                     f"critic_readout={self.critic_readout!r} requires a physical-node mask"
                 )
-            readout = global_mean_pool(x, batch)
+            readout = global_mean_pool(x, batch, size=num_graphs)
         else:
             physical_mask = physical_mask.bool()
             if physical_mask.dim() != 1 or physical_mask.numel() != x.size(0):
@@ -227,7 +235,7 @@ class Q_GNN(GNN):
                     "The physical-node mask must contain one value per graph node."
                 )
             physical_mean = global_mean_pool(
-                x[physical_mask], batch[physical_mask]
+                x[physical_mask], batch[physical_mask], size=num_graphs
             )
             if self.critic_readout == "physical_mean":
                 readout = physical_mean

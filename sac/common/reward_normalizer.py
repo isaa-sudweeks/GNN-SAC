@@ -107,6 +107,11 @@ class TaskRewardNormalizer:
             return torch.as_tensor(normalized_value, dtype=reward.dtype, device=reward.device)
         return normalized_value
 
+    def reset_stream(self, stream: Hashable) -> None:
+        """Forget an unfinished return when its environment starts a new episode."""
+        self._returns.pop(stream, None)
+        self._stream_tasks.pop(stream, None)
+
     def metrics(self) -> dict[str, dict[str, float]]:
         return {
             task: {

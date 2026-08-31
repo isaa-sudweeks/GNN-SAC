@@ -66,6 +66,38 @@ class InferenceCheckpointTest(unittest.TestCase):
             self.assertEqual(agent.loaded["graph_feature_schema"], schema)
             self.assertEqual(float(agent.loaded["model"]["weight"].item()), 3.0)
 
+    def test_trainer_sidecar_preserves_padded_mlp_schema(self):
+        schema = {
+            "version": 1,
+            "max_nodes": 21,
+            "node_feature_dim": 6,
+            "node_action_dim": 1,
+            "physical_mask": True,
+            "action_mask": True,
+            "rigidity": True,
+        }
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            checkpoint_dir = Path(tmp_dir)
+            Trainer._write_checkpoint_files(
+                checkpoint_dir,
+                "step_10",
+                {
+                    "agent": {
+                        "model": {"weight": torch.tensor([3.0])},
+                        "padded_mlp_schema": schema,
+                    },
+                    "buffer": UnloadableReplay(),
+                },
+                keep_last=1,
+                write_agent=True,
+            )
+
+            agent = DummyAgent()
+            load_agent_checkpoint(agent, checkpoint_dir / "latest.pt")
+
+            self.assertEqual(agent.loaded["padded_mlp_schema"], schema)
+            self.assertEqual(float(agent.loaded["model"]["weight"].item()), 3.0)
+
     def test_full_checkpoint_creates_and_reuses_agent_only_sidecar(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             checkpoint = Path(tmp_dir) / "latest.pt"

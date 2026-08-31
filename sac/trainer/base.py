@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+import json
 from pathlib import Path
 import random
 
@@ -183,7 +184,7 @@ class Trainer:
         agent_state = state_dict["agent"]
         if isinstance(agent_state, Mapping) and "model" in agent_state:
             checkpoint = {"model": agent_state["model"]}
-            for key in ("log_alpha", "graph_feature_schema"):
+            for key in ("log_alpha", "graph_feature_schema", "padded_mlp_schema"):
                 if key in agent_state:
                     checkpoint[key] = agent_state[key]
             return checkpoint
@@ -214,6 +215,19 @@ class Trainer:
             latest_agent_tmp.replace(latest_agent_path)
 
         cls._prune_old_checkpoints_in_dir(checkpoint_dir, keep_last)
+
+        step = int(state_dict.get("trainer", {}).get("step", 0))
+        target_steps = int(state_dict.get("config", {}).get("steps", step))
+        metadata = {
+            "format_version": 1,
+            "step": step,
+            "target_steps": target_steps,
+            "checkpoint": f"{identifier}.pt",
+        }
+        metadata_tmp = checkpoint_dir / ".latest.metadata.tmp"
+        metadata_path = checkpoint_dir / "latest.metadata.json"
+        metadata_tmp.write_text(json.dumps(metadata, sort_keys=True) + "\n")
+        metadata_tmp.replace(metadata_path)
         return path
 
     @staticmethod

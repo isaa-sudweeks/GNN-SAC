@@ -152,6 +152,7 @@ class TrainingProfilerTest(unittest.TestCase):
             )
             profiler = TrainingProfiler.from_config(cfg, RecordingLogger())
             self.assertEqual(profiler.output_dir, Path(tmp) / "baseline")
+            self.assertFalse(profiler.optimization_subphases_enabled)
 
     def test_from_config_records_multitask_metadata(self):
         cfg = SimpleNamespace(
@@ -210,6 +211,65 @@ class TrainingProfilerTest(unittest.TestCase):
             self.assertEqual(stats["total_seconds"], 2.0)
             self.assertEqual(stats["parent_phase"], "replay_sampling")
             self.assertEqual(summary["unattributed_hot_path_seconds"], 5.0)
+
+    def test_optimizer_subphases_report_parent_percent_without_double_counting(self):
+        with TemporaryDirectory() as tmp:
+            profiler = self.make_profiler(
+                tmp,
+                warmup=0,
+                active=1,
+                clock=SequenceClock([0.0, 0.0, 1.0, 3.0, 5.0, 6.0]),
+            )
+
+            profiler.begin_vector_step(global_step=0)
+            with profiler.phase("optimization"):
+                with profiler.optimization_subphase("pcgrad_critic_projection"):
+                    pass
+            profiler.end_vector_step(
+                transitions=1,
+                optimizer_updates=1,
+                global_step=1,
+            )
+
+            summary = profiler.summary(global_step=1)
+            stats = summary["optimization_subphases"][
+                "pcgrad_critic_projection"
+            ]
+            self.assertEqual(stats["total_seconds"], 2.0)
+            self.assertEqual(stats["parent_phase"], "optimization")
+            self.assertEqual(stats["parent_phase_percent"], 40.0)
+            self.assertEqual(summary["phases"]["optimization"]["total_seconds"], 5.0)
+            self.assertEqual(summary["unattributed_hot_path_seconds"], 1.0)
+
+    def test_disabled_optimizer_subphases_do_not_synchronize_or_record(self):
+        with TemporaryDirectory() as tmp:
+            profiler = TrainingProfiler(
+                enabled=True,
+                warmup_vector_steps=0,
+                active_vector_steps=1,
+                trace_enabled=False,
+                optimization_subphases=False,
+                output_dir=tmp,
+                logger=RecordingLogger(),
+                metadata={},
+                device="cpu",
+                clock=SequenceClock([0.0, 1.0]),
+                synchronize=lambda: None,
+            )
+
+            profiler.begin_vector_step(global_step=0)
+            with profiler.optimization_subphase("pcgrad_actor_projection"):
+                pass
+            profiler.end_vector_step(
+                transitions=1,
+                optimizer_updates=1,
+                global_step=1,
+            )
+
+            self.assertEqual(
+                profiler.summary(global_step=1)["optimization_subphases"],
+                {},
+            )
 
     def test_optional_trace_is_exported(self):
         with TemporaryDirectory() as tmp:

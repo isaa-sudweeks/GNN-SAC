@@ -147,7 +147,7 @@ class MjxVectorGraphEnv(gym.Env):
         self.active_env_idx = 0
         self._reset_compiled = jax.jit(self._core.reset)
         self._reset_where_compiled = jax.jit(self._core.reset_where)
-        self._step_compiled = jax.jit(self._core.step)
+        self._step_compiled = jax.jit(self._step_with_actuator_energy)
         self._step_masked_compiled = jax.jit(self._step_masked)
         self._rigidity_compiled = jax.jit(jax.vmap(self._core._critical_eig))
 
@@ -267,7 +267,9 @@ class MjxVectorGraphEnv(gym.Env):
         return results
 
     def _step_masked(self, keys, state, actions, mask):
-        flat_obs, stepped_state, reward, done, info = self._core.step(keys, state, actions)
+        flat_obs, stepped_state, reward, done, info = self._step_with_actuator_energy(
+            keys, state, actions
+        )
         batch_size = self.num_envs
 
         def select(new_value, old_value):
@@ -280,6 +282,18 @@ class MjxVectorGraphEnv(gym.Env):
         done = self._jnp.where(mask, done, False)
         info = {key: self._jnp.where(mask, value, 0) for key, value in info.items()}
         return flat_obs, merged_state, reward, done, info
+
+    def _step_with_actuator_energy(self, keys, state, actions):
+        """Replace upstream's node-action energy term with routed actuator commands."""
+        flat_obs, stepped_state, reward, done, info = self._core.step(keys, state, actions)
+        actuator_commands = stepped_state.data.ctrl[..., self._core._actuator_ids]
+        energy_penalty = self._jnp.sum(self._jnp.square(actuator_commands), axis=-1)
+        energy_reward = -float(self._core.config.energy_weight) * energy_penalty
+        reward = reward - info["energy"] + energy_reward
+        info = dict(info)
+        info["energy"] = energy_reward
+        info["energy_penalty_raw"] = energy_penalty
+        return flat_obs, stepped_state, reward, done, info
 
     def _graph_observations(self, flat_obs, indices: Sequence[int], rigidity):
         obs = self._to_torch(flat_obs)

@@ -47,4 +47,5 @@ profiling:
   warmup_vector_steps: 10 # Vector steps to skip before measurement; independent of seed_steps.
   active_vector_steps: 100 # Number of vector steps to measure before writing the summary.
   trace_enabled: false # Also export a detailed PyTorch Chrome trace for policy/learner work.
+  optimization_subphases: false # Synchronize and time nested optimizer stages; enable only for focused learner diagnosis.
   output_dir: profiling # Profiling artifact directory, relative to work_dir unless absolute.

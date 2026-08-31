@@ -103,6 +103,23 @@ The hash is derived from the Hydra job override set, while the job number
 also separates duplicate configurations within one sweep. Requeued jobs retain
 the same directory and therefore resume only their own checkpoint and W&B run.
 
+Before submitting a supercomputer sweep, the Submitit launcher scans each
+resolved job directory and omits jobs whose saved checkpoint step has reached
+the configured `steps`. New checkpoints expose this progress through the small
+`checkpoints/latest.metadata.json` sidecar, so the launcher never loads the
+full replay checkpoint. Existing runs without the sidecar fall back to the
+highest complete `step_<N>.pt` filename. Missing or malformed metadata is
+treated as incomplete and the job is submitted normally.
+
+The scan preserves every job's original full-sweep number; rerun the same sweep
+in the same order to reuse its existing directories. To force submission of all
+jobs, disable the scan explicitly:
+
+```bash
+python sac/train.py platform=supercomputer --multirun \
+  hydra.launcher.skip_completed_jobs=false
+```
+
 Set `GNN_SAC_RUN_ROOT` to put runs on shared persistent storage, and override cluster-specific values on the command line as needed:
 
 ```bash
@@ -115,12 +132,16 @@ python sac/train.py platform=supercomputer sac_backend=gnn sim_backend=mjx --mul
 # SAC Backend Profiles
 
 `config/config.yaml` now composes a `sac_backend` profile. The default is
-`mlp`; use `sac_backend=gnn` to switch the shared training config to graph
-observations, GNN dimensions, and the GNN SAC agent/buffer:
+`mlp`; use `sac_backend=gnn` for the graph policy or
+`sac_backend=padded_mlp` for the fixed-width shared MLP comparison. The padded
+MLP uses the same graph environment and task-balanced replay as the GNN but
+never consumes graph connectivity:
 
 ```bash
 python sac/train.py sac_backend=mlp steps=10000
 python sac/train.py sac_backend=gnn steps=10000
+python sac/train.py sac_backend=padded_mlp \
+  'truss_topologies=[tetrahedron,octahedron]' steps=10000
 ```
 
 Legacy wrapper configs live under `config/archieved/`; new runs should prefer
@@ -140,6 +161,7 @@ python sac/train.py platform=supercomputer sac_backend=gnn sim_backend=mjx --mul
 # Unified Truss Topology Environments
 - `truss-graph` is the reusable graph-observation environment for `mujoco_truss_gen` presets. It emits PyTorch Geometric graph observations through the wrapper layer and maps one scalar node action per graph node to tendon actuator commands.
 - `truss-mlp` is the reusable flat observation/action environment for standard MLP policies. It uses the same generated topology source, but keeps fixed-size vector observations and actions.
+- `sac_backend=padded_mlp` instead uses `truss-graph` and pads its control-node observations to 21 slots. Use this backend—not `truss-mlp`—for the shared multi-topology MLP-versus-GNN comparison. See `docs/padded_mlp_baseline.md`.
 - Select one generated topology with `truss_topology`. Valid names come from `mujoco_truss_gen.PRESETS`; these include the canonical `octahedron`, `tetrahedron`, `icosahedron`, and `solar_array` models plus the enumerated Henneberg and Usevitch families.
 
 For fixed-topology graph training on the cluster, select the supercomputer
@@ -187,7 +209,7 @@ python sac/gnn_infer.py --config-name inference/gnn_mjx \
   model=/path/to/final.pt episodes=256 num_envs=256
 ```
 
-The MJX training path requires `mujoco-truss-gen>=0.12.0` and
+The MJX training path requires `mujoco-truss-gen==0.12.4` and
 training-environment rendering disabled. Native MuJoCo evaluation can render
 and record videos. MJX owns one compiled model and one fixed environment batch
 per topology, so realistic models and fixed-shape runtime domain randomization
@@ -200,7 +222,7 @@ JAX remains the default MJX physics implementation. On an NVIDIA CUDA host,
 install the Warp extra and select the upstream Warp implementation explicitly:
 
 ```bash
-python -m pip install 'mujoco-truss-gen[warp]>=0.12.0'
+python -m pip install 'mujoco-truss-gen[warp]==0.12.4'
 python sac/gnn_train.py sim_backend=mjx mjx_impl=warp device=cuda
 ```
 
@@ -255,7 +277,7 @@ truss_topologies:
 eval_task: truss-graph:icosahedron
 ```
 
-- For flat MLP baselines, different topologies are only valid together when their flat observation and action spaces match. Mismatched MLP topology lists fail early instead of padding or masking.
+- For the legacy flat `truss-mlp` baseline, different topologies are only valid together when their flat observation and action spaces match. Mismatched lists fail early. The `padded_mlp` backend supports mixed sizes through explicit existence and action masks.
 
 ```yaml
 task: truss-mlp
@@ -263,8 +285,8 @@ truss_topology: octahedron
 eval_task: truss-mlp:tetrahedron
 ```
 
-- `truss_realistic` requests realistic generated models. `truss_graph_view: auto` uses physical graph nodes by default and logical graph nodes for realistic models; set it explicitly to `physical` or `logical` only when needed.
-- Generated model physical values live in `config/physics/physical_parameters.yaml` under `physical_parameters` and apply to both training and inference. Set `physical_parameters_enabled: false` to skip this config and use the `mujoco-truss-gen` package defaults. Domain randomization lives in `config/physics/domain_randomization.yaml`; use `domain_randomization` as the master switch. MJX and native MuJoCo support fixed-shape runtime ranges for body mass/inertia, DOF damping/armature/friction loss, actuator gain/bias/dynamics, all three geom-friction axes, tendon stiffness/damping/armature/friction loss, and vertical gravity. Native MuJoCo also supports model-level `length_scale` and `physical_parameters` randomization.
+- `truss_realistic` requests realistic generated models. `truss_graph_view: auto` uses physical graph nodes by default and logical graph nodes for realistic models; set it explicitly to `physical` or `logical` only when needed. With `use_control_graph=true`, the default `control_node_observation_source: connector_ball` observes each realistic logical node through its connector ball while preserving control-graph identity, routing, and action shape. Abstract models automatically use physical-node kinematics because they do not contain connector balls; set `physical_node` explicitly to retain that source for realistic models too.
+- Generated model physical values live in `config/physics/physical_parameters.yaml` under `physical_parameters` and apply to both training and inference. Set `physical_parameters_enabled: false` to skip this config and use the `mujoco-truss-gen` package defaults. Domain randomization lives in `config/physics/domain_randomization.yaml`; use `domain_randomization` as the master switch. MJX and native MuJoCo support fixed-shape runtime ranges for body mass/inertia, independent abstract-node mass, DOF damping/armature/friction loss, actuator gain/bias/dynamics, all three geom-friction axes, tendon stiffness/damping/armature/friction loss, and vertical gravity. `abstract_node_mass_multiplier` draws a separate multiplier for every node and is valid only with `truss_realistic=false`; it composes with the global `body_mass_multiplier`. Native MuJoCo also supports model-level `length_scale` and `physical_parameters` randomization.
 
 ```yaml
 physical_parameters_enabled: true
@@ -276,6 +298,10 @@ domain_randomization_params:
   length_scale:
     enabled: false
   body_mass_multiplier:
+    enabled: true
+    min: 0.8
+    max: 1.2
+  abstract_node_mass_multiplier:
     enabled: true
     min: 0.8
     max: 1.2

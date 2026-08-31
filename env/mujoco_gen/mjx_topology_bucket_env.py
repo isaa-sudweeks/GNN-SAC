@@ -6,6 +6,7 @@ from copy import deepcopy
 
 import gymnasium as gym
 
+from common.config_utils import round_to_nearest_multiple
 from env.mujoco_gen.mjx_vector_env import MjxVectorGraphEnv
 
 
@@ -15,9 +16,10 @@ class MjxTopologyBucketEnv(gym.Env):
     MJX cannot place different compiled models in one array batch. This wrapper
     therefore owns one :class:`MjxVectorGraphEnv` per topology and presents the
     buckets as one global vector environment. ``cfg.num_envs`` is interpreted
-    as the total exposed environment count and must divide evenly across the
-    requested topologies. Global indices are interleaved by topology so any
-    leading subset remains approximately topology-balanced.
+    as the total exposed environment count and is normalized to the closest
+    valid multiple of the requested topology count. Global indices are
+    interleaved by topology so any leading subset remains approximately
+    topology-balanced.
     """
 
     accepts_torch_actions = True
@@ -169,15 +171,12 @@ class MjxTopologyBucketEnv(gym.Env):
         if len(set(self.topologies)) != len(self.topologies):
             raise ValueError("MJX topology buckets require unique topology names.")
         topology_count = len(self.topologies)
-        if self.num_envs < topology_count:
-            raise ValueError(
-                "num_envs must allocate at least one environment per topology."
-            )
-        if self.num_envs % topology_count != 0:
-            raise ValueError(
-                "num_envs must be divisible by the number of truss_topologies "
-                "for balanced MJX topology buckets."
-            )
+        self.num_envs = round_to_nearest_multiple(
+            self.num_envs,
+            topology_count,
+            name="num_envs",
+        )
+        self.cfg.num_envs = self.num_envs
 
     def _mapping(self, env_idx: int) -> tuple[int, int]:
         if env_idx < 0 or env_idx >= self.num_envs:

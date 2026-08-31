@@ -1,0 +1,8 @@
+# @package _global_
+
+cross_validation:
+  enabled: false
+  name: null
+  groups: {}
+  final_test: []
+  held_out_group: null
