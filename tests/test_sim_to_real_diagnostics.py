@@ -18,6 +18,9 @@ for path in (ROOT, SAC_ROOT, SCRIPTS_ROOT):
         sys.path.insert(0, str(path))
 
 from analyze_sim_to_real import (
+    _real_capture,
+    _recording_sha256,
+    _simulation_capture,
     _plot_comparison,
     _write_3d_video,
     kabsch_transform,
@@ -25,7 +28,15 @@ from analyze_sim_to_real import (
     repeated_trial_metrics,
     tracker_health_metrics,
 )
-from replay_real_robot_commands import _assert_graph_parity, run_replay
+from replay_real_robot_commands import (
+    ScheduledCommand,
+    _assert_graph_parity,
+    _command_action,
+    _latest_started_index,
+    _load_commands,
+    _schedule_end_time,
+    run_replay,
+)
 from real_robot_infer import (
     MissingTrackerFrame,
     PrintCommandTransport,
@@ -114,6 +125,245 @@ class SharedContractTest(unittest.TestCase):
 
 
 class ReplaySmokeTest(unittest.TestCase):
+    def test_recorded_schedule_rejects_decreasing_times_and_inconsistent_fields(self):
+        cases = (
+            ({"ticks": [99], "duration_s": 0.1, "serial_node_order": ["node"]}, "ticks"),
+            ({"ticks": [100], "duration_s": 0.2, "serial_node_order": ["node"]}, "duration_s"),
+            ({"ticks": [100], "duration_s": 0.1, "serial_node_order": ["other"]}, "serial_node_order"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, (fields, message) in enumerate(cases):
+                path = root / f"inconsistent-{index}.jsonl"
+                with JsonlWriter(path) as writer:
+                    writer.write(
+                        "session",
+                        max_velocity_ticks_per_second=1800,
+                        serial_node_order=["node"],
+                    )
+                    writer.write(
+                        "command_attempt",
+                        step=0,
+                        relative_time_s=1.0,
+                        command="VEL_DUR:100:0.1",
+                        **fields,
+                    )
+                with self.assertRaisesRegex(ValueError, message):
+                    _load_commands(path, limit=1800)
+
+            decreasing = root / "decreasing.jsonl"
+            with JsonlWriter(decreasing) as writer:
+                writer.write("session", max_velocity_ticks_per_second=1800)
+                writer.write(
+                    "command_attempt", step=0, relative_time_s=1.0,
+                    command="VEL_DUR:100:0.1",
+                )
+                writer.write(
+                    "command_attempt", step=1, relative_time_s=0.9,
+                    command="VEL_DUR:200:0.1",
+                )
+            with self.assertRaisesRegex(ValueError, "nondecreasing"):
+                _load_commands(decreasing, limit=1800)
+
+    def test_recorded_schedule_rejects_invalid_schema_or_session_header(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            future = root / "future.jsonl"
+            future.write_text(
+                json.dumps({
+                    "schema_version": 2,
+                    "type": "session",
+                    "max_velocity_ticks_per_second": 1800,
+                })
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "unsupported schema version"):
+                _load_commands(future, limit=1800)
+
+            duplicate = root / "duplicate.jsonl"
+            with JsonlWriter(duplicate) as writer:
+                writer.write("session", max_velocity_ticks_per_second=1800)
+                writer.write("session", max_velocity_ticks_per_second=1800)
+            with self.assertRaisesRegex(ValueError, "exactly one session"):
+                _load_commands(duplicate, limit=1800)
+
+    def test_recorded_schedule_preserves_durations_gaps_and_emergency(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recorded.jsonl"
+            with JsonlWriter(path) as writer:
+                writer.write("session", max_velocity_ticks_per_second=900)
+                writer.write(
+                    "command_attempt", step=0, relative_time_s=1.0,
+                    command="VEL_DUR:900:0.1",
+                )
+                writer.write(
+                    "command_result", step=0, relative_time_s=1.01,
+                    command="VEL_DUR:900:0.1", status="acknowledged",
+                )
+                writer.write(
+                    "command_attempt", step=1, relative_time_s=1.5,
+                    command="VEL_DUR:-450:0.2",
+                )
+                writer.write(
+                    "command_result", step=1, relative_time_s=1.51,
+                    command="VEL_DUR:-450:0.2", status="acknowledged",
+                )
+                writer.write(
+                    "emergency_command", step=2, relative_time_s=1.75,
+                    command="VEL_DUR:0:0", reason="Ctrl-C",
+                )
+            scheduled, _, limit = _load_commands(path, limit=1800)
+            self.assertEqual(limit, 900)
+            self.assertEqual(
+                [(item.start_time_s, item.duration_s) for item in scheduled],
+                [(0.0, 0.1), (0.5, 0.2), (0.75, 0.0)],
+            )
+            self.assertTrue(scheduled[-1].command.emergency_stop)
+
+    def test_recorded_schedule_marks_uncertain_command_delivery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recorded.jsonl"
+            with JsonlWriter(path) as writer:
+                writer.write("session", max_velocity_ticks_per_second=1800)
+                writer.write(
+                    "command_attempt", step=0, relative_time_s=0.0,
+                    command="VEL_DUR:100:0.1",
+                )
+                writer.write(
+                    "command_result", step=0, relative_time_s=0.1,
+                    command="VEL_DUR:100:0.1", status="acknowledgment_timeout",
+                )
+                writer.write(
+                    "emergency_command", step=0, relative_time_s=0.1,
+                    command="VEL_DUR:0:0", reason="acknowledgment timeout",
+                )
+            scheduled, _, _ = _load_commands(path, limit=1800)
+            self.assertEqual(scheduled[0].delivery_status, "acknowledgment_timeout")
+            self.assertTrue(scheduled[0].delivery_uncertain)
+            self.assertFalse(scheduled[1].delivery_uncertain)
+
+    def test_emergency_only_recording_is_a_valid_schedule(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recorded.jsonl"
+            with JsonlWriter(path) as writer:
+                writer.write("session", max_velocity_ticks_per_second=1800)
+                writer.write(
+                    "emergency_command", step=0, relative_time_s=0.002,
+                    command="VEL_DUR:0:0", reason="Ctrl-C",
+                )
+            scheduled, _, _ = _load_commands(path, limit=1800)
+            self.assertEqual(len(scheduled), 1)
+            self.assertTrue(scheduled[0].command.emergency_stop)
+
+    def test_emergency_only_recording_ends_replay_without_stepping(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw_graph = triangle_graph()
+            graph = resolve_triangle_graph_definition(raw_graph)
+            graph_path = root / "graph.json"
+            input_path = root / "recorded.jsonl"
+            output_path = root / "replay.jsonl"
+            graph_path.write_text(json.dumps(raw_graph), encoding="utf-8")
+            with JsonlWriter(input_path) as writer:
+                writer.write(
+                    "session",
+                    graph_definition_sha256=graph.sha256,
+                    node_order=list(graph.control_node_names),
+                    control_node_mapping=[
+                        {"triangle": triangle, "logical_node": logical, "control_node": control}
+                        for triangle, logical, control in graph.control_node_occurrences
+                    ],
+                    action_mask=[
+                        name not in graph.passive_control_node_names
+                        for name in graph.control_node_names
+                    ],
+                    passive_nodes=list(graph.passive_control_node_names),
+                    edges=list(graph.edges),
+                    routed_actuator_edges=list(graph.actuator_edges),
+                    serial_node_order=list(graph.serial_node_order),
+                    max_velocity_ticks_per_second=1800,
+                )
+                writer.write(
+                    "emergency_command", step=0, relative_time_s=0.002,
+                    command="VEL_DUR:0,0,0,0,0,0,0,0:0", reason="Ctrl-C",
+                )
+            cfg = graph_test_cfg(
+                task="truss-graph", truss_topology="octahedron", truss_realistic=True,
+                use_control_graph=True, nsubsteps=1, max_steps=10,
+                domain_randomization=False,
+            )
+            cfg.input_file = str(input_path)
+            cfg.graph_definition_file = str(graph_path)
+            cfg.output_file = str(output_path)
+            cfg.visualize = False
+            cfg.max_velocity_ticks_per_second = 1800
+            run_replay(cfg)
+            records = read_jsonl(output_path)
+            frames = [record for record in records if record["type"] == "simulation_frame"]
+            endings = [record for record in records if record["type"] == "replay_end"]
+            self.assertEqual(len(frames), 1)
+            self.assertEqual(endings[-1]["reason"], "emergency_stop")
+            self.assertEqual(endings[-1]["simulation_time_s"], 0.0)
+
+    def test_latest_overlapping_command_wins_and_does_not_resume(self):
+        scheduled = [
+            ScheduledCommand(0.0, 1.0, parse_firmware_command("VEL_DUR:100:1")),
+            ScheduledCommand(0.25, 0.1, parse_firmware_command("VEL_DUR:200:0.1")),
+        ]
+        self.assertEqual(_latest_started_index(scheduled, 0.2), 0)
+        self.assertEqual(_latest_started_index(scheduled, 0.3), 1)
+        latest = scheduled[_latest_started_index(scheduled, 0.5)]
+        self.assertLessEqual(latest.start_time_s + latest.duration_s, 0.5)
+        self.assertAlmostEqual(_schedule_end_time(scheduled), 0.35)
+
+    def test_recorded_serial_override_and_limit_define_normalized_action(self):
+        graph = resolve_triangle_graph_definition(triangle_graph())
+        override = tuple(reversed(graph.serial_node_order))
+        ticks = [0] * len(override)
+        ticks[0] = 900
+        command = parse_firmware_command(
+            f"VEL_DUR:{','.join(str(value) for value in ticks)}:0.1", limit=900
+        )
+        action = _command_action(command, graph, 900, serial_order=override)
+        self.assertEqual(float(action[graph.control_node_names.index(override[0]), 0]), 1.0)
+
+        metadata = SimpleNamespace(
+            control_node_names=graph.control_node_names,
+            passive_control_node_names=graph.passive_control_node_names,
+            edges=[
+                SimpleNamespace(
+                    from_node=source, to_node=target,
+                    type="actuated" if role == "tube" else "connector",
+                )
+                for source, target, role in graph.edges
+            ],
+            actuator_edges=[
+                SimpleNamespace(from_node=source, to_node=target)
+                for source, target in graph.actuator_edges
+            ],
+        )
+        session = {
+            "graph_definition_sha256": graph.sha256,
+            "node_order": list(graph.control_node_names),
+            "control_node_mapping": [
+                {"triangle": triangle, "logical_node": logical, "control_node": control}
+                for triangle, logical, control in graph.control_node_occurrences
+            ],
+            "action_mask": [
+                name not in graph.passive_control_node_names
+                for name in graph.control_node_names
+            ],
+            "passive_nodes": list(graph.passive_control_node_names),
+            "edges": list(graph.edges),
+            "routed_actuator_edges": list(graph.actuator_edges),
+            "serial_node_order": list(override),
+        }
+        _assert_graph_parity(graph, metadata, session)
+        session["serial_node_order"][-1] = session["serial_node_order"][0]
+        with self.assertRaisesRegex(ValueError, "every actuated graph node exactly once"):
+            _assert_graph_parity(graph, metadata, session)
+
     def test_replay_builds_graph_defined_mujoco_routing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -172,15 +422,25 @@ class ReplaySmokeTest(unittest.TestCase):
                     edges=list(graph.edges),
                     routed_actuator_edges=list(graph.actuator_edges),
                     serial_node_order=list(graph.serial_node_order),
+                    max_velocity_ticks_per_second=1800,
                 )
                 writer.write(
                     "command_attempt",
-                    relative_time_s=1.0,
+                    step=0,
+                    relative_time_s=0.0,
                     command="VEL_DUR:100,0,0,0,0,0,0,0:0.002",
                 )
                 writer.write(
-                    "command_attempt",
-                    relative_time_s=1.002,
+                    "command_result",
+                    step=0,
+                    relative_time_s=0.001,
+                    command="VEL_DUR:100,0,0,0,0,0,0,0:0.002",
+                    status="acknowledged",
+                )
+                writer.write(
+                    "emergency_command",
+                    step=1,
+                    relative_time_s=0.006,
                     command="VEL_DUR:0,0,0,0,0,0,0,0:0",
                 )
             cfg = graph_test_cfg(
@@ -193,8 +453,32 @@ class ReplaySmokeTest(unittest.TestCase):
             cfg.visualize = False
             cfg.max_velocity_ticks_per_second = 1800
             run_replay(cfg)
-            end = [record for record in read_jsonl(output_path) if record["type"] == "replay_end"]
+            records = read_jsonl(output_path)
+            replay_session = records[0]
+            self.assertEqual(replay_session["source_commands"], [
+                {
+                    "command": "VEL_DUR:100,0,0,0,0,0,0,0:0.002",
+                    "start_time_s": 0.0,
+                    "delivery_status": "acknowledged",
+                    "delivery_uncertain": False,
+                },
+                {
+                    "command": "VEL_DUR:0,0,0,0,0,0,0,0:0",
+                    "start_time_s": 0.006,
+                    "delivery_status": "emergency_stop",
+                    "delivery_uncertain": False,
+                },
+            ])
+            self.assertEqual(len(replay_session["source_recording_sha256"]), 64)
+            end = [record for record in records if record["type"] == "replay_end"]
             self.assertEqual(end[-1]["reason"], "emergency_stop")
+            frames = [
+                record for record in records
+                if record["type"] == "simulation_frame" and record["step"] > 0
+            ]
+            self.assertEqual(frames[0]["command"], "VEL_DUR:100,0,0,0,0,0,0,0:0.002")
+            self.assertTrue(all(frame["command"] is None for frame in frames[1:]))
+            self.assertTrue(all(np.allclose(frame["normalized_action"], 0.0) for frame in frames[1:]))
 
 
 class RecordingTest(unittest.TestCase):
@@ -290,6 +574,117 @@ class AnalysisMathTest(unittest.TestCase):
             result["summary"]["initial_scale_ratio_real_to_simulation"], 1.05
         )
         self.assertGreater(result["summary"]["initial_shape_rmse_after_rigid_alignment_m"], 0.0)
+
+    @staticmethod
+    def write_file_backed_pair(
+        root: Path,
+        *,
+        real_hash: str = "graph-hash",
+        simulation_hash: str = "graph-hash",
+        real_command: str = "VEL_DUR:0,0,0,0:1",
+        source_command: str = "VEL_DUR:0,0,0,0:1",
+        source_start_time_s: float = 0.0,
+        source_recording_sha256: str | None = None,
+    ):
+        base = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        node_order = ["n0", "n1", "n2", "n3"]
+        real_path = root / "real.jsonl"
+        with JsonlWriter(real_path) as writer:
+            writer.write(
+                "session", graph_definition_sha256=real_hash,
+                node_order=node_order, edges=[],
+            )
+            writer.write(
+                "command_attempt", relative_time_s=0.5, command=real_command,
+            )
+            writer.write(
+                "tracker_frame", relative_time_s=0.5, status="complete",
+                node_positions=base, node_order=node_order, rigidity=1.0,
+            )
+            writer.write(
+                "tracker_frame", relative_time_s=1.5, status="complete",
+                node_positions=base, node_order=node_order, rigidity=1.0,
+            )
+        if source_recording_sha256 is None:
+            source_recording_sha256 = _recording_sha256(read_jsonl(real_path))
+
+        simulation_path = root / "simulation.jsonl"
+        with JsonlWriter(simulation_path) as writer:
+            writer.write(
+                "replay_session", graph_definition_sha256=simulation_hash,
+                node_order=node_order, edges=[],
+                source_recording_sha256=source_recording_sha256,
+                source_commands=[{
+                    "command": source_command,
+                    "start_time_s": source_start_time_s,
+                }],
+            )
+            writer.write(
+                "simulation_frame", simulation_time_s=0.0,
+                node_positions=base, rigidity=1.0,
+            )
+            writer.write(
+                "simulation_frame", simulation_time_s=1.0,
+                node_positions=base, rigidity=1.0,
+            )
+        return _real_capture(real_path), _simulation_capture(simulation_path)
+
+    def test_file_backed_pair_rejects_graph_hash_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            real, simulation = self.write_file_backed_pair(
+                Path(directory), simulation_hash="different-graph-hash"
+            )
+            with self.assertRaisesRegex(ValueError, "graph hashes must match"):
+                paired_metrics(real, simulation)
+
+    def test_file_backed_pair_rejects_command_or_timing_mismatch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real, simulation = self.write_file_backed_pair(
+                root, source_command="VEL_DUR:1,0,0,0:1"
+            )
+            with self.assertRaisesRegex(ValueError, "source commands differ"):
+                paired_metrics(real, simulation)
+
+            real, simulation = self.write_file_backed_pair(
+                root, source_start_time_s=0.25
+            )
+            with self.assertRaisesRegex(ValueError, "command timing differs"):
+                paired_metrics(real, simulation)
+
+    def test_file_backed_pair_rejects_unrelated_source_recording(self):
+        with tempfile.TemporaryDirectory() as directory:
+            real, simulation = self.write_file_backed_pair(
+                Path(directory), source_recording_sha256="0" * 64
+            )
+            with self.assertRaisesRegex(ValueError, "not bound to this real capture"):
+                paired_metrics(real, simulation)
+
+    def test_capture_loaders_reject_invalid_schema_or_session_header(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real_path = root / "real.jsonl"
+            with JsonlWriter(real_path) as writer:
+                writer.write(
+                    "tracker_frame", relative_time_s=0.0, status="complete",
+                    node_positions=[[[0.0, 0.0, 0.0]]],
+                )
+                writer.write("session", node_order=["node"])
+            with self.assertRaisesRegex(ValueError, "begin with exactly one session"):
+                _real_capture(real_path)
+
+            replay_path = root / "replay.jsonl"
+            replay_path.write_text(
+                json.dumps({
+                    "schema_version": 2,
+                    "type": "replay_session",
+                    "node_order": ["node"],
+                })
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "unsupported schema version"):
+                _simulation_capture(replay_path)
 
     def test_repeated_trial_variance_is_across_trials(self):
         base = np.stack((

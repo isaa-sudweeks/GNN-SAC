@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 import sys
 
@@ -26,6 +27,7 @@ from env.mujoco_gen.topology_envs import (
 from mujoco_truss_gen import get_mujoco_spec, get_node_features, get_preset_definition
 from mujoco_truss_gen.mujoco_model.control_graph import control_graph_metadata_from_xml
 from sim_to_real_io import (
+    SCHEMA_VERSION,
     canonical_json,
     FirmwareCommand,
     JsonlWriter,
@@ -41,30 +43,152 @@ class ScheduledCommand:
     start_time_s: float
     duration_s: float
     command: FirmwareCommand
+    delivery_status: str | None = None
+    delivery_uncertain: bool = False
 
 
-def _load_commands(path: Path, *, limit: int) -> tuple[list[ScheduledCommand], dict]:
+def _latest_started_index(
+    scheduled: list[ScheduledCommand], simulation_time_s: float, start_index: int = -1
+) -> int:
+    """Return the latest event begun by this time; equal timestamps use file order."""
+    index = start_index
+    while index + 1 < len(scheduled) and (
+        scheduled[index + 1].start_time_s <= simulation_time_s + 1e-12
+    ):
+        index += 1
+    return index
+
+
+def _schedule_end_time(scheduled: list[ScheduledCommand]) -> float:
+    """Return when the final effective command or emergency event ends."""
+    if not scheduled:
+        raise ValueError("Replay schedule must contain at least one command")
+    final = scheduled[-1]
+    return final.start_time_s + final.duration_s
+
+
+def _recorded_limit(session: dict) -> int:
+    if "max_velocity_ticks_per_second" not in session:
+        raise ValueError("Recorded session has no max_velocity_ticks_per_second")
+    raw_limit = session["max_velocity_ticks_per_second"]
+    if isinstance(raw_limit, bool):
+        raise ValueError("Recorded max_velocity_ticks_per_second must be a positive integer")
+    try:
+        limit = int(raw_limit)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Recorded max_velocity_ticks_per_second must be a positive integer"
+        ) from exc
+    if limit <= 0 or float(raw_limit) != float(limit):
+        raise ValueError("Recorded max_velocity_ticks_per_second must be a positive integer")
+    return limit
+
+
+def _load_commands(
+    path: Path, *, limit: int
+) -> tuple[list[ScheduledCommand], dict, int]:
     text = path.expanduser().read_text(encoding="utf-8")
     first = next((line.strip() for line in text.splitlines() if line.strip()), "")
     if first.startswith("{"):
         records = read_jsonl(path)
-        session = next((record for record in records if record.get("type") == "session"), {})
-        attempts = [record for record in records if record.get("type") == "command_attempt"]
-        commands = [parse_firmware_command(str(record["command"]), limit=limit) for record in attempts]
-        if not commands:
-            raise ValueError("Recorded session contains no command_attempt records")
-        raw_times = [float(record["relative_time_s"]) for record in attempts]
-        origin = raw_times[0]
-        times = [value - origin for value in raw_times]
-        scheduled = []
-        for index, command in enumerate(commands):
-            duration = (
-                max(0.0, times[index + 1] - times[index])
-                if index + 1 < len(times)
-                else command.duration_seconds
+        if not records or records[0].get("type") != "session":
+            raise ValueError("Recorded session must begin with exactly one session record")
+        sessions = [record for record in records if record.get("type") == "session"]
+        if len(sessions) != 1:
+            raise ValueError("Recorded session must begin with exactly one session record")
+        if any(record.get("schema_version") != SCHEMA_VERSION for record in records):
+            raise ValueError(
+                f"Recorded session contains an unsupported schema version; expected {SCHEMA_VERSION}"
             )
-            scheduled.append(ScheduledCommand(times[index], duration, command))
-        return scheduled, session
+        session = dict(sessions[0])
+        session["_source_recording_sha256"] = hashlib.sha256(
+            canonical_json(records).encode("utf-8")
+        ).hexdigest()
+        recorded_limit = _recorded_limit(session)
+        results = [record for record in records if record.get("type") == "command_result"]
+        result_by_attempt = {
+            (record.get("step"), record.get("command")): record
+            for record in results
+        }
+        event_records = [
+            record
+            for record in records
+            if record.get("type") in {"command_attempt", "emergency_command"}
+        ]
+        scheduled = []
+        previous_start_time = None
+        for order, record in enumerate(event_records):
+            try:
+                start_time = float(record["relative_time_s"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("Recorded command has no valid relative_time_s") from exc
+            if not np.isfinite(start_time) or start_time < 0.0:
+                raise ValueError("Recorded command relative_time_s must be finite and nonnegative")
+            if previous_start_time is not None and start_time < previous_start_time:
+                raise ValueError("Recorded command times must be nondecreasing")
+            previous_start_time = start_time
+            command = parse_firmware_command(str(record["command"]), limit=recorded_limit)
+            if record.get("type") == "emergency_command":
+                status = "emergency_stop"
+                uncertain = False
+            else:
+                if "ticks" in record:
+                    raw_ticks = record["ticks"]
+                    ticks_are_integers = isinstance(raw_ticks, list) and all(
+                        isinstance(value, int) and not isinstance(value, bool)
+                        for value in raw_ticks
+                    )
+                    if not ticks_are_integers or tuple(raw_ticks) != command.ticks:
+                        raise ValueError("Recorded command ticks do not match command text")
+                if "duration_s" in record:
+                    if isinstance(record["duration_s"], bool):
+                        raise ValueError(
+                            "Recorded command duration_s does not match command text"
+                        )
+                    try:
+                        recorded_duration = float(record["duration_s"])
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            "Recorded command duration_s does not match command text"
+                        ) from exc
+                    if (
+                        not np.isfinite(recorded_duration)
+                        or recorded_duration != command.duration_seconds
+                    ):
+                        raise ValueError(
+                            "Recorded command duration_s does not match command text"
+                        )
+                if (
+                    "serial_node_order" in record
+                    and record["serial_node_order"] != session.get("serial_node_order")
+                ):
+                    raise ValueError(
+                        "Recorded command serial_node_order does not match session"
+                    )
+                result = result_by_attempt.get((record.get("step"), record.get("command")))
+                status = str(result.get("status")) if result is not None else "missing"
+                uncertain = status not in {"acknowledged", "printed"}
+            scheduled.append((start_time, order, command, status, uncertain))
+        origin = scheduled[0][0] if scheduled else 0.0
+        commands = [
+            ScheduledCommand(
+                start_time - origin,
+                command.duration_seconds,
+                command,
+                status,
+                uncertain,
+            )
+            for start_time, _, command, status, uncertain in scheduled
+        ]
+        emergency_index = next(
+            (index for index, item in enumerate(commands) if item.command.emergency_stop),
+            None,
+        )
+        if emergency_index is not None:
+            commands = commands[: emergency_index + 1]
+        if not commands:
+            raise ValueError("Recorded session contains no command or emergency records")
+        return commands, session, recorded_limit
 
     scheduled = []
     current_time = 0.0
@@ -82,7 +206,7 @@ def _load_commands(path: Path, *, limit: int) -> tuple[list[ScheduledCommand], d
         current_time += command.duration_seconds
     if not scheduled:
         raise ValueError("Command file contains no commands")
-    return scheduled, {}
+    return scheduled, {}, limit
 
 
 def _assert_graph_parity(graph, metadata, session: dict) -> None:
@@ -134,8 +258,21 @@ def _assert_graph_parity(graph, metadata, session: dict) -> None:
     if session and recorded_actuators != graph.actuator_edges:
         raise ValueError("Recorded routed actuator endpoints do not match graph definition")
     recorded_serial = session.get("serial_node_order")
-    if session and tuple(recorded_serial or ()) != tuple(graph.serial_node_order or ()):
-        raise ValueError("Recorded serial order does not match graph_definition_file rollers")
+    expected_actuated = {
+        name for name in graph.control_node_names if name not in graph.passive_control_node_names
+    }
+    serial_is_valid = isinstance(recorded_serial, (list, tuple)) and all(
+        isinstance(name, str) for name in recorded_serial
+    )
+    if serial_is_valid:
+        serial_is_valid = (
+            len(recorded_serial) == len(expected_actuated)
+            and set(recorded_serial) == expected_actuated
+        )
+    if session and not serial_is_valid:
+        raise ValueError(
+            "Recorded serial order must contain every actuated graph node exactly once"
+        )
 
 
 def _assert_recorded_model_config(cfg, session: dict) -> None:
@@ -204,8 +341,11 @@ def _positions(env) -> np.ndarray:
     )
 
 
-def _command_action(command: FirmwareCommand, graph, limit: int) -> np.ndarray:
-    serial_order = graph.serial_node_order
+def _command_action(
+    command: FirmwareCommand, graph, limit: int, *, serial_order=None
+) -> np.ndarray:
+    if serial_order is None:
+        serial_order = graph.serial_node_order
     if serial_order is None:
         raise ValueError("Exact command replay requires roller-derived serial ordering")
     if len(command.ticks) != len(serial_order):
@@ -226,17 +366,18 @@ def run_replay(cfg) -> Path:
     cfg.mujoco_backend = "mujoco"
     graph = load_triangle_graph_definition(str(cfg.graph_definition_file))
     limit = int(getattr(cfg, "max_velocity_ticks_per_second", 1800))
-    scheduled, session = _load_commands(Path(str(cfg.input_file)), limit=limit)
+    scheduled, session, limit = _load_commands(Path(str(cfg.input_file)), limit=limit)
     _assert_recorded_model_config(cfg, session)
     env, metadata = _build_environment(cfg, graph)
     _assert_graph_parity(graph, metadata, session)
+    serial_order = tuple(session["serial_node_order"]) if session else graph.serial_node_order
     output_path = _output_path(cfg)
     dt = float(env.mj_model.model.opt.timestep) * int(env.nsubsteps)
     if not np.isfinite(dt) or dt <= 0.0:
         raise ValueError("MuJoCo environment step duration must be positive")
 
-    end_time = max(item.start_time_s + item.duration_s for item in scheduled)
-    active_index = 0
+    end_time = _schedule_end_time(scheduled)
+    active_index = -1
     try:
         observation, _ = env.reset(seed=int(getattr(cfg, "seed", 0)))
         initial_rigidity = float(np.asarray(observation["rigidity"]).reshape(-1)[0])
@@ -264,8 +405,23 @@ def run_replay(cfg) -> Path:
                 ],
                 passive_nodes=list(graph.passive_control_node_names),
                 edges=list(graph.edges),
-                serial_node_order=list(graph.serial_node_order or ()),
+                serial_node_order=list(serial_order or ()),
+                graph_serial_node_order=list(graph.serial_node_order or ()),
                 routed_actuator_edges=list(graph.actuator_edges),
+                max_velocity_ticks_per_second=limit,
+                source_commands=[
+                    {
+                        "command": item.command.text,
+                        "start_time_s": item.start_time_s,
+                        "delivery_status": item.delivery_status,
+                        "delivery_uncertain": item.delivery_uncertain,
+                    }
+                    for item in scheduled
+                ],
+                has_uncertain_command_delivery=any(
+                    item.delivery_uncertain for item in scheduled
+                ),
+                source_recording_sha256=session.get("_source_recording_sha256"),
                 simulation_dt_s=dt,
             )
             writer.write(
@@ -282,13 +438,11 @@ def run_replay(cfg) -> Path:
             simulation_time = 0.0
             step = 0
             while simulation_time < end_time - 1e-12:
-                while (
-                    active_index + 1 < len(scheduled)
-                    and scheduled[active_index + 1].start_time_s <= simulation_time + 1e-12
-                ):
-                    active_index += 1
-                item = scheduled[active_index]
-                if item.command.emergency_stop:
+                active_index = _latest_started_index(
+                    scheduled, simulation_time, active_index
+                )
+                item = scheduled[active_index] if active_index >= 0 else None
+                if item is not None and item.command.emergency_stop:
                     writer.write(
                         "replay_end",
                         reason="emergency_stop",
@@ -296,7 +450,17 @@ def run_replay(cfg) -> Path:
                         remaining_commands=0,
                     )
                     break
-                action = _command_action(item.command, graph, limit)
+                command_is_active = item is not None and (
+                    simulation_time < item.start_time_s + item.duration_s - 1e-12
+                )
+                if command_is_active:
+                    action = _command_action(
+                        item.command, graph, limit, serial_order=serial_order
+                    )
+                    command_text = item.command.text
+                else:
+                    action = np.zeros((len(graph.control_node_names), 1), dtype=np.float32)
+                    command_text = None
                 observation, reward, terminated, truncated, info = env.step(action)
                 step += 1
                 substeps = int(info.get("substeps_executed", env.nsubsteps))
@@ -308,7 +472,13 @@ def run_replay(cfg) -> Path:
                     step=step,
                     simulation_time_s=simulation_time,
                     node_positions=_positions(env).tolist(),
-                    command=item.command.text,
+                    command=command_text,
+                    command_delivery_status=(
+                        item.delivery_status if command_is_active else None
+                    ),
+                    command_delivery_uncertain=(
+                        item.delivery_uncertain if command_is_active else False
+                    ),
                     normalized_action=action[:, 0].astype(float).tolist(),
                     routed_actuator_ctrl=env.mj_model.get_external_ctrl().astype(float).tolist(),
                     reward=float(reward),

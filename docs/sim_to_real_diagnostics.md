@@ -64,6 +64,13 @@ edges, routed actuator endpoints, or serial order differs. It applies the transm
 integer ticks, not the unquantized policy action. A plain file containing one
 `VEL_DUR:<ticks>:<duration>` line per command is also accepted.
 
+For recorded JSONL sessions, the recorded velocity limit and transmitter node order
+are authoritative. Each command is active only for its encoded duration; later
+commands supersede earlier ones, and any interval with no active command is replayed
+with zero action. Emergency-command records terminate replay at their recorded time.
+Missing or timed-out acknowledgments remain marked as delivery-uncertain because a
+timeout does not prove that the firmware failed to receive the command.
+
 ## 4. Compare Vive and MuJoCo
 
 ```bash
@@ -77,6 +84,8 @@ The comparison synchronizes by command-relative time, linearly interpolates MuJo
 complete Vive timestamps, and computes one fixed proper rigid transform from the first
 shared pose. The transform never fits scale: a real robot that is uniformly larger or
 smaller than the nominal MuJoCo geometry therefore remains a measurable model mismatch.
+Comparison also verifies that the replay was generated from the selected recording and
+that its graph hash and command schedule match; unrelated logs are rejected.
 The JSON summary reports the initial real-to-simulation characteristic-radius ratio as
 a scale diagnostic without applying it. Per-node, COM-relative shape, and edge-length
 errors show the consequence over time. The report also includes cross-node error

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -18,14 +19,31 @@ for path in (ROOT, SAC_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from sim_to_real_io import read_jsonl  # noqa: E402
+from sim_to_real_io import SCHEMA_VERSION, canonical_json, read_jsonl  # noqa: E402
+
+
+def _recording_sha256(records: list[dict[str, Any]]) -> str:
+    return hashlib.sha256(canonical_json(records).encode("utf-8")).hexdigest()
+
+
+def _versioned_session_record(
+    records: list[dict[str, Any]], record_type: str, path: Path
+) -> dict[str, Any]:
+    if not records or records[0].get("type") != record_type:
+        raise ValueError(f"{path} must begin with exactly one {record_type} record")
+    sessions = [record for record in records if record.get("type") == record_type]
+    if len(sessions) != 1:
+        raise ValueError(f"{path} must begin with exactly one {record_type} record")
+    if any(record.get("schema_version") != SCHEMA_VERSION for record in records):
+        raise ValueError(
+            f"{path} contains an unsupported schema version; expected {SCHEMA_VERSION}"
+        )
+    return sessions[0]
 
 
 def _real_capture(path: Path) -> dict[str, Any]:
     records = read_jsonl(path)
-    session = next((record for record in records if record.get("type") == "session"), None)
-    if session is None:
-        raise ValueError(f"{path} has no session record")
+    session = _versioned_session_record(records, "session", path)
     frames = [record for record in records if record.get("type") == "tracker_frame"]
     complete = [record for record in frames if record.get("status") == "complete"]
     if not complete:
@@ -40,6 +58,8 @@ def _real_capture(path: Path) -> dict[str, Any]:
         times[pre_command[-1]] = 0.0
     return {
         "path": path,
+        "strict_provenance": True,
+        "recording_sha256": _recording_sha256(records),
         "records": records,
         "session": session,
         "frames": frames,
@@ -59,14 +79,13 @@ def _real_capture(path: Path) -> dict[str, Any]:
 
 def _simulation_capture(path: Path) -> dict[str, Any]:
     records = read_jsonl(path)
-    session = next((record for record in records if record.get("type") == "replay_session"), None)
-    if session is None:
-        raise ValueError(f"{path} has no replay_session record")
+    session = _versioned_session_record(records, "replay_session", path)
     frames = [record for record in records if record.get("type") == "simulation_frame"]
     if not frames:
         raise ValueError(f"{path} has no simulation frames")
     return {
         "path": path,
+        "strict_provenance": True,
         "session": session,
         "frames": frames,
         "node_order": tuple(session["node_order"]),
@@ -252,7 +271,83 @@ def _interpolate_positions(times: np.ndarray, positions: np.ndarray, target_time
     return output
 
 
+def _normalized_real_command_schedule(real: dict[str, Any]) -> list[dict[str, Any]]:
+    records = real.get("records")
+    if records is None:
+        records = real.get("commands", ())
+    commands = [
+        record
+        for record in records
+        if record.get("type") in {"command_attempt", "emergency_command"}
+        or ("type" not in record and "command" in record)
+    ]
+    if not commands:
+        raise ValueError("Real capture has no recorded command schedule")
+    try:
+        raw_times = [float(record["relative_time_s"]) for record in commands]
+        command_text = [str(record["command"]) for record in commands]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Real command provenance is incomplete") from exc
+    if not np.all(np.isfinite(raw_times)) or any(
+        later < earlier for earlier, later in zip(raw_times, raw_times[1:])
+    ):
+        raise ValueError("Real command times must be finite and nondecreasing")
+    origin = raw_times[0]
+    return [
+        {"command": command, "start_time_s": timestamp - origin}
+        for command, timestamp in zip(command_text, raw_times)
+    ]
+
+
+def _validate_pairing_provenance(real: dict[str, Any], simulation: dict[str, Any]) -> None:
+    """Reject file-backed comparisons that are not from the same graph and commands."""
+    strict_real = bool(real.get("strict_provenance", False))
+    strict_simulation = bool(simulation.get("strict_provenance", False))
+    if not strict_real and not strict_simulation:
+        return
+    if not strict_real or not strict_simulation:
+        raise ValueError("File-backed comparison requires provenance from both captures")
+
+    real_hash = real["session"].get("graph_definition_sha256")
+    simulation_hash = simulation["session"].get("graph_definition_sha256")
+    if not real_hash or not simulation_hash:
+        raise ValueError("Paired comparison requires graph hashes in both session records")
+    if real_hash != simulation_hash:
+        raise ValueError("Real and simulation graph hashes must match exactly")
+
+    source_recording_hash = simulation["session"].get("source_recording_sha256")
+    if not source_recording_hash:
+        raise ValueError("Replay session has no source recording hash")
+    if source_recording_hash != real.get("recording_sha256"):
+        raise ValueError("Simulation replay is not bound to this real capture")
+
+    source_commands = simulation["session"].get("source_commands")
+    if not isinstance(source_commands, list) or not source_commands:
+        raise ValueError("Replay session has no source command provenance")
+    expected = _normalized_real_command_schedule(real)
+    if len(source_commands) != len(expected):
+        raise ValueError("Real and simulation source command counts must match exactly")
+    for index, (actual, recorded) in enumerate(zip(source_commands, expected)):
+        if not isinstance(actual, dict):
+            raise ValueError("Replay source command provenance is malformed")
+        if str(actual.get("command")) != recorded["command"]:
+            raise ValueError(
+                f"Real and simulation source commands differ at command {index}"
+            )
+        try:
+            start_time = float(actual["start_time_s"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Replay source command provenance is incomplete") from exc
+        if not np.isfinite(start_time) or not np.isclose(
+            start_time, recorded["start_time_s"], rtol=0.0, atol=1e-9
+        ):
+            raise ValueError(
+                f"Real and simulation source command timing differs at command {index}"
+            )
+
+
 def paired_metrics(real: dict[str, Any], simulation: dict[str, Any]) -> dict[str, Any]:
+    _validate_pairing_provenance(real, simulation)
     if real["node_order"] != simulation["node_order"]:
         raise ValueError("Real and simulation controller-node order must match exactly")
     start = max(float(np.min(real["times"])), float(np.min(simulation["times"])), 0.0)
