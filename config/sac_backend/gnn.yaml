@@ -32,7 +32,8 @@ message_hidden_dims:
   - 256
 action_head_hidden_dims: [] # Empty uses a single linear embedding-to-policy projection.
 mpl_skip_connections: true
-message_attention: true # Learn one normalized scalar weight per incoming graph edge.
+message_attention: true # Learn normalized weights over incoming graph edges.
+message_attention_heads: 1 # Independent heads are concatenated and linearly projected.
 head_hidden_dims:
   - 256
   - 256

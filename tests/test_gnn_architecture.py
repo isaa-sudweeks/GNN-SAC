@@ -89,20 +89,50 @@ class GNNArchitectureTest(unittest.TestCase):
 
         torch.testing.assert_close(single_output, repeated_output)
 
-    def test_attention_is_single_head_and_backpropagates_through_every_layer(self):
+    def test_default_attention_is_single_head_and_checkpoint_compatible(self):
+        implicit = GNN(3, hidden_channels=[11], mpl_dims=[8], message_attention=True)
+        explicit = GNN(
+            3,
+            hidden_channels=[11],
+            mpl_dims=[8],
+            message_attention=True,
+            message_attention_heads=1,
+        )
+
+        self.assertEqual(implicit.state_dict().keys(), explicit.state_dict().keys())
+        for key, value in implicit.state_dict().items():
+            self.assertEqual(value.shape, explicit.state_dict()[key].shape)
+        explicit.load_state_dict(implicit.state_dict())
+        sample = graph()
+        torch.testing.assert_close(
+            implicit(sample.x, sample.edge_index),
+            explicit(sample.x, sample.edge_index),
+        )
+
+    def test_multihead_attention_backpropagates_through_every_layer(self):
         model = GNN(
             3,
             hidden_channels=[11],
             mpl_dims=[8, 6],
             message_attention=True,
+            message_attention_heads=4,
         )
         output = model(graph().x, graph().edge_index)
         output.sum().backward()
 
-        self.assertEqual(model.attention_score.out_features, 1)
+        self.assertEqual(output.shape, (4, 6))
+        self.assertEqual(model.attention_score.out_features, 4)
+        self.assertEqual(model.phi[-1].out_features, 4 * 8)
         self.assertIsNotNone(model.attention_score.weight.grad)
-        self.assertEqual(model.extra_mpls[0].attention_score.out_features, 1)
+        self.assertEqual(model.attention_projection.in_features, 4 * 8)
+        self.assertEqual(model.attention_projection.out_features, 8)
+        self.assertIsNotNone(model.attention_projection.weight.grad)
+        self.assertEqual(model.extra_mpls[0].attention_score.out_features, 4)
+        self.assertEqual(model.extra_mpls[0].phi[-1].out_features, 4 * 6)
         self.assertIsNotNone(model.extra_mpls[0].attention_score.weight.grad)
+        self.assertEqual(model.extra_mpls[0].attention_projection.in_features, 4 * 6)
+        self.assertEqual(model.extra_mpls[0].attention_projection.out_features, 6)
+        self.assertIsNotNone(model.extra_mpls[0].attention_projection.weight.grad)
     def test_disabled_edge_features_preserve_first_layer_shapes(self):
         legacy = GNN(3, 8, [10, 10])
         explicit_disabled = GNN(3, 8, [10, 10], edge_channels=0)
@@ -147,15 +177,20 @@ class GNNArchitectureTest(unittest.TestCase):
         self.assertEqual(model._action_head[2].out_features, 2)
 
     def test_actor_critic_enables_attention_for_actor_critics_and_targets(self):
-        model = GNNActorCritic(cfg(message_attention=True))
+        model = GNNActorCritic(
+            cfg(message_attention=True, message_attention_heads=3)
+        )
 
         self.assertTrue(model._pi.message_attention)
+        self.assertEqual(model._pi.message_attention_heads, 3)
         self.assertIsNotNone(model._pi.attention_score)
         for critic in model._Qs.modules_list:
             self.assertTrue(critic.message_attention)
+            self.assertEqual(critic.message_attention_heads, 3)
             self.assertIsNotNone(critic.attention_score)
         for critic in model._target_Qs.modules_list:
             self.assertTrue(critic.message_attention)
+            self.assertEqual(critic.message_attention_heads, 3)
             self.assertIsNotNone(critic.attention_score)
 
     def test_legacy_config_uses_actor_and_critic_output_widths(self):
@@ -177,6 +212,10 @@ class GNNArchitectureTest(unittest.TestCase):
                     GNN(3, hidden_channels=[], mpl_dims=dims)
         with self.assertRaises(ValueError):
             GNN(3, hidden_channels=[False], mpl_dims=[8])
+        for heads in (0, -1, True, 1.5, "2"):
+            with self.subTest(heads=heads):
+                with self.assertRaisesRegex(ValueError, "positive integer"):
+                    GNN(3, mpl_dims=[8], message_attention_heads=heads)
         with self.assertRaisesRegex(ValueError, "critic_readout must be one of"):
             Q_GNN(3, mpl_dims=[8], critic_readout="unknown")
 
