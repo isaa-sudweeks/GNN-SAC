@@ -10,10 +10,11 @@ from typing import Any
 import hydra
 from omegaconf import OmegaConf, open_dict
 
-from common.cross_validation import resolve_cross_validation
+from common.cross_validation import resolve_cross_validation, validate_cross_validation_spec
 
 
 LAUNCH_COMMAND_ENV = "GNN_SAC_LAUNCH_COMMAND"
+TOPOLOGY_SCALED_LEARNING_PARAMETERS = ("steps", "batch_size", "buffer_size")
 
 
 def capture_launch_command(argv: list[str] | None = None) -> str:
@@ -62,6 +63,56 @@ def normalize_numeric_value(value: Any) -> Any:
 	if isinstance(result, float) and result.is_integer():
 		return int(result)
 	return result
+
+
+def training_topology_count(cfg: Any) -> int:
+	"""Return the number of distinct topologies trained by this configuration."""
+	topologies = getattr(cfg, "truss_topologies", None)
+	if topologies in (None, "null"):
+		topologies = getattr(cfg, "topologies", None)
+	if topologies not in (None, "null"):
+		if isinstance(topologies, str):
+			topologies = [topologies]
+		return max(1, len(dict.fromkeys(str(topology) for topology in topologies)))
+
+	spec = validate_cross_validation_spec(
+		getattr(cfg, "cross_validation", None),
+		require_held_out=False,
+	)
+	if spec is None or spec["held_out_group"] is None:
+		return 1
+	training_topologies = [
+		topology
+		for group_name, group_topologies in spec["groups"].items()
+		if group_name != spec["held_out_group"]
+		for topology in group_topologies
+	]
+	return max(1, len(dict.fromkeys(training_topologies)))
+
+
+def effective_topology_learning_value(cfg: Any, name: str) -> int:
+	"""Interpret a configured learning value as a per-topology value."""
+	if name not in TOPOLOGY_SCALED_LEARNING_PARAMETERS:
+		raise ValueError(f"Unsupported topology-scaled learning parameter {name!r}.")
+	value = int(normalize_numeric_value(getattr(cfg, name)))
+	return value * training_topology_count(cfg)
+
+
+def scale_learning_parameters_by_topology(cfg: Any) -> Any:
+	"""Persist effective totals while preserving requested per-topology values."""
+	if bool(getattr(cfg, "topology_learning_parameters_scaled", False)):
+		return cfg
+	count = training_topology_count(cfg)
+	with open_dict(cfg):
+		cfg.training_topology_count = count
+		for name in TOPOLOGY_SCALED_LEARNING_PARAMETERS:
+			if name not in cfg:
+				continue
+			per_topology = int(normalize_numeric_value(cfg[name]))
+			cfg[f"per_topology_{name}"] = per_topology
+			cfg[name] = per_topology * count
+		cfg.topology_learning_parameters_scaled = True
+	return cfg
 
 
 def _hydra_multirun_identity() -> tuple[int, str] | None:
@@ -139,6 +190,7 @@ def parse_cfg(cfg: OmegaConf) -> OmegaConf:
 				raise ValueError("Use either topologies or truss_topologies, not both with different values.")
 			cfg.truss_topologies = topologies
 		resolve_cross_validation(cfg)
+		scale_learning_parameters_by_topology(cfg)
 		if cfg.get("work_dir", None) not in {None, "???"}:
 			cfg.work_dir = Path(cfg.work_dir)
 		else:

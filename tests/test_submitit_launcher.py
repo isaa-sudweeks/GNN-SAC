@@ -30,6 +30,7 @@ def sweep_cfg(
     override_dirname: str,
     steps: int | str = 100,
     resume="latest",
+    truss_topologies=None,
 ):
     return OmegaConf.create(
         {
@@ -38,6 +39,7 @@ def sweep_cfg(
             "isolate_multirun_runs": True,
             "resume_from_checkpoint": resume,
             "steps": steps,
+            "truss_topologies": truss_topologies,
             "hydra": {
                 "job": {
                     "num": "???",
@@ -283,6 +285,23 @@ assert isinstance(launcher, BaseFilteringSlurmLauncher)
                 launcher._is_complete(cfg, checkpoint_dir),
                 (True, 10_000),
             )
+
+    def test_multi_topology_step_target_uses_per_topology_budget(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            cfg = sweep_cfg(
+                root,
+                override_dirname="job=a",
+                steps=100,
+                truss_topologies=["a", "b", "c", "d"],
+            )
+            checkpoint_dir = resolve_checkpoint_dir(cfg, 0)
+            write_metadata_checkpoint(checkpoint_dir, 100, 400)
+            launcher = self.make_launcher(root, {"job=a": cfg})
+
+            self.assertEqual(launcher._is_complete(cfg, checkpoint_dir), (False, 100))
+            write_metadata_checkpoint(checkpoint_dir, 400, 400)
+            self.assertEqual(launcher._is_complete(cfg, checkpoint_dir), (True, 400))
 
 
 if __name__ == "__main__":
