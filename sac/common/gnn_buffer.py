@@ -250,8 +250,9 @@ class _GNNTaskBuffer:
 class GNNBuffer:
     """Task-balanced replay for graph SAC.
 
-    ``buffer_size`` remains the total replay capacity. Multi-task batches draw
-    exactly the same number of transitions from every distinct task.
+    Parsed multi-topology configs scale ``buffer_size`` and ``batch_size`` into
+    totals first. This buffer then assigns the requested per-topology capacity
+    and sample count to every distinct task.
     """
 
     def __init__(self, cfg):

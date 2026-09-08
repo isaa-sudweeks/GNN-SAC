@@ -2,14 +2,14 @@
 
 # Optimizer
 lr: 3e-4 # Adam learning rate for actor and critic optimizers.
-batch_size: 256 # Number of replay slices sampled for each gradient update.
+batch_size: 256 # Replay slices sampled per topology for each gradient update.
 grad_clip_norm: 10.0 # Maximum global gradient norm before clipping optimizer steps.
 pcgrad: false # GNN profiles can enable projection of conflicting per-task gradients.
 gradient_diagnostics: false # Compare task-specific actor and critic gradients without changing the optimizer update.
 gradient_diagnostics_freq: 100 # Optimizer-update interval for gradient diagnostics when enabled.
 
 # Replay and update cadence
-buffer_size: 1_000_000 # Maximum number of transitions stored in replay.
+buffer_size: 1_000_000 # Maximum transitions stored per topology in replay.
 horizon: 2 # Sequence length used by the slice sampler; 2 gives one current/next transition.
 replay_ratio: 10.0 # Replay samples consumed per new transition; updates are replay_ratio * collected / batch_size.
 update_every_vector_steps: 1 # Spend accumulated update budget after this many vector-environment steps; set to 1 for every step.
