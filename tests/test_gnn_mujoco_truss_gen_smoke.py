@@ -569,6 +569,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         yaml_cfg = OmegaConf.load(ROOT / "config" / "physics" / "domain_randomization.yaml")
         params = yaml_cfg.domain_randomization_params
         self.assertTrue(set(_RUNTIME_DOMAIN_RANDOMIZATION_FIELDS).issubset(params.keys()))
+        self.assertIn("hinge_position_kp", params.physical_parameters)
 
         configured_params = {
             "length_scale": {"enabled": False},
@@ -585,6 +586,49 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
 
         for index, field_name in enumerate(_RUNTIME_DOMAIN_RANDOMIZATION_FIELDS.values()):
             self.assertEqual(getattr(randomization, field_name), (index + 0.25, index + 0.75))
+
+    def test_legacy_hinge_kp_randomization_path_uses_runtime_range(self):
+        cfg = graph_test_cfg(
+            domain_randomization=True,
+            domain_randomization_params={
+                "length_scale": {"enabled": False},
+                "physical_parameters": {
+                    "hinge_position_kp": {
+                        "enabled": True,
+                        "min": 8.0,
+                        "max": 12.0,
+                    },
+                },
+            },
+        )
+
+        randomization = _domain_randomization(cfg, "octahedron", True)
+
+        self.assertEqual(randomization.hinge_position_kp_range, (8.0, 12.0))
+        self.assertIsNone(randomization.model_factory)
+
+    def test_hinge_kp_randomization_paths_reject_conflicting_ranges(self):
+        cfg = graph_test_cfg(
+            domain_randomization=True,
+            domain_randomization_params={
+                "length_scale": {"enabled": False},
+                "hinge_position_kp": {
+                    "enabled": True,
+                    "min": 9.0,
+                    "max": 11.0,
+                },
+                "physical_parameters": {
+                    "hinge_position_kp": {
+                        "enabled": True,
+                        "min": 8.0,
+                        "max": 12.0,
+                    },
+                },
+            },
+        )
+
+        with self.assertRaisesRegex(ValueError, "cannot both be enabled"):
+            _domain_randomization(cfg, "octahedron", True)
 
     def test_abstract_node_mass_randomization_is_independent_per_node(self):
         cfg = graph_test_cfg(

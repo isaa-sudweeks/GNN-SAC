@@ -78,6 +78,11 @@ _RUNTIME_DOMAIN_RANDOMIZATION_FIELDS = {
     "hinge_position_kp": "hinge_position_kp_range",
 }
 
+# These fields used to be model-building physical-parameter randomizers. Keep
+# accepting their old Hydra paths, but route them through the fixed-shape
+# runtime API so they also work with MJX.
+_RUNTIME_PHYSICAL_PARAMETER_ALIASES = {"hinge_position_kp"}
+
 
 def _is_mapping_like(value):
     return hasattr(value, "items") or hasattr(value, "keys")
@@ -177,6 +182,8 @@ def _randomized_physical_parameter_overrides(config, rng):
                 raise ValueError(f"Unknown domain-randomized physical parameter: {name}")
 
     for name in field_names:
+        if name in _RUNTIME_PHYSICAL_PARAMETER_ALIASES:
+            continue
         spec = _cfg_get(physical_randomization, name, None)
         if spec in (None, "null") or not bool(_cfg_get(spec, "enabled", False)):
             continue
@@ -201,7 +208,7 @@ def _has_enabled_physical_parameter_randomization(config):
                 raise ValueError(f"Unknown domain-randomized physical parameter: {name}")
         return any(
             bool(_cfg_get(_cfg_get(physical_randomization, name, None), "enabled", False))
-            for name in field_names
+            for name in field_names - _RUNTIME_PHYSICAL_PARAMETER_ALIASES
         )
     return False
 
@@ -226,6 +233,22 @@ def _enabled_range(params, name):
             f"domain_randomization_params.{name} must contain finite values with min <= max."
         )
     return (low, high)
+
+
+def _runtime_randomization_range(params, name):
+    value_range = _enabled_range(params, name)
+    if name not in _RUNTIME_PHYSICAL_PARAMETER_ALIASES:
+        return value_range
+
+    physical_parameters = _cfg_get(params, "physical_parameters", {})
+    alias_range = _enabled_range(physical_parameters, name)
+    if value_range is not None and alias_range is not None and value_range != alias_range:
+        raise ValueError(
+            f"domain_randomization_params.{name} and deprecated "
+            f"domain_randomization_params.physical_parameters.{name} cannot both be "
+            "enabled with different ranges."
+        )
+    return value_range if value_range is not None else alias_range
 
 
 def _copy_config_with(config, **updates):
@@ -295,7 +318,7 @@ def _domain_randomization(config, topology, realistic):
         field.name for field in fields(DomainRandomizationConfig)
     }
     for config_name, randomization_name in _RUNTIME_DOMAIN_RANDOMIZATION_FIELDS.items():
-        value_range = _enabled_range(params, config_name)
+        value_range = _runtime_randomization_range(params, config_name)
         if value_range is None:
             continue
         if randomization_name not in supported_randomization_fields:
