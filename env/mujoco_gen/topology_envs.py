@@ -75,6 +75,7 @@ _RUNTIME_DOMAIN_RANDOMIZATION_FIELDS = {
     "initial_translation_x": "initial_translation_x_range",
     "initial_translation_y": "initial_translation_y_range",
     "initial_yaw": "initial_yaw_range",
+    "hinge_position_kp": "hinge_position_kp_range",
 }
 
 

@@ -103,6 +103,12 @@ domain_randomization_params:
     enabled: true
     min: -3.141592653589793
     max: 3.141592653589793
+  # Absolute position-servo gain shared by the internal connector hinges in
+  # realistic models. mujoco-truss-gen applies this at reset in MuJoCo and MJX.
+  hinge_position_kp:
+    enabled: false
+    min: 8.0
+    max: 12.0
 
   # Randomize mujoco-truss-gen TrussPhysicalParameters at reset time. Enable
   # the master switch above, then enable individual parameters here.
@@ -155,10 +161,6 @@ domain_randomization_params:
       enabled: false
       min: 0.8
       max: 1.2
-    hinge_position_kp:
-      enabled: false
-      min: 8.0
-      max: 12.0
     hinge_damping:
       enabled: false
       min: 0.8

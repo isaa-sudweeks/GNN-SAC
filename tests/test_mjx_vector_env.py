@@ -225,6 +225,30 @@ class MjxVectorEnvTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_randomizes_realistic_hinge_position_kp_in_mjx(self):
+        cfg = mjx_cfg(
+            num_envs=1,
+            truss_realistic=True,
+            domain_randomization=True,
+            domain_randomization_params={
+                "length_scale": {"enabled": False},
+                "hinge_position_kp": {
+                    "enabled": True,
+                    "min": 9.0,
+                    "max": 9.0,
+                },
+            },
+        )
+        env = make_env(cfg)
+        try:
+            env.reset_many()
+            sampled = env.env._jax.device_get(
+                env.env._state.domain_randomization.hinge_position_kp
+            )
+            self.assertEqual(sampled.tolist(), [9.0])
+        finally:
+            env.close()
+
     def test_realistic_mjx_reset_and_step(self):
         cfg = mjx_cfg(
             num_envs=1,
