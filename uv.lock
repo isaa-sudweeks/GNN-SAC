@@ -703,7 +703,7 @@ dependencies = [
     { name = "kaleido" },
     { name = "mujoco" },
     { name = "mujoco-mjx" },
-    { name = "mujoco-truss-gen" },
+    { name = "mujoco-truss-gen", extra = ["warp"] },
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "optuna" },
@@ -727,7 +727,7 @@ requires-dist = [
     { name = "kaleido" },
     { name = "mujoco" },
     { name = "mujoco-mjx" },
-    { name = "mujoco-truss-gen", specifier = "==0.12.4" },
+    { name = "mujoco-truss-gen", extras = ["warp"], specifier = "==0.12.4" },
     { name = "numpy" },
     { name = "omegaconf" },
     { name = "optuna" },
@@ -1192,6 +1192,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/51/b3/622f2d182e4e8ace9fe3dc1ac6c1140d7a60756812023ad6799d621f9410/mujoco_mjx-3.8.1-py3-none-any.whl", hash = "sha256:38adc056713349b14754dd8c25dc2b0ccdf8ec2dc4203d6588a6c021e0fd7558", size = 7068679, upload-time = "2026-05-11T13:44:05.295Z" },
 ]
 
+[package.optional-dependencies]
+warp = [
+    { name = "warp-lang" },
+]
+
 [[package]]
 name = "mujoco-truss-gen"
 version = "0.12.4"
@@ -1207,6 +1212,11 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d7/03/e07364a6c99cfd8192df143c70afed78e163f16a0c6496d0babcd20c6828/mujoco_truss_gen-0.12.4.tar.gz", hash = "sha256:4ba879c4ad8f20b2cdc06e0c998a3893849655d9c014dae8e80f15bbc0df4054", size = 137408, upload-time = "2026-08-27T14:44:56.977Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7b/b1/78d1cf858724595d6fc504561ce1971b8050fa5f98bfcbe69fcac4f5c5ab/mujoco_truss_gen-0.12.4-py3-none-any.whl", hash = "sha256:7485cff7a440eff0bda40afa961fac8854e3f7fc1d8a410cade53c983c7c5aa2", size = 107327, upload-time = "2026-08-27T14:44:55.434Z" },
+]
+
+[package.optional-dependencies]
+warp = [
+    { name = "mujoco-mjx", extra = ["warp"] },
 ]
 
 [[package]]
@@ -2669,6 +2679,20 @@ media = [
     { name = "plotly" },
     { name = "rdkit" },
     { name = "soundfile" },
+]
+
+[[package]]
+name = "warp-lang"
+version = "1.12.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/26/1d/2193d186fc5f9766d8db17b64fad55b97405f1e35f9190623d8d95971519/warp_lang-1.12.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:98df3533a6c40a33cce961f8efa991006b30c9d286356e4cd77ea8ce86928f1d", size = 24102436, upload-time = "2026-04-06T06:13:06.799Z" },
+    { url = "https://files.pythonhosted.org/packages/52/79/c30d6f57c98cc5bb850eb0bd0fce2405abb79a368ed5ef65ebb2b0c58dc0/warp_lang-1.12.1-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:6bf01f10509488ba8eacaf4ec7fcf7cfbd503118b22e002ecba407b40a17424e", size = 136413384, upload-time = "2026-04-06T06:13:37.735Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/75/1af98a828a2b132a7a14515cdb050876c403349c7761730584f9f0a637a5/warp_lang-1.12.1-py3-none-manylinux_2_34_aarch64.whl", hash = "sha256:af6d680e79c1be6e46ddf80ecaa358f222804f882f4683260a7b4abd80a0981b", size = 137676174, upload-time = "2026-04-06T06:14:12.232Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/cd/efe4f259b707368f396a70b6567d0bf270e56db03d2142c0142d52acb656/warp_lang-1.12.1-py3-none-win_amd64.whl", hash = "sha256:826b2f93df8e47eac0c751a8eb5a0533e2fc5434158c8896a63be53bfbd728c7", size = 119729529, upload-time = "2026-04-06T06:14:38.181Z" },
 ]
 
 [[package]]
