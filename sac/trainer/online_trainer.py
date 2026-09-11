@@ -131,11 +131,14 @@ class OnlineTrainer(Trainer):
         self.distillation = None
         if enabled(self.cfg):
             self.distillation = Distillation(
-                self.cfg, self.buffer.task_names, device=self.agent.device
+                self.cfg, self.buffer.task_names, device=self.agent.device,
+                defer_target_cache=True,
             )
             self.distillation.bind_replay(self.buffer)
             self.agent.distillation = self.distillation
         self.maybe_load_checkpoint()
+        if self.distillation is not None:
+            self.distillation.prepare_offline_datasets()
 
     def _run_distillation_pretraining(self):
         distillation = getattr(self, "distillation", None)

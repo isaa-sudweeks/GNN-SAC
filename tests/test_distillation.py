@@ -392,7 +392,8 @@ class DistillationTrainingTest(unittest.TestCase):
             expected = distill.offline_update(agent)
             restored = GNNSAC(cfg)
             resumed = Trainer(cfg=cfg, env=None, agent=restored, buffer=GNNBuffer(cfg), logger=DummyLogger())
-            resumed.distillation = Distillation(cfg, cfg.tasks)
+            resumed.distillation = Distillation(cfg, cfg.tasks, defer_target_cache=True)
+            self.assertFalse(resumed.distillation.datasets)
             resumed.load_checkpoint_state_dict(snapshot)
             actual = resumed.distillation.offline_update(restored)
             self.assertEqual(actual, expected)
@@ -423,6 +424,27 @@ class DistillationTrainingTest(unittest.TestCase):
                 legacy["settings"].pop(key, None)
             legacy.pop("pending_samples", None)
             restored.load_state_dict(legacy)
+
+    def test_online_resume_skips_missing_target_cache_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, distill = setup(tmp)
+            agent = GNNSAC(cfg)
+            distill.completed_updates = distill.pretrain_updates
+            distill.finish_pretraining(agent)
+            online_state = distill.state_dict()
+
+            cfg.distillation["cache_dir"] = str(Path(tmp) / "missing-target-cache")
+            deferred = Distillation(cfg, cfg.tasks, defer_target_cache=True)
+            self.assertFalse(deferred.datasets)
+            deferred.load_state_dict(online_state)
+            with patch.object(
+                ObservationShards,
+                "prepare",
+                side_effect=AssertionError("online resume rebuilt target cache"),
+            ):
+                deferred.prepare_offline_datasets()
+            self.assertEqual(deferred.stage, "online")
+            self.assertFalse(deferred.datasets)
 
     def test_online_ordinary_and_pcgrad_and_zero_weight_equivalence(self):
         for pcgrad in (False, True):

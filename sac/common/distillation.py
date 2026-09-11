@@ -273,7 +273,7 @@ class ObservationShards:
 class Distillation:
     """Training-only state; teachers are deliberately not student submodules."""
 
-    def __init__(self, cfg, task_names: list[str], device=None):
+    def __init__(self, cfg, task_names: list[str], device=None, *, defer_target_cache=False):
         self.cfg = cfg
         self.device = torch.device(device if device is not None else _get(cfg, "device", "cuda"))
         options = _get(cfg, "distillation", {})
@@ -307,6 +307,7 @@ class Distillation:
         self.step = 0
         self.generator = torch.Generator().manual_seed(int(_get(cfg, "seed", 0)))
         self.teachers, self.datasets, self.sources = {}, {}, {}
+        self._dataset_plans = {}
         self.replay_signatures = {}
         self.pending_samples = {}
         self.metrics = {}
@@ -365,13 +366,58 @@ class Distillation:
                     contract_hash = hashlib.sha256(
                         json.dumps(contract, sort_keys=True).encode()
                     ).hexdigest()[:16]
-                    self.datasets[task] = ObservationShards.prepare(
-                        cache / f"{digest}-targets-v2-{contract_hash}-s{shard_size}",
-                        replay_observations(replay), shard_size, contract, teacher,
-                        self.prepare, self.device, target_batch_size,
-                        pin_memory=self.pin_memory and self.device.type == "cuda",
-                        prefetch=self.prefetch)
+                    directory = cache / f"{digest}-targets-v2-{contract_hash}-s{shard_size}"
+                    replay_key = None
+                    if "buffers" in state["buffer"]:
+                        replay_key = matching[0]
+                    self._dataset_plans[task] = {
+                        "directory": directory,
+                        "contract": contract,
+                        "source_path": path,
+                        "replay_key": replay_key,
+                        "shard_size": shard_size,
+                        "target_batch_size": target_batch_size,
+                    }
+                    if not defer_target_cache:
+                        self.datasets[task] = self._prepare_dataset(
+                            task, replay_observations(replay)
+                        )
                 del first, replay, state
+
+    def _prepare_dataset(self, task: str, observations) -> ObservationShards:
+        plan = self._dataset_plans[task]
+        return ObservationShards.prepare(
+            plan["directory"], observations, plan["shard_size"], plan["contract"],
+            self.teachers[task], self.prepare, self.device, plan["target_batch_size"],
+            pin_memory=self.pin_memory and self.device.type == "cuda",
+            prefetch=self.prefetch,
+        )
+
+    def prepare_offline_datasets(self) -> None:
+        """Build or open target caches only after resume establishes an offline stage."""
+        if self.stage != "offline":
+            return
+        for task, plan in self._dataset_plans.items():
+            if task in self.datasets:
+                continue
+            if (plan["directory"] / "manifest.json").exists():
+                self.datasets[task] = self._prepare_dataset(task, iter(()))
+                continue
+            with plan["source_path"].open("rb") as stream:
+                digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                if digest != self.sources[task]["sha256"]:
+                    raise ValueError(f"Distillation teacher source changed while preparing {task!r}.")
+                stream.seek(0)
+                state = torch.load(stream, map_location="cpu", weights_only=False)
+            replay = state["buffer"]
+            if plan["replay_key"] is not None:
+                replay = replay["buffers"][plan["replay_key"]]
+            self.datasets[task] = self._prepare_dataset(
+                task, replay_observations(replay)
+            )
+            del replay, state
+        for task, specification in self.pending_samples.items():
+            self.datasets[task].prefetch(specification)
 
     def _validate_config(self, teacher, topology: str, agent_state: dict) -> None:
         if _get(teacher, "sac_backend", "gnn") != "gnn":
@@ -435,6 +481,7 @@ class Distillation:
         )
 
     def offline_update(self, agent) -> dict:
+        self.prepare_offline_datasets()
         agent.model.eval() # Deterministic policy parameters, while retaining gradients.
         agent.pi_optim.zero_grad(set_to_none=True)
         metrics = {}
@@ -499,7 +546,7 @@ class Distillation:
                 dataset.close()
             self.datasets.clear()
             self.pending_samples.clear()
-        else:
+        elif self.datasets:
             for task, specification in self.pending_samples.items():
                 self.datasets[task].prefetch(specification)
 

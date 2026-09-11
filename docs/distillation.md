@@ -106,6 +106,9 @@ The cache-build batch size, pinning, and prefetch options may change when resumi
 they do not alter the saved optimizer/sampler contract.
 For focused online profiling, enable `profiling.optimization_subphases`; teacher
 and student KL work is reported as the `distillation_kl` optimization subphase.
+Target caches are opened or built only after checkpoint loading establishes that
+the run is still in the offline stage. Resuming an online-stage checkpoint does
+not require the offline target cache, even if its configured directory is absent.
 
 Offline checkpoints use `distillation.pt` and also update `latest.pt` and the
 agent-only sidecars. `distillation.checkpoint_freq` is measured in offline updates
