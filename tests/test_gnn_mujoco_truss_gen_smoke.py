@@ -27,6 +27,7 @@ from common.parser import parse_cfg
 from env import make_env
 from env.mujoco_gen.topology_envs import (
     _RUNTIME_DOMAIN_RANDOMIZATION_FIELDS,
+    _broken_nodes_probability,
     _domain_randomization,
     make_truss_env_config,
     _physical_parameters_from_config,
@@ -87,6 +88,54 @@ def graph_test_cfg(**overrides):
 
 
 class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
+    def test_broken_nodes_configuration_validation_and_master_gating(self):
+        enabled = {
+            "enabled": True,
+            "probability": 0.25,
+        }
+        valid = graph_test_cfg(
+            domain_randomization=True,
+            graph_features={"node_roles": True},
+            use_control_graph=True,
+            domain_randomization_params={"broken_nodes": enabled},
+        )
+        self.assertEqual(_broken_nodes_probability(valid), 0.25)
+
+        for probability in (-0.01, 1.01, float("nan"), float("inf"), "invalid"):
+            invalid = OmegaConf.merge(
+                valid,
+                {"domain_randomization_params": {"broken_nodes": {
+                    "enabled": True,
+                    "probability": probability,
+                }}},
+            )
+            with self.subTest(probability=probability):
+                with self.assertRaisesRegex(ValueError, "within \\[0, 1\\]"):
+                    _broken_nodes_probability(invalid)
+
+        without_roles = OmegaConf.merge(valid, {"graph_features": {"node_roles": False}})
+        with self.assertRaisesRegex(ValueError, "graph_features.node_roles=true"):
+            _broken_nodes_probability(without_roles)
+
+        without_control_graph = OmegaConf.merge(valid, {"use_control_graph": False})
+        with self.assertRaisesRegex(ValueError, "use_control_graph=true"):
+            _broken_nodes_probability(without_control_graph)
+
+        master_disabled = OmegaConf.merge(
+            without_roles,
+            {
+                "domain_randomization": False,
+                "domain_randomization_params": {
+                    "broken_nodes": {"enabled": True, "probability": 2.0}
+                },
+            },
+        )
+        self.assertIsNone(_broken_nodes_probability(master_disabled))
+
+        yaml_cfg = OmegaConf.load(ROOT / "config" / "physics" / "domain_randomization.yaml")
+        self.assertFalse(yaml_cfg.domain_randomization_params.broken_nodes.enabled)
+        self.assertEqual(yaml_cfg.domain_randomization_params.broken_nodes.probability, 0.1)
+
     def test_fixed_topology_mjx_training_uses_distinct_native_eval_env(self):
         cfg = SimpleNamespace(
             task="truss-graph",
@@ -854,6 +903,100 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
             action = agent.act(obs, eval_mode=True)
             self.assertEqual(action.shape, (obs.num_nodes, 1))
             self.assertTrue(torch.isfinite(action).all())
+        finally:
+            env.close()
+
+    def test_native_broken_nodes_are_episode_fixed_labeled_and_unrouted(self):
+        cfg = graph_test_cfg(
+            domain_randomization=True,
+            domain_randomization_params={
+                "broken_nodes": {"enabled": True, "probability": 1.0}
+            },
+            graph_features={"node_roles": True},
+            use_control_graph=True,
+            max_steps=2,
+            nsubsteps=1,
+        )
+        env = make_env(cfg)
+        try:
+            obs = env.reset()
+            core = env.unwrapped
+            base_active = ~core._base_passive_node_mask
+            broken = core._broken_node_mask.copy()
+
+            self.assertFalse(np.any(broken[~base_active]))
+            self.assertEqual(int(broken.sum()), int(base_active.sum()) - 1)
+            np.testing.assert_array_equal(
+                obs.action_mask.numpy(), base_active & ~broken
+            )
+
+            normalized, _ = core._control_graph_node_action_to_actuator_ctrl(
+                np.ones(core.action_space.shape, dtype=np.float32)
+            )
+            np.testing.assert_array_equal(normalized[broken], 0.0)
+
+            next_obs, reward, _, info = env.step(
+                torch.ones(core.action_space.shape, dtype=torch.float32)
+            )
+            np.testing.assert_array_equal(core._broken_node_mask, broken)
+            np.testing.assert_array_equal(next_obs.action_mask.numpy(), obs.action_mask.numpy())
+            np.testing.assert_array_equal(info["broken_node_mask"], broken)
+            self.assertEqual(info["broken_node_count"], int(broken.sum()))
+            self.assertTrue(torch.isfinite(reward))
+        finally:
+            env.close()
+
+    def test_native_broken_node_sampling_is_seed_reproducible(self):
+        cfg = graph_test_cfg(
+            domain_randomization=True,
+            domain_randomization_params={
+                "broken_nodes": {"enabled": True, "probability": 0.5}
+            },
+            graph_features={"node_roles": True},
+            use_control_graph=True,
+            nsubsteps=1,
+        )
+        first = make_env(cfg)
+        second = make_env(cfg)
+        try:
+            _, first_info = first.unwrapped.reset(seed=123)
+            _, second_info = second.unwrapped.reset(seed=123)
+            np.testing.assert_array_equal(
+                first.unwrapped._broken_node_mask,
+                second.unwrapped._broken_node_mask,
+            )
+            np.testing.assert_array_equal(
+                first_info["domain_randomization"]["broken_node_mask"],
+                second_info["domain_randomization"]["broken_node_mask"],
+            )
+            self.assertEqual(
+                first_info["domain_randomization"]["broken_node_count"],
+                int(first.unwrapped._broken_node_mask.sum()),
+            )
+        finally:
+            first.close()
+            second.close()
+
+    def test_native_broken_nodes_zero_probability_preserves_active_mask(self):
+        cfg = graph_test_cfg(
+            domain_randomization=True,
+            domain_randomization_params={
+                "broken_nodes": {"enabled": True, "probability": 0.0}
+            },
+            graph_features={"node_roles": True},
+            use_control_graph=True,
+            nsubsteps=1,
+        )
+        env = make_env(cfg)
+        try:
+            obs = env.reset()
+            core = env.unwrapped
+            self.assertFalse(np.any(core._broken_node_mask))
+            np.testing.assert_array_equal(
+                obs.action_mask.numpy(), ~core._base_passive_node_mask
+            )
+            _, _, _, info = env.step(torch.ones(env.action_space.shape))
+            self.assertEqual(info["broken_node_count"], 0)
         finally:
             env.close()
 

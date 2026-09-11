@@ -149,6 +149,127 @@ class MjxVectorEnvTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_broken_nodes_are_per_environment_and_partial_reset_isolated(self):
+        cfg = mjx_cfg(
+            num_envs=8,
+            seed=17,
+            domain_randomization=True,
+            domain_randomization_params={
+                "length_scale": {"enabled": False},
+                "broken_nodes": {"enabled": True, "probability": 0.5}
+            },
+            graph_features={"node_roles": True},
+        )
+        env = make_env(cfg)
+        try:
+            observations = env.reset_many()
+            core = env.env
+            masks_before = core._broken_node_masks.clone()
+            base_active = torch.as_tensor(~core._base_passive_node_mask)
+
+            self.assertGreater(len({tuple(row.tolist()) for row in masks_before}), 1)
+            self.assertGreater(len({int(obs.action_mask.sum()) for obs in observations}), 1)
+            for env_idx, observation in enumerate(observations):
+                self.assertTrue(torch.equal(
+                    observation.action_mask.cpu(),
+                    base_active & ~masks_before[env_idx].cpu(),
+                ))
+                self.assertGreaterEqual(int(observation.action_mask.sum()), 1)
+
+            agent = GNNSAC(cfg)
+            selected_observations = observations[:2]
+            actions = agent.act_batch(selected_observations)
+            for observation, action in zip(selected_observations, actions):
+                self.assertEqual(action.shape, (observation.num_nodes, 1))
+                self.assertTrue(torch.equal(
+                    action[~observation.action_mask],
+                    torch.zeros_like(action[~observation.action_mask]),
+                ))
+            results = env.step_many(actions, env_indices=[0, 1])
+            next_observations = [result[0] for result in results]
+            next_actions = agent.act_batch(next_observations)
+            next_results = env.step_many(next_actions, env_indices=[0, 1])
+
+            buffer = GNNBuffer(cfg)
+            for env_idx in range(2):
+                first_info = results[env_idx][3]
+                second_info = next_results[env_idx][3]
+                buffer.add(
+                    [
+                        {
+                            "obs": selected_observations[env_idx],
+                            "action": torch.zeros_like(actions[env_idx]).unsqueeze(0),
+                            "reward": torch.tensor(0.0),
+                            "terminated": torch.tensor(0.0),
+                        },
+                        {
+                            "obs": next_observations[env_idx],
+                            "action": actions[env_idx].unsqueeze(0),
+                            "reward": results[env_idx][1],
+                            "terminated": first_info["terminated"],
+                        },
+                        {
+                            "obs": next_results[env_idx][0],
+                            "action": next_actions[env_idx].unsqueeze(0),
+                            "reward": next_results[env_idx][1],
+                            "terminated": second_info["terminated"],
+                        },
+                    ]
+                )
+            update_info = agent.update(buffer)
+            self.assertTrue(torch.isfinite(update_info["value_loss"]))
+            self.assertTrue(torch.isfinite(update_info["pi_loss"]))
+
+            reset_observation = env.reset_many(env_indices=[0])[0]
+            self.assertTrue(torch.equal(
+                core._broken_node_masks[1:], masks_before[1:]
+            ))
+            self.assertTrue(torch.equal(
+                reset_observation.action_mask.cpu(),
+                base_active & ~core._broken_node_masks[0].cpu(),
+            ))
+        finally:
+            env.close()
+
+    def test_mjx_broken_nodes_zero_commands_and_report_diagnostics(self):
+        cfg = mjx_cfg(
+            num_envs=1,
+            domain_randomization=True,
+            domain_randomization_params={
+                "length_scale": {"enabled": False},
+                "broken_nodes": {"enabled": True, "probability": 1.0}
+            },
+            graph_features={"node_roles": True},
+        )
+        env = make_env(cfg)
+        try:
+            observation = env.reset_many()[0]
+            action = torch.ones(env.action_space.shape, dtype=torch.float32)
+            next_observation, reward, _, info = env.step_many([action], [0])[0]
+
+            core = env.env
+            broken = core._broken_node_masks[0].cpu()
+            self.assertEqual(int(observation.action_mask.sum()), 1)
+            self.assertEqual(int(broken.sum()), int((~core._base_passive_node_mask).sum()) - 1)
+            self.assertTrue(torch.equal(next_observation.action_mask, observation.action_mask))
+            self.assertTrue(torch.equal(info["broken_node_mask"].cpu(), broken))
+            self.assertEqual(info["broken_node_count"], int(broken.sum()))
+
+            expected_nodes = observation.action_mask.to(torch.float32) * cfg.speed
+            expected_ctrl = core._jnp.clip(
+                core._core._incidence_matrix @ core._jnp.asarray(expected_nodes.numpy()),
+                core._core._ctrl_low,
+                core._core._ctrl_high,
+            )
+            actual_ctrl = core._state.data.ctrl[0, core._core._actuator_ids]
+            self.assertTrue(torch.allclose(
+                torch.tensor(core._jax.device_get(actual_ctrl).tolist()),
+                torch.tensor(core._jax.device_get(expected_ctrl).tolist()),
+            ))
+            self.assertTrue(torch.isfinite(reward))
+        finally:
+            env.close()
+
     def test_rejects_nonpositive_warp_capacities_before_upstream_construction(self):
         with self.assertRaisesRegex(ValueError, "warp_naconmax must be a positive integer"):
             make_env(mjx_cfg(mjx_impl="warp", warp_naconmax=0))
