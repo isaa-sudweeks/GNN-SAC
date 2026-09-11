@@ -23,6 +23,7 @@ class GNNSAC(torch.nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
+        self.distillation = None
         self.device = torch.device(getattr(cfg, "device", "cuda"))
         self.model = self._make_model(cfg).to(self.device)
         self._q_parameters = tuple(self.model._Qs.parameters())
@@ -254,8 +255,16 @@ class GNNSAC(torch.nn.Module):
         self.q_optim.step()
         return q_loss.detach(), q_grad_norm.detach()
 
-    def update_pi_and_alpha(self, obs):
+    def update_pi_and_alpha(self, obs, task_batches=None):
         pi_loss, info = self._pi_loss(obs)
+        distillation = getattr(self, "distillation", None)
+        if distillation is not None:
+            distillation.metrics["sac_actor_loss"] = pi_loss.detach()
+            if distillation.weight > 0:
+                if task_batches is None:
+                    raise ValueError("Distillation requires replay grouped by topology.")
+                losses = [self._teacher_loss(task, batch[0]) for task, batch in task_batches.items()]
+                pi_loss = pi_loss + distillation.weight * torch.stack(losses).mean()
         log_prob = info["log_prob"]
 
         self.pi_optim.zero_grad(set_to_none=True)
@@ -286,6 +295,20 @@ class GNNSAC(torch.nn.Module):
         action, info = self.model.pi(obs)
         q = self.model.Q(obs, action, return_type="min")
         return (self.alpha.detach() * info["log_prob"] - q).mean(), info
+
+    def _teacher_loss(self, task, obs):
+        loss = self.distillation.loss(self.model, task, obs)
+        self.distillation.metrics[f"kl/{task}"] = loss.detach()
+        return loss
+
+    def _task_pi_loss(self, task, obs):
+        loss, info = self._pi_loss(obs)
+        distillation = getattr(self, "distillation", None)
+        if distillation is not None:
+            distillation.metrics[f"sac_actor_loss/{task}"] = loss.detach()
+            if distillation.weight > 0:
+                loss = loss + distillation.weight * self._teacher_loss(task, obs)
+        return loss, info
 
     @staticmethod
     def _parameter_gradients(loss, parameters):
@@ -412,6 +435,8 @@ class GNNSAC(torch.nn.Module):
     def _gradient_diagnostics(self, task_batches):
         cpu_rng = torch.random.get_rng_state()
         cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        distillation = getattr(self, "distillation", None)
+        saved_metrics = dict(distillation.metrics) if distillation is not None else None
         try:
             gradients = {"critic": {}, "actor": {}}
             q_parameters = tuple(self.model._Qs.parameters())
@@ -422,12 +447,14 @@ class GNNSAC(torch.nn.Module):
                     self._q_loss(obs, action, reward, terminated, next_obs),
                     q_parameters,
                 )
-                pi_loss, _ = self._pi_loss(obs)
+                pi_loss, _ = self._task_pi_loss(task, obs)
                 gradients["actor"][task] = self._parameter_gradients(pi_loss, pi_parameters)
         finally:
             torch.random.set_rng_state(cpu_rng)
             if cuda_rng is not None:
                 torch.cuda.set_rng_state_all(cuda_rng)
+            if distillation is not None:
+                distillation.metrics = saved_metrics
 
         return self._gradient_metrics(gradients)
 
@@ -514,7 +541,7 @@ class GNNSAC(torch.nn.Module):
             performance_profiler, "pcgrad_actor_gradients"
         ):
             for task, batch in task_batches.items():
-                pi_loss, info = self._pi_loss(batch[0])
+                pi_loss, info = self._task_pi_loss(task, batch[0])
                 losses.append(pi_loss.detach())
                 log_probabilities.append(info["log_prob"].detach())
                 entropies.append(info["entropy"].detach().mean())
@@ -563,6 +590,10 @@ class GNNSAC(torch.nn.Module):
 
     def update(self, buffer, compute_diagnostics=False, performance_profiler=None):
         pcgrad_enabled = bool(getattr(self.cfg, "pcgrad", False))
+        distillation = getattr(self, "distillation", None)
+        needs_teachers = distillation is not None and distillation.weight > 0
+        if distillation is not None:
+            distillation.metrics = {}
         sampling_phase = (
             performance_profiler.phase("replay_sampling")
             if performance_profiler is not None
@@ -575,7 +606,7 @@ class GNNSAC(torch.nn.Module):
                         performance_profiler=performance_profiler
                     )
                     obs = action = reward = terminated = next_obs = None
-                elif compute_diagnostics:
+                elif compute_diagnostics or needs_teachers:
                     replay_batch = buffer.sample_with_tasks(
                         performance_profiler=performance_profiler
                     )
@@ -632,7 +663,10 @@ class GNNSAC(torch.nn.Module):
                     else None
                 )
                 q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
-                pi_info = self.update_pi_and_alpha(obs)
+                if needs_teachers:
+                    pi_info = self.update_pi_and_alpha(obs, task_batches=task_batches)
+                else:
+                    pi_info = self.update_pi_and_alpha(obs)
             with GNNSAC._optimization_subphase(
                 performance_profiler, "target_update"
             ):
@@ -644,6 +678,17 @@ class GNNSAC(torch.nn.Module):
             "q_grad_norm": q_grad_norm,
         }
         info.update(pi_info)
+        if distillation is not None:
+            metrics = distillation.metrics
+            kl_values = [value for key, value in metrics.items() if key.startswith("kl/")]
+            kl = torch.stack(kl_values).mean() if kl_values else torch.tensor(0.0)
+            sac_values = [value for key, value in metrics.items() if key.startswith("sac_actor_loss/")]
+            if sac_values:
+                metrics["sac_actor_loss"] = torch.stack(sac_values).mean()
+            metrics.update(kl=kl, weighted_kl=distillation.weight * kl,
+                           weight=distillation.weight, offline_updates=distillation.completed_updates,
+                           stage="online")
+            info.update({f"distillation/{key}": value for key, value in metrics.items()})
         if diagnostics is not None:
             info["gradient_diagnostics"] = diagnostics
         return info

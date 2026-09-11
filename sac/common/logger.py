@@ -45,6 +45,8 @@ CONSOLE_FORMAT = [
     ("episode_distance", "Dist", "float"),
     ("buffer_size", "Buf", "int"),
     ("optimizer_updates", "Upd", "int"),
+    ("offline_updates", "DUpd", "int"),
+    ("kl", "KL", "float"),
     ("elapsed_time", "T", "time"),
     ("steps_per_sec", "SPS", "float"),
 ]
@@ -55,6 +57,7 @@ CAT_TO_COLOR = {
     "training_rewards": "magenta",
     "gradient_diagnostics": "cyan",
     "profiling": "yellow",
+    "distillation": "cyan",
 }
 
 
@@ -252,7 +255,10 @@ class VideoRecorder:
             return
         frames = np.stack(self.frames)
         video = self._wandb.Video(frames.transpose(0, 3, 1, 2), fps=self.fps, format="mp4")
-        self._wandb.log({key: video}, step=step)
+        if _cfg_get(_cfg_get(self.cfg, "distillation", {}), "enabled", False):
+            self._wandb.log({key: video, "eval/step": step})
+        else:
+            self._wandb.log({key: video}, step=step)
 
 
 class NullVideoRecorder:
@@ -365,6 +371,13 @@ class Logger:
         else:
             print(colored("Logs will be synced with W&B.", "blue", attrs=["bold"]))
         self._wandb = wandb
+        if _cfg_get(_cfg_get(cfg, "distillation", {}), "enabled", False):
+            # Offline actor updates share environment step zero. Let W&B own
+            # its event counter and use explicit axes for each training stage.
+            for category in CAT_TO_COLOR:
+                axis = "offline_updates" if category == "distillation" else "step"
+                wandb.define_metric(f"{category}/{axis}")
+                wandb.define_metric(f"{category}/*", step_metric=f"{category}/{axis}")
 
     def _write_wandb_run_info(self) -> None:
         if not self._wandb_run_info.get("id"):
@@ -463,7 +476,10 @@ class Logger:
                 f"{category}/{key}": value
                 for key, value in clean_metrics.items()
             }
-            self._wandb.log(wandb_metrics, step=step)
+            if _cfg_get(_cfg_get(self.cfg, "distillation", {}), "enabled", False):
+                self._wandb.log(wandb_metrics)
+            else:
+                self._wandb.log(wandb_metrics, step=step)
 
         if category == "eval":
             self._write_eval_csv(clean_metrics)

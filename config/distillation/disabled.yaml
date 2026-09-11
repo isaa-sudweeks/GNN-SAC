@@ -1,0 +1,15 @@
+enabled: false
+teachers: {} # Mapping from training topology name to full trainer checkpoint.
+pretrain_updates: 0 # Separate from SAC pretrain_steps on seed data.
+batch_size: 256 # Observations per topology per offline optimizer update.
+initial_weight: 1.0
+decay_steps: null # Null resolves to decay_fraction * online steps.
+decay_fraction: 0.5
+checkpoint_freq: 1000 # Offline updates; 0 disables offline checkpoints.
+log_freq: 100
+cache_dir: null # Null uses work_dir/distillation_cache; set to share across runs.
+# Number of saved graph observations per on-disk cache file (not nodes or batches).
+# Offline sampling loads one file into CPU RAM, then draws batch_size observations
+# from it. Larger files use more RAM and offer more within-batch state diversity;
+# smaller files reduce each disk read. All replay observations remain eligible.
+shard_size: 4096

@@ -101,6 +101,9 @@ class Trainer:
             "config": self._config_state_dict(),
         }
         reward_normalizer = getattr(self, "reward_normalizer", None)
+        distillation = getattr(self, "distillation", None)
+        if distillation is not None:
+            state["distillation"] = distillation.state_dict()
         if reward_normalizer is not None:
             state["reward_normalizer"] = reward_normalizer.state_dict()
         return state
@@ -142,11 +145,21 @@ class Trainer:
             snapshot["reward_normalizer"] = self._snapshot_checkpoint_value(
                 state_dict["reward_normalizer"]
             )
+        if "distillation" in state_dict:
+            snapshot["distillation"] = self._snapshot_checkpoint_value(state_dict["distillation"])
         return snapshot
 
     def load_checkpoint_state_dict(self, state_dict):
+        distillation = getattr(self, "distillation", None)
+        saved_distillation = state_dict.get("distillation")
+        if (distillation is None) != (saved_distillation is None):
+            raise ValueError("Resume requires the same distillation mode as the checkpoint.")
+        if distillation is not None:
+            distillation.load_state_dict(saved_distillation)
         trainer_state = state_dict.get("trainer", {})
         self._step = int(trainer_state.get("step", 0))
+        if distillation is not None:
+            distillation.step = self._step
         self._ep_idx = int(trainer_state.get("episode", 0))
         self._best_eval_metrics = trainer_state.get("best_eval_metrics")
         self.agent.load_training_state_dict(state_dict["agent"])

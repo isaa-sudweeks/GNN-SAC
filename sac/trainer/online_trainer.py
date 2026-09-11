@@ -126,7 +126,30 @@ class OnlineTrainer(Trainer):
                         topology: env_idx for env_idx, topology in enumerate(eval_topologies)
                     }
             
+        from common.distillation import Distillation, enabled
+
+        self.distillation = None
+        if enabled(self.cfg):
+            self.distillation = Distillation(self.cfg, self.buffer.task_names)
+            self.agent.distillation = self.distillation
         self.maybe_load_checkpoint()
+
+    def _run_distillation_pretraining(self):
+        distillation = getattr(self, "distillation", None)
+        if distillation is None or distillation.stage != "offline":
+            return
+        while distillation.completed_updates < distillation.pretrain_updates:
+            metrics = distillation.offline_update(self.agent)
+            if distillation.completed_updates % distillation.log_freq == 0 or distillation.completed_updates == 1:
+                self.logger.log({"step": self._step, **metrics}, "distillation")
+            if distillation.checkpoint_freq and distillation.completed_updates % distillation.checkpoint_freq == 0:
+                self.save_checkpoint(identifier="distillation")
+        distillation.finish_pretraining(self.agent)
+        self.logger.log({"step": self._step, "stage": "online",
+                         "offline_updates": distillation.completed_updates}, "distillation")
+        self.eval()
+        if distillation.checkpoint_freq:
+            self.save_checkpoint(identifier="distillation")
 
     def _make_reward_normalizer(self):
         if not bool(getattr(self.cfg, "normalize_rewards", False)):
@@ -418,6 +441,9 @@ class OnlineTrainer(Trainer):
 
     def _run_agent_updates(self, num_updates):
         self._ensure_performance_profiler()
+        distillation = getattr(self, "distillation", None)
+        if distillation is not None:
+            distillation.step = self._step
         update_metrics = {}
         for _ in range(int(num_updates)):
             next_update = self._optimizer_updates + 1
@@ -713,6 +739,7 @@ class OnlineTrainer(Trainer):
         """
         Train the SAC agent.
         """
+        self._run_distillation_pretraining()
         self._ensure_performance_profiler()
         num_envs = int(getattr(self.env, "num_envs", getattr(self.cfg, "num_envs", 1)))
         if num_envs > 1:
@@ -725,7 +752,9 @@ class OnlineTrainer(Trainer):
             updates_before_step = self._optimizer_updates
             inserted_transitions = 0
             # Evaluate agent periodically 
-            if self._step % self.cfg.eval_freq == 0:
+            if self._step % self.cfg.eval_freq == 0 and not (
+                getattr(self, "distillation", None) is not None and self._last_eval_step == self._step
+            ):
                 eval_next = True 
             
             # Reset environment
@@ -839,7 +868,9 @@ class OnlineTrainer(Trainer):
             self.performance_profiler.begin_vector_step(global_step=self._step)
             updates_before_step = self._optimizer_updates
             inserted_transitions = 0
-            if self._step % self.cfg.eval_freq == 0:
+            if self._step % self.cfg.eval_freq == 0 and not (
+                getattr(self, "distillation", None) is not None and self._last_eval_step == self._step
+            ):
                 eval_next = True
 
             done_indices = [env_idx for env_idx, is_done in enumerate(done) if is_done]
