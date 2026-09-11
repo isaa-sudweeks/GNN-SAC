@@ -8,6 +8,7 @@ import torch
 from gymnasium import spaces
 
 from env.mujoco_gen.topology_envs import (
+    _broken_nodes_probability,
     _edge_roles_enabled,
     _semantic_edge_roles,
     make_truss_env_config,
@@ -49,6 +50,7 @@ class MjxVectorGraphEnv(gym.Env):
         self.cfg = cfg
         self.task = str(getattr(cfg, "task", "truss-graph"))
         self.topology = resolve_truss_topology(cfg)
+        self._broken_node_probability = _broken_nodes_probability(cfg)
         self.num_envs = int(getattr(cfg, "num_envs", 1))
         if self.num_envs < 1:
             raise ValueError("num_envs must be at least one.")
@@ -90,9 +92,18 @@ class MjxVectorGraphEnv(gym.Env):
             )
             if is_passive
         ]
-        self._action_mask = torch.as_tensor(
-            ~np.asarray(self._core._controller.passive_node_mask, dtype=bool)
-        )
+        self._base_passive_node_mask = np.asarray(
+            self._core._controller.passive_node_mask, dtype=bool
+        ).copy()
+        if (
+            self._broken_node_probability is not None
+            and not np.any(~self._base_passive_node_mask)
+        ):
+            raise ValueError(
+                "Broken-node domain randomization requires at least one originally "
+                "active control node."
+            )
+        self._action_mask = torch.as_tensor(~self._base_passive_node_mask)
         self.num_external_actuators = int(len(self.mj_model.external_actuator_ids))
 
         node_count = int(self._core.action_size)
@@ -143,6 +154,12 @@ class MjxVectorGraphEnv(gym.Env):
 
         seed = int(getattr(cfg, "seed", 0))
         self._key = jax.random.key(seed)
+        self._broken_node_rng = np.random.default_rng(seed)
+        self._broken_node_masks = torch.zeros(
+            (self.num_envs, node_count),
+            dtype=torch.bool,
+            device=self.action_device,
+        )
         self._state = None
         self.active_env_idx = 0
         self._reset_compiled = jax.jit(self._core.reset)
@@ -201,6 +218,7 @@ class MjxVectorGraphEnv(gym.Env):
         else:
             mask = self._index_mask(indices)
             flat_obs, self._state = self._reset_where_compiled(keys, self._state, mask)
+        self._sample_broken_nodes(indices)
         rigidity = self._rigidity_compiled(self._state.data)
         return self._graph_observations(flat_obs, indices, rigidity)
 
@@ -231,6 +249,7 @@ class MjxVectorGraphEnv(gym.Env):
             full_actions[env_idx] = action_tensor.reshape(-1)
 
         normalized_actions = full_actions.clamp(-1.0, 1.0)
+        normalized_actions.masked_fill_(self._broken_node_masks, 0.0)
         physical_actions = normalized_actions * self.speed
         jax_actions = self._jnp.from_dlpack(physical_actions.contiguous())
         keys = self._next_keys()
@@ -256,6 +275,11 @@ class MjxVectorGraphEnv(gym.Env):
             env_info["task"] = self.task
             env_info["env_idx"] = env_idx
             env_info["success"] = float(env_info.get("success", 0.0))
+            if self._broken_node_probability is not None:
+                env_info["broken_node_mask"] = self._broken_node_masks[env_idx].clone()
+                env_info["broken_node_count"] = int(
+                    self._broken_node_masks[env_idx].sum().item()
+                )
             results.append(
                 (
                     observations[result_idx],
@@ -308,7 +332,10 @@ class MjxVectorGraphEnv(gym.Env):
             {
                 "x": features[env_idx],
                 "edge_index": self._edge_index,
-                "action_mask": self._action_mask,
+                "action_mask": (
+                    self._action_mask.to(self._broken_node_masks.device)
+                    & ~self._broken_node_masks[env_idx]
+                ).clone(),
                 "rigidity": rigidity[env_idx].reshape(1),
             }
             for env_idx in indices
@@ -317,6 +344,26 @@ class MjxVectorGraphEnv(gym.Env):
             for observation in observations:
                 observation["edge_role"] = self._edge_role
         return observations
+
+    def _sample_broken_nodes(self, indices: Sequence[int]) -> None:
+        if self._broken_node_probability is None:
+            self._broken_node_masks[indices] = False
+            return
+
+        eligible_indices = np.flatnonzero(~self._base_passive_node_mask)
+        probability = self._broken_node_probability
+        for env_idx in indices:
+            broken = np.zeros_like(self._base_passive_node_mask)
+            if probability > 0.0:
+                broken[eligible_indices] = (
+                    self._broken_node_rng.random(eligible_indices.size) < probability
+                )
+                if np.all(broken[eligible_indices]):
+                    restored_index = int(self._broken_node_rng.choice(eligible_indices))
+                    broken[restored_index] = False
+            self._broken_node_masks[env_idx] = torch.as_tensor(
+                broken, dtype=torch.bool, device=self._broken_node_masks.device
+            )
 
     def _to_torch(self, value) -> torch.Tensor:
         return torch.utils.dlpack.from_dlpack(value)
