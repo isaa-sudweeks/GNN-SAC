@@ -255,7 +255,7 @@ class GNNSAC(torch.nn.Module):
         self.q_optim.step()
         return q_loss.detach(), q_grad_norm.detach()
 
-    def update_pi_and_alpha(self, obs, task_batches=None):
+    def update_pi_and_alpha(self, obs, task_batches=None, performance_profiler=None):
         pi_loss, info = self._pi_loss(obs)
         distillation = getattr(self, "distillation", None)
         if distillation is not None:
@@ -263,7 +263,12 @@ class GNNSAC(torch.nn.Module):
             if distillation.weight > 0:
                 if task_batches is None:
                     raise ValueError("Distillation requires replay grouped by topology.")
-                losses = [self._teacher_loss(task, batch[0]) for task, batch in task_batches.items()]
+                losses = [
+                    self._teacher_loss(
+                        task, batch[0], performance_profiler=performance_profiler
+                    )
+                    for task, batch in task_batches.items()
+                ]
                 pi_loss = pi_loss + distillation.weight * torch.stack(losses).mean()
         log_prob = info["log_prob"]
 
@@ -296,18 +301,21 @@ class GNNSAC(torch.nn.Module):
         q = self.model.Q(obs, action, return_type="min")
         return (self.alpha.detach() * info["log_prob"] - q).mean(), info
 
-    def _teacher_loss(self, task, obs):
-        loss = self.distillation.loss(self.model, task, obs)
+    def _teacher_loss(self, task, obs, performance_profiler=None):
+        with self._optimization_subphase(performance_profiler, "distillation_kl"):
+            loss = self.distillation.loss(self.model, task, obs)
         self.distillation.metrics[f"kl/{task}"] = loss.detach()
         return loss
 
-    def _task_pi_loss(self, task, obs):
+    def _task_pi_loss(self, task, obs, performance_profiler=None):
         loss, info = self._pi_loss(obs)
         distillation = getattr(self, "distillation", None)
         if distillation is not None:
             distillation.metrics[f"sac_actor_loss/{task}"] = loss.detach()
             if distillation.weight > 0:
-                loss = loss + distillation.weight * self._teacher_loss(task, obs)
+                loss = loss + distillation.weight * self._teacher_loss(
+                    task, obs, performance_profiler=performance_profiler
+                )
         return loss, info
 
     @staticmethod
@@ -541,7 +549,9 @@ class GNNSAC(torch.nn.Module):
             performance_profiler, "pcgrad_actor_gradients"
         ):
             for task, batch in task_batches.items():
-                pi_loss, info = self._task_pi_loss(task, batch[0])
+                pi_loss, info = self._task_pi_loss(
+                    task, batch[0], performance_profiler=performance_profiler
+                )
                 losses.append(pi_loss.detach())
                 log_probabilities.append(info["log_prob"].detach())
                 entropies.append(info["entropy"].detach().mean())
@@ -664,7 +674,11 @@ class GNNSAC(torch.nn.Module):
                 )
                 q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
                 if needs_teachers:
-                    pi_info = self.update_pi_and_alpha(obs, task_batches=task_batches)
+                    pi_info = self.update_pi_and_alpha(
+                        obs,
+                        task_batches=task_batches,
+                        performance_profiler=performance_profiler,
+                    )
                 else:
                     pi_info = self.update_pi_and_alpha(obs)
             with GNNSAC._optimization_subphase(

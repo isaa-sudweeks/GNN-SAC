@@ -1,4 +1,5 @@
 from copy import deepcopy
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -13,9 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "sac"))
 
 from common.distillation import (
-    Distillation, ObservationShards, gaussian_forward_kl, graph_mean_kl,
+    TARGET_CACHE_FORMAT, Distillation, ObservationShards, gaussian_forward_kl, graph_mean_kl,
     graph_signature, replay_observations,
 )
+from common.gnn_actor_critic import GNNActorCritic
 from common.gnn_buffer import GNNBuffer
 from common.graph_transforms import prepare_graph
 from common.logger import Logger
@@ -51,6 +53,15 @@ def teacher_checkpoint(directory, topology, nodes, **overrides):
                  multitask=False, tasks=["truss-graph"], **overrides)
     agent = GNNSAC(cfg)
     observations = [raw_graph(nodes) for _ in range(5)]
+    features = getattr(cfg, "graph_features", {})
+    edge_roles = features.get("edge_roles", False) if hasattr(features, "get") else False
+    for index, observation in enumerate(observations):
+        # Exercise dynamic node-derived edge features across cache entries.
+        observation.x.mul_(1.0 + 0.1 * index)
+        if edge_roles:
+            observation.edge_role = torch.arange(
+                observation.edge_index.size(1), dtype=torch.long
+            ).remainder(2)
     replay = dict(capacity=5, size=5, idx=2, obs=observations)
     path = Path(directory) / f"{topology}.pt"
     torch.save(dict(config=vars(cfg), agent=agent.training_state_dict(), buffer=replay), path)
@@ -147,17 +158,46 @@ class TeacherReplayTest(unittest.TestCase):
         full = dict(capacity=5, size=5, idx=2, obs=values)
         self.assertEqual([int(g.x[0, 0]) for g in replay_observations(full)], [2, 3, 4, 0, 1])
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "shards"
-            dataset = ObservationShards.prepare(path, replay_observations(full), 2, graph_signature(values[0]))
+            cfg = config(tmp)
+            teacher = GNNSAC(cfg).model.eval()
+            prepare = lambda value: prepare_graph(value, use_virtual_node=True)
+            contract = {
+                "format": TARGET_CACHE_FORMAT,
+                "replay_signature": graph_signature(values[0]),
+                "prepared_signature": graph_signature(prepare(values[0])),
+            }
+            path = Path(tmp) / "target-shards"
+            dataset = ObservationShards.prepare(
+                path, replay_observations(full), 2, contract, teacher, prepare,
+                torch.device("cpu"), 2, prefetch=False,
+            )
             self.assertEqual(dataset.sizes.tolist(), [2, 2, 1])
             rng = torch.Generator().manual_seed(5)
             counts = torch.zeros(5)
             for _ in range(1000):
-                for value in dataset.sample(4, rng):
-                    counts[int(value.x[0, 0])] += 1
+                batch, _, _ = dataset.sample(4, rng)
+                for value in batch.x[::4, 0]:
+                    counts[int(value)] += 1
             self.assertTrue((counts > 600).all(), counts)
             self.assertTrue((counts < 1000).all(), counts)
-            self.assertEqual(ObservationShards.prepare(path, iter(()), 2, {}).sizes.tolist(), [2, 2, 1])
+            self.assertEqual(
+                ObservationShards.prepare(
+                    path, iter(()), 2, contract, teacher, prepare,
+                    torch.device("cpu"), 2, prefetch=False,
+                ).sizes.tolist(),
+                [2, 2, 1],
+            )
+            changed = deepcopy(contract)
+            changed["prepared_signature"] = graph_signature(prepare(raw_graph(4)))
+            with self.assertRaisesRegex(ValueError, "schema|signature"):
+                ObservationShards(
+                    path, changed, prefetch=False,
+                )
+            old = Path(tmp) / "observation-only"
+            old.mkdir()
+            (old / "manifest.json").write_text(json.dumps({"sizes": [1], "signature": {}}))
+            with self.assertRaisesRegex(ValueError, "teacher-target"):
+                ObservationShards(old, contract, prefetch=False)
         with self.assertRaises(ValueError):
             list(replay_observations(dict(full, size=0)))
 
@@ -166,12 +206,30 @@ class TeacherReplayTest(unittest.TestCase):
             cfg, distill = setup(tmp)
             self.assertEqual(set(distill.teachers), set(cfg.tasks))
             self.assertTrue(all(not p.requires_grad for t in distill.teachers.values() for p in t.parameters()))
+            self.assertTrue(all(not t.training for t in distill.teachers.values()))
+            self.assertTrue(all(
+                p.device == torch.device(cfg.device)
+                for teacher in distill.teachers.values()
+                for p in teacher.parameters()
+            ))
             agent = GNNSAC(cfg)
             obs = Batch.from_data_list([distill.prepare(raw_graph(3))])
-            distill.loss(agent.model, cfg.tasks[0], obs).backward()
+            teacher = distill.teachers[cfg.tasks[0]]
+            with patch.object(teacher, "to", side_effect=AssertionError("teacher moved in hot loop")), \
+                    patch("common.distillation.graph_signature",
+                          side_effect=AssertionError("signature checked in hot loop")):
+                distill.loss(agent.model, cfg.tasks[0], obs).backward()
             self.assertTrue(all(p.grad is None for t in distill.teachers.values() for p in t.parameters()))
-            with self.assertRaisesRegex(ValueError, "ordering"):
-                distill.loss(agent.model, cfg.tasks[1], obs)
+            optimizer_ids = {
+                id(parameter)
+                for group in agent.pi_optim.param_groups
+                for parameter in group["params"]
+            }
+            self.assertTrue(all(
+                id(parameter) not in optimizer_ids
+                for teacher in distill.teachers.values()
+                for parameter in teacher.parameters()
+            ))
             with self.assertRaisesRegex(ValueError, "Missing"):
                 Distillation(cfg, ["truss-graph:missing"])
             cfg.obs_dim = 4
@@ -192,8 +250,86 @@ class TeacherReplayTest(unittest.TestCase):
                     Distillation(cfg, cfg.tasks)
             torch.save(original, path)
 
+    def test_online_replay_validates_teacher_structure_at_write_and_load_boundaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, distill = setup(tmp)
+            buffer = GNNBuffer(cfg)
+            distill.bind_replay(buffer)
+            bad = raw_graph(3)
+            item = dict(obs=bad, action=torch.zeros(3, 1), reward=torch.tensor(0.),
+                        terminated=torch.tensor(False))
+            with self.assertRaisesRegex(ValueError, "ordering"):
+                buffer.add([item] * 2, task=cfg.tasks[1])
+
+            valid = replay_buffer(cfg)
+            state = valid.state_dict()
+            state["buffers"][cfg.tasks[1]]["obs"][0] = raw_graph(3)
+            empty = GNNBuffer(cfg)
+            distill.bind_replay(empty)
+            with self.assertRaisesRegex(ValueError, "ordering"):
+                empty.load_state_dict(state)
+
 
 class DistillationTrainingTest(unittest.TestCase):
+    def test_cached_targets_match_live_teacher_with_all_graph_features(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            features = dict(node_roles=True, edge_roles=True, edge_distance=True)
+            cfg = config(tmp, graph_features=features)
+            cfg.distillation["teachers"] = {
+                topology: teacher_checkpoint(
+                    tmp,
+                    topology,
+                    nodes,
+                    embedding_dim=embedding_dim,
+                    graph_features=features,
+                )
+                for topology, nodes, embedding_dim in (("a", 3, 8), ("b", 5, 12))
+            }
+            distill = Distillation(cfg, cfg.tasks)
+            for task, dataset in distill.datasets.items():
+                batch, cached_mean, cached_log_std = dataset.resolve(
+                    {"shard": 0, "indices": [0, 1]}, torch.device("cpu")
+                )
+                with torch.no_grad():
+                    live_mean, live_log_std = distill.teachers[task].policy_distribution(batch)
+                torch.testing.assert_close(cached_mean, live_mean, rtol=0, atol=0)
+                torch.testing.assert_close(cached_log_std, live_log_std, rtol=0, atol=0)
+                self.assertTrue((cached_log_std >= cfg.log_std_min).all())
+                self.assertTrue((cached_log_std <= cfg.log_std_max).all())
+                self.assertIsNotNone(batch.edge_attr)
+                self.assertGreater(batch.edge_attr.size(1), 0)
+            for dataset in distill.datasets.values():
+                dataset.close()
+
+    def test_target_cache_reuse_and_offline_updates_are_student_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, first = setup(tmp)
+            cache_paths = {task: dataset.directory for task, dataset in first.datasets.items()}
+            manifests = {task: (path / "manifest.json").stat().st_mtime_ns
+                         for task, path in cache_paths.items()}
+            for dataset in first.datasets.values():
+                dataset.close()
+            with patch.object(GNNActorCritic, "policy_distribution",
+                              side_effect=AssertionError("teacher target cache recomputed")):
+                reused = Distillation(cfg, cfg.tasks)
+            self.assertEqual(
+                {task: dataset.directory for task, dataset in reused.datasets.items()}, cache_paths
+            )
+            self.assertEqual(
+                {task: (path / "manifest.json").stat().st_mtime_ns for task, path in cache_paths.items()},
+                manifests,
+            )
+            agent = GNNSAC(cfg)
+            for teacher in reused.teachers.values():
+                teacher.policy_distribution = Mock(side_effect=AssertionError("teacher called offline"))
+            reused.offline_update(agent)
+            self.assertTrue(all(not teacher.policy_distribution.called
+                                for teacher in reused.teachers.values()))
+            datasets = list(reused.datasets.values())
+            reused.pretrain_updates = reused.completed_updates
+            reused.finish_pretraining(agent)
+            self.assertTrue(all(dataset._executor is None for dataset in datasets))
+
     def test_online_only_skips_shards_and_optimizer_reset(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, _ = setup(tmp)
@@ -256,7 +392,8 @@ class DistillationTrainingTest(unittest.TestCase):
             expected = distill.offline_update(agent)
             restored = GNNSAC(cfg)
             resumed = Trainer(cfg=cfg, env=None, agent=restored, buffer=GNNBuffer(cfg), logger=DummyLogger())
-            resumed.distillation = Distillation(cfg, cfg.tasks)
+            resumed.distillation = Distillation(cfg, cfg.tasks, defer_target_cache=True)
+            self.assertFalse(resumed.distillation.datasets)
             resumed.load_checkpoint_state_dict(snapshot)
             actual = resumed.distillation.offline_update(restored)
             self.assertEqual(actual, expected)
@@ -267,6 +404,48 @@ class DistillationTrainingTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "changed"):
                 resumed.distillation.load_state_dict(changed)
 
+    def test_resume_allows_cache_performance_setting_changes_and_legacy_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, distill = setup(tmp)
+            state = distill.state_dict()
+            state["settings"].update(
+                target_batch_size=123,
+                pin_memory=False,
+                prefetch=False,
+                target_cache_format="newer-checkpoint-metadata",
+            )
+            cfg.distillation.update(target_batch_size=1, pin_memory=False, prefetch=False)
+            restored = Distillation(cfg, cfg.tasks)
+            restored.load_state_dict(state)
+            self.assertEqual(restored.completed_updates, distill.completed_updates)
+
+            legacy = deepcopy(state)
+            for key in ("target_batch_size", "pin_memory", "prefetch", "target_cache_format"):
+                legacy["settings"].pop(key, None)
+            legacy.pop("pending_samples", None)
+            restored.load_state_dict(legacy)
+
+    def test_online_resume_skips_missing_target_cache_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, distill = setup(tmp)
+            agent = GNNSAC(cfg)
+            distill.completed_updates = distill.pretrain_updates
+            distill.finish_pretraining(agent)
+            online_state = distill.state_dict()
+
+            cfg.distillation["cache_dir"] = str(Path(tmp) / "missing-target-cache")
+            deferred = Distillation(cfg, cfg.tasks, defer_target_cache=True)
+            self.assertFalse(deferred.datasets)
+            deferred.load_state_dict(online_state)
+            with patch.object(
+                ObservationShards,
+                "prepare",
+                side_effect=AssertionError("online resume rebuilt target cache"),
+            ):
+                deferred.prepare_offline_datasets()
+            self.assertEqual(deferred.stage, "online")
+            self.assertFalse(deferred.datasets)
+
     def test_online_ordinary_and_pcgrad_and_zero_weight_equivalence(self):
         for pcgrad in (False, True):
             with self.subTest(pcgrad=pcgrad), tempfile.TemporaryDirectory() as tmp:
@@ -274,6 +453,7 @@ class DistillationTrainingTest(unittest.TestCase):
                 agent = GNNSAC(cfg)
                 agent.distillation = distill
                 buffer = replay_buffer(cfg)
+                distill.bind_replay(buffer)
                 info = agent.update(buffer, compute_diagnostics=True)
                 self.assertGreater(float(info["distillation/kl"]), 0)
                 torch.testing.assert_close(info["pi_loss"].double(),
