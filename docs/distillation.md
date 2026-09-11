@@ -16,7 +16,7 @@ mapping entries, including held-out teachers, are never opened.
 python sac/gnn_train.py distillation=kl \
   'truss_topologies=[tetrahedron,octahedron]' \
   '+distillation.teachers={tetrahedron:/path/to/tetrahedron/checkpoints/latest.pt,octahedron:/path/to/octahedron/checkpoints/latest.pt}' \
-  distillation.cache_dir=/path/to/observation-cache
+  distillation.cache_dir=/path/to/target-cache
 ```
 
 For cross-validation, use the existing `cross_validation` overrides **instead
@@ -71,6 +71,8 @@ on stored observations, not historical actions. All valid observations in each
 replay remain eligible, including wrapped ring buffers. Only actor weights and
 the actor optimizer change. Adam moments are cleared once when offline training
 finishes; actor weights are retained. Evaluation runs immediately afterward.
+Teacher Gaussian means and bounded log standard deviations are computed once
+while creating the cache. Offline optimizer updates then run only the student.
 
 Online actor optimization adds `lambda * KL` on student replay observations,
 with the appropriate frozen teacher for each topology. PCGrad combines SAC and
@@ -81,17 +83,29 @@ updates retain their SAC objectives. At zero weight, teacher forward passes stop
 
 Teacher checkpoints are read sequentially on CPU. The first extraction still
 requires enough RAM to deserialize **one full checkpoint**, including its replay.
-Observation-only shards avoid retaining every teacher's full transition buffer.
+Versioned tensor shards store prepared observations plus teacher distribution
+targets without retaining every teacher's full transition buffer.
 The default cache is `work_dir/distillation_cache`; set `cache_dir` explicitly to
-reuse it across runs. Cache directories include checkpoint SHA-256 and shard size.
-Keep this generated cache outside version control.
+reuse it across student runs. Cache directories and manifests include the
+checkpoint SHA-256, cache schema, graph-feature/topology contract, and shard size;
+old observation-only caches cannot be loaded as target caches. Keep this generated
+cache outside version control.
 
 Offline sampling selects a shard proportional to its observation count, then
 samples the minibatch uniformly inside that shard. Every observation has equal
-marginal probability; observations within a batch share a shard. Only one shard
-per topology is resident. Topology losses are accumulated sequentially into one
-actor update. Frozen policies live on CPU and are transferred one at a time for
-inference, trading transfer overhead for bounded accelerator memory.
+marginal probability; observations within a batch share a shard. The current and
+at most one prefetched shard per topology are resident. The prefetched sample
+indices are checkpointed with the sampler RNG, preserving exact offline resume.
+`target_batch_size` bounds accelerator memory while creating a missing cache;
+`shard_size` bounds each resident CPU tensor shard. With CUDA, `pin_memory=true`
+uses pinned sampled tensors and non-blocking transfers. Set `prefetch=false` or
+`pin_memory=false` for synchronous/diagnostic operation. Topology losses are
+accumulated sequentially into one actor update. Frozen policies remain on the
+training device for online KL; offline updates do not invoke them after caching.
+The cache-build batch size, pinning, and prefetch options may change when resuming;
+they do not alter the saved optimizer/sampler contract.
+For focused online profiling, enable `profiling.optimization_subphases`; teacher
+and student KL work is reported as the `distillation_kl` optimization subphase.
 
 Offline checkpoints use `distillation.pt` and also update `latest.pt` and the
 agent-only sidecars. `distillation.checkpoint_freq` is measured in offline updates

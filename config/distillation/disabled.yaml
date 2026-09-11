@@ -8,8 +8,13 @@ decay_fraction: 0.5
 checkpoint_freq: 1000 # Offline updates; 0 disables offline checkpoints.
 log_freq: 100
 cache_dir: null # Null uses work_dir/distillation_cache; set to share across runs.
-# Number of saved graph observations per on-disk cache file (not nodes or batches).
-# Offline sampling loads one file into CPU RAM, then draws batch_size observations
-# from it. Larger files use more RAM and offer more within-batch state diversity;
-# smaller files reduce each disk read. All replay observations remain eligible.
+# Number of prepared observations plus teacher targets per on-disk tensor shard.
+# At most the current and one prefetched shard per topology are resident in RAM.
 shard_size: 4096
+# Graphs per teacher forward pass while building a missing target cache. This
+# changes preprocessing memory/throughput, not the optimizer batch/update budget.
+target_batch_size: 256
+# Pin sampled CPU tensors and use non-blocking CUDA copies when CUDA is available.
+pin_memory: true
+# Load the checkpointed one-batch lookahead on a bounded background worker.
+prefetch: true

@@ -192,3 +192,15 @@ def policy_action_mask(graph: Data) -> torch.Tensor:
     if mask is None:
         return physical_node_mask(graph)
     return mask.bool()
+
+
+def graph_structure_signature(graph: Data) -> dict:
+    """Return the topology and policy action-order contract for one graph."""
+    mask = policy_action_mask(graph)
+    if mask.ndim != 1 or mask.numel() != graph.x.size(0) or not mask.any():
+        raise ValueError("Invalid teacher action mask.")
+    return {
+        "shape": list(graph.x.shape),
+        "edges": graph.edge_index.detach().cpu().tolist(),
+        "mask": mask.detach().cpu().tolist(),
+    }

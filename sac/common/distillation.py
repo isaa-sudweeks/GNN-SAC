@@ -1,10 +1,11 @@
-"""Frozen topology teachers, observation shards, and forward Gaussian KL."""
+"""Frozen topology teachers, target tensor shards, and forward Gaussian KL."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import math
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -15,7 +16,9 @@ from torch_geometric.nn import global_mean_pool
 
 from common.gnn_actor_critic import GNNActorCritic
 from common.graph_transforms import (
-    graph_feature_flags, graph_feature_schema, policy_action_mask, prepare_graph,
+    graph_feature_flags, graph_feature_schema,
+    graph_structure_signature as graph_signature,
+    policy_action_mask, prepare_graph,
 )
 
 
@@ -46,12 +49,21 @@ def gaussian_forward_kl(teacher_mean: torch.Tensor, teacher_log_std: torch.Tenso
 def graph_mean_kl(kl: torch.Tensor, obs: Data) -> torch.Tensor:
     """Sum coordinates, average active nodes per graph, then average graphs."""
     mask = policy_action_mask(obs)
-    if kl.ndim != 2 or kl.size(0) != int(mask.sum()):
+    cached_action_count = getattr(obs, "_policy_action_count_cache", None)
+    action_count = (
+        int(cached_action_count)
+        if cached_action_count is not None
+        else int(mask.sum())
+    )
+    if kl.ndim != 2 or kl.size(0) != action_count:
         raise ValueError("KL rows do not match the graph action mask.")
     batch = getattr(obs, "batch", None)
     graph_count = int(obs.num_graphs) if batch is not None else 1
     ids = batch[mask] if batch is not None else mask.new_zeros(int(mask.sum()), dtype=torch.long)
-    if torch.bincount(ids, minlength=graph_count).eq(0).any():
+    # Replay/cache construction already validates one or more active actions per
+    # graph. Preserve the standalone helper's defensive check without forcing a
+    # CUDA synchronization in every online/offline distillation loss.
+    if cached_action_count is None and torch.bincount(ids, minlength=graph_count).eq(0).any():
         raise ValueError("Distillation requires at least one active node per graph.")
     return global_mean_pool(kl.sum(-1, keepdim=True), ids, size=graph_count).mean()
 
@@ -72,79 +84,198 @@ def replay_observations(replay: dict):
         yield graph
 
 
-def graph_signature(graph: Data) -> dict:
-    """Structural action-order contract; excludes changing node/edge features."""
-    mask = policy_action_mask(graph)
-    if mask.ndim != 1 or mask.numel() != graph.x.size(0) or not mask.any():
-        raise ValueError("Invalid teacher action mask.")
-    return {
-        "shape": list(graph.x.shape),
-        "edges": graph.edge_index.detach().cpu().tolist(),
-        "mask": mask.detach().cpu().tolist(),
-    }
+TARGET_CACHE_FORMAT = "gnn-sac-distillation-targets-v2"
 
 
 class ObservationShards:
-    """Uniform marginal observation sampling with one resident CPU shard.
+    """Versioned prepared-observation/teacher-target tensor shards.
 
     Select a shard proportional to its size, then draw a minibatch uniformly
-    inside it. This gives an unbiased loss over the entire replay without
-    deserializing hundreds of shards for each minibatch.
+    inside it. At most the current and one prefetched shard are resident. Sample
+    specifications are separate from loading so lookahead remains checkpointable.
     """
 
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path, expected_contract: dict,
+                 *, pin_memory: bool = False, prefetch: bool = True):
         self.directory = directory
         self.metadata = json.loads((directory / "manifest.json").read_text())
+        if self.metadata.get("format") != TARGET_CACHE_FORMAT:
+            raise ValueError("Cached distillation data is not a compatible teacher-target cache.")
+        if self.metadata.get("contract") != expected_contract:
+            raise ValueError("Cached teacher targets have a changed schema or topology signature.")
         self.sizes = torch.tensor(self.metadata["sizes"], dtype=torch.long)
         if not len(self.sizes) or (self.sizes <= 0).any():
-            raise ValueError("Invalid observation shard manifest.")
+            raise ValueError("Invalid teacher-target shard manifest.")
+        self.static = torch.load(directory / "static.pt", map_location="cpu", weights_only=True)
+        self.pin_memory = bool(pin_memory and torch.cuda.is_available())
+        self.prefetch_enabled = bool(prefetch)
         self._index = None
-        self._graphs = None
+        self._shard = None
+        self._future = None
+        self._future_index = None
+        self._executor = ThreadPoolExecutor(max_workers=1) if self.prefetch_enabled else None
 
-    def sample(self, count: int, generator: torch.Generator) -> list[Data]:
+    def draw(self, count: int, generator: torch.Generator) -> dict:
         draw = torch.randint(int(self.sizes.sum()), (1,), generator=generator)
         index = int(torch.searchsorted(self.sizes.cumsum(0), draw, right=True))
-        if index != self._index:
-            self._graphs = torch.load(self.directory / f"{index}.pt", map_location="cpu", weights_only=False)
-            self._index = index
-        indices = torch.randint(len(self._graphs), (count,), generator=generator).tolist()
-        return [self._graphs[i] for i in indices]
+        indices = torch.randint(int(self.sizes[index]), (count,), generator=generator).tolist()
+        return {"shard": index, "indices": indices}
+
+    def _load(self, index: int) -> dict:
+        return torch.load(self.directory / f"{index}.pt", map_location="cpu", weights_only=True)
+
+    def prefetch(self, specification: dict) -> None:
+        index = int(specification["shard"])
+        if not self.prefetch_enabled or index == self._index:
+            return
+        if self._future is not None and self._future_index == index:
+            return
+        if self._future is not None:
+            self._future.result()
+        self._future_index = index
+        self._future = self._executor.submit(self._load, index)
+
+    def _get_shard(self, index: int) -> dict:
+        if index == self._index:
+            return self._shard
+        if self._future is not None and self._future_index == index:
+            shard = self._future.result()
+            self._future = self._future_index = None
+        else:
+            shard = self._load(index)
+        self._index, self._shard = index, shard
+        return shard
+
+    def resolve(self, specification: dict, device: torch.device) -> tuple[Batch, torch.Tensor, torch.Tensor]:
+        index = int(specification["shard"])
+        indices = torch.tensor(specification["indices"], dtype=torch.long)
+        shard = self._get_shard(index)
+        count = int(indices.numel())
+        x = shard["x"].index_select(0, indices).contiguous()
+        teacher_mean = shard["teacher_mean"].index_select(0, indices).flatten(0, 1).contiguous()
+        teacher_log_std = shard["teacher_log_std"].index_select(0, indices).flatten(0, 1).contiguous()
+        nodes = int(x.size(1))
+        edges = int(self.static["edge_index"].size(1))
+        offsets = torch.arange(count).view(-1, 1, 1) * nodes
+        edge_index = (self.static["edge_index"].view(1, 2, edges) + offsets).permute(1, 0, 2).reshape(2, -1)
+        kwargs = dict(
+            x=x.flatten(0, 1), edge_index=edge_index,
+            action_mask=self.static["action_mask"].repeat(count),
+            batch=torch.arange(count).repeat_interleave(nodes),
+            ptr=torch.arange(0, (count + 1) * nodes, nodes),
+        )
+        if "physical_node_mask" in self.static:
+            kwargs["physical_node_mask"] = self.static["physical_node_mask"].repeat(count)
+        if "edge_attr" in shard:
+            kwargs["edge_attr"] = shard["edge_attr"].index_select(0, indices).flatten(0, 1).contiguous()
+        batch = Batch(**kwargs)
+        batch._num_graphs = count
+        object.__setattr__(batch, "_policy_action_count_cache", int(teacher_mean.size(0)))
+        if self.pin_memory:
+            batch = batch.pin_memory()
+            teacher_mean = teacher_mean.pin_memory()
+            teacher_log_std = teacher_log_std.pin_memory()
+        non_blocking = self.pin_memory and device.type == "cuda"
+        return (batch.to(device, non_blocking=non_blocking),
+                teacher_mean.to(device, non_blocking=non_blocking),
+                teacher_log_std.to(device, non_blocking=non_blocking))
+
+    def sample(self, count: int, generator: torch.Generator, device="cpu"):
+        """Synchronous convenience wrapper, primarily for diagnostics/tests."""
+        return self.resolve(self.draw(count, generator), torch.device(device))
+
+    def close(self) -> None:
+        if self._executor is not None:
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            self._executor = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
 
     @classmethod
-    def prepare(cls, directory: Path, observations, shard_size: int, signature: dict):
+    def prepare(cls, directory: Path, observations, shard_size: int, contract: dict,
+                teacher, prepare_graph_fn, device: torch.device, target_batch_size: int,
+                *, pin_memory: bool = False, prefetch: bool = True):
         if (directory / "manifest.json").exists():
-            return cls(directory)
+            return cls(directory, contract, pin_memory=pin_memory, prefetch=prefetch)
         directory.parent.mkdir(parents=True, exist_ok=True)
         # Publish only a complete cache. Separate temporary directories also make
         # simultaneous jobs extracting the same teacher safe.
         with tempfile.TemporaryDirectory(dir=directory.parent) as temporary:
             root = Path(temporary)
-            sizes, shard = [], []
+            sizes, shard, static = [], [], None
+
+            def write_shard(graphs):
+                nonlocal static
+                prepared = [prepare_graph_fn(graph) for graph in graphs]
+                if any(graph_signature(graph) != contract["prepared_signature"] for graph in prepared):
+                    raise ValueError("Prepared teacher replay changes topology or action ordering.")
+                first = prepared[0]
+                current_static = {
+                    "edge_index": first.edge_index.cpu().contiguous(),
+                    "action_mask": policy_action_mask(first).cpu().contiguous(),
+                }
+                physical = getattr(first, "physical_node_mask", None)
+                if physical is not None:
+                    current_static["physical_node_mask"] = physical.cpu().contiguous()
+                if static is None:
+                    static = current_static
+                    torch.save(static, root / "static.pt")
+                elif (set(static) != set(current_static)
+                      or any(not torch.equal(value, current_static[key]) for key, value in static.items())):
+                    raise ValueError("Prepared teacher replay has changing structural tensors.")
+                means, log_stds = [], []
+                for start in range(0, len(prepared), target_batch_size):
+                    batch = Batch.from_data_list(prepared[start:start + target_batch_size]).to(device)
+                    with torch.no_grad():
+                        mean, log_std = teacher.policy_distribution(batch)
+                    if not torch.isfinite(mean).all() or not torch.isfinite(log_std).all():
+                        raise ValueError("Nonfinite teacher distribution parameters while building cache.")
+                    active = int(current_static["action_mask"].sum())
+                    means.append(mean.reshape(-1, active, mean.size(-1)).cpu())
+                    log_stds.append(log_std.reshape(-1, active, log_std.size(-1)).cpu())
+                payload = {
+                    "x": torch.stack([graph.x.cpu() for graph in prepared]).contiguous(),
+                    "teacher_mean": torch.cat(means).contiguous(),
+                    "teacher_log_std": torch.cat(log_stds).contiguous(),
+                }
+                edge_attrs = [getattr(graph, "edge_attr", None) for graph in prepared]
+                if any(value is not None for value in edge_attrs):
+                    if any(value is None for value in edge_attrs):
+                        raise ValueError("Prepared replay inconsistently provides edge features.")
+                    payload["edge_attr"] = torch.stack([value.cpu() for value in edge_attrs]).contiguous()
+                torch.save(payload, root / f"{len(sizes)}.pt")
+                sizes.append(len(prepared))
+
             for graph in observations:
-                if graph_signature(graph) != signature:
+                if graph_signature(graph) != contract["replay_signature"]:
                     raise ValueError("Teacher replay changes topology or action ordering.")
                 shard.append(graph.clone().cpu())
                 if len(shard) == shard_size:
-                    torch.save(shard, root / f"{len(sizes)}.pt")
-                    sizes.append(len(shard))
+                    write_shard(shard)
                     shard = []
             if shard:
-                torch.save(shard, root / f"{len(sizes)}.pt")
-                sizes.append(len(shard))
-            (root / "manifest.json").write_text(json.dumps({"sizes": sizes, "signature": signature}))
+                write_shard(shard)
+            (root / "manifest.json").write_text(json.dumps({
+                "format": TARGET_CACHE_FORMAT, "sizes": sizes, "contract": contract,
+            }, sort_keys=True))
             try:
                 root.rename(directory)
             except OSError:
                 if not (directory / "manifest.json").exists():
                     raise
-        return cls(directory)
+        return cls(directory, contract, pin_memory=pin_memory, prefetch=prefetch)
 
 
 class Distillation:
     """Training-only state; teachers are deliberately not student submodules."""
 
-    def __init__(self, cfg, task_names: list[str]):
+    def __init__(self, cfg, task_names: list[str], device=None):
         self.cfg = cfg
+        self.device = torch.device(device if device is not None else _get(cfg, "device", "cuda"))
         options = _get(cfg, "distillation", {})
         if _get(cfg, "sac_backend", "gnn") != "gnn":
             raise ValueError("Distillation currently requires a GNN student.")
@@ -156,11 +287,18 @@ class Distillation:
         self.checkpoint_freq = int(_get(options, "checkpoint_freq", 1000))
         self.log_freq = int(_get(options, "log_freq", 100))
         shard_size = int(_get(options, "shard_size", 4096))
+        target_batch_size = int(_get(options, "target_batch_size", self.batch_size))
+        self.pin_memory = bool(_get(options, "pin_memory", True))
+        self.prefetch = bool(_get(options, "prefetch", True))
         if (self.pretrain_updates < 0 or self.batch_size <= 0 or shard_size <= 0
+                or target_batch_size <= 0
                 or self.checkpoint_freq < 0 or self.log_freq <= 0
                 or not math.isfinite(self.initial_weight) or self.initial_weight < 0
                 or not math.isfinite(self.decay_steps) or self.decay_steps <= 0):
             raise ValueError("Invalid distillation counts, weight, or decay duration.")
+        # Only settings that affect optimization/sampling belong in checkpoint
+        # compatibility. Cache-build batch size, pinning, and prefetch are
+        # performance choices and may safely change across a resume.
         self.settings = dict(pretrain_updates=self.pretrain_updates, batch_size=self.batch_size,
                              initial_weight=self.initial_weight, decay_steps=self.decay_steps,
                              shard_size=shard_size)
@@ -168,7 +306,9 @@ class Distillation:
         self.stage = "offline" if self.pretrain_updates else "online"
         self.step = 0
         self.generator = torch.Generator().manual_seed(int(_get(cfg, "seed", 0)))
-        self.teachers, self.datasets, self.sources, self.signatures = {}, {}, {}, {}
+        self.teachers, self.datasets, self.sources = {}, {}, {}
+        self.replay_signatures = {}
+        self.pending_samples = {}
         self.metrics = {}
         mapping = _get(options, "teachers", {})
         selected = {}
@@ -197,6 +337,7 @@ class Distillation:
                 # Keep the module's train/eval contract while releasing critics.
                 teacher._Qs = torch.nn.ModuleList()
                 teacher._target_Qs = torch.nn.ModuleList()
+                teacher.to(self.device)
                 self.teachers[task] = teacher
                 replay = state["buffer"]
                 if "buffers" in replay:
@@ -211,10 +352,25 @@ class Distillation:
                 signature = graph_signature(first)
                 if first.x.size(1) != int(cfg.obs_dim):
                     raise ValueError("Teacher replay observation width differs from student.")
-                self.signatures[task] = graph_signature(self.prepare(first))
+                self.replay_signatures[task] = signature
                 if self.pretrain_updates:
+                    contract = {
+                        "format": TARGET_CACHE_FORMAT,
+                        "source_sha256": digest,
+                        "replay_signature": signature,
+                        "prepared_signature": graph_signature(self.prepare(first)),
+                        "graph_feature_schema": graph_feature_schema(self.cfg),
+                        "use_virtual_node": bool(_get(self.cfg, "use_virtual_node", False)),
+                    }
+                    contract_hash = hashlib.sha256(
+                        json.dumps(contract, sort_keys=True).encode()
+                    ).hexdigest()[:16]
                     self.datasets[task] = ObservationShards.prepare(
-                        cache / f"{digest}-{shard_size}", replay_observations(replay), shard_size, signature)
+                        cache / f"{digest}-targets-v2-{contract_hash}-s{shard_size}",
+                        replay_observations(replay), shard_size, contract, teacher,
+                        self.prepare, self.device, target_batch_size,
+                        pin_memory=self.pin_memory and self.device.type == "cuda",
+                        prefetch=self.prefetch)
                 del first, replay, state
 
     def _validate_config(self, teacher, topology: str, agent_state: dict) -> None:
@@ -250,6 +406,13 @@ class Distillation:
         return prepare_graph(graph, use_virtual_node=bool(_get(self.cfg, "use_virtual_node", False)),
                              **graph_feature_flags(self.cfg))
 
+    def bind_replay(self, replay) -> None:
+        """Install teacher topology contracts at the replay's cold write/load boundary."""
+        setter = getattr(replay, "set_task_graph_signatures", None)
+        if setter is None:
+            raise TypeError("Distillation requires replay topology validation support.")
+        setter(self.replay_signatures)
+
     @property
     def weight(self) -> float:
         return self.initial_weight * max(0.0, 1.0 - self.step / self.decay_steps)
@@ -257,26 +420,38 @@ class Distillation:
     def loss(self, student, task: str, obs: Data) -> torch.Tensor:
         if task not in self.teachers:
             raise ValueError(f"No teacher for replay task {task!r}.")
-        graphs = obs.to_data_list() if isinstance(obs, Batch) else [obs]
-        if any(graph_signature(graph) != self.signatures[task] for graph in graphs):
-            raise ValueError(f"Observation topology/action ordering differs from teacher for {task}.")
-        teacher = self.teachers[task].to(obs.x.device)
-        try:
-            with torch.no_grad():
-                tm, tl = teacher.policy_distribution(obs)
-        finally:
-            teacher.cpu()
+        teacher = self.teachers[task]
+        with torch.no_grad():
+            tm, tl = teacher.policy_distribution(obs)
         sm, sl = student.policy_distribution(obs)
         return graph_mean_kl(gaussian_forward_kl(tm, tl, sm, sl), obs)
+
+    def target_loss(self, student, obs: Data, teacher_mean: torch.Tensor,
+                    teacher_log_std: torch.Tensor) -> torch.Tensor:
+        """Offline student loss against precomputed, pre-tanh teacher targets."""
+        sm, sl = student.policy_distribution(obs)
+        return graph_mean_kl(
+            gaussian_forward_kl(teacher_mean, teacher_log_std, sm, sl), obs
+        )
 
     def offline_update(self, agent) -> dict:
         agent.model.eval() # Deterministic policy parameters, while retaining gradients.
         agent.pi_optim.zero_grad(set_to_none=True)
         metrics = {}
+        current_samples = {}
         for task, dataset in self.datasets.items():
-            graphs = dataset.sample(self.batch_size, self.generator)
-            batch = Batch.from_data_list([self.prepare(graph) for graph in graphs]).to(agent.device)
-            loss = self.loss(agent.model, task, batch)
+            specification = self.pending_samples.pop(task, None)
+            if specification is None:
+                specification = dataset.draw(self.batch_size, self.generator)
+            current_samples[task] = specification
+        for task, dataset in self.datasets.items():
+            specification = current_samples[task]
+            batch, teacher_mean, teacher_log_std = dataset.resolve(specification, agent.device)
+            if self.completed_updates + 1 < self.pretrain_updates:
+                next_specification = dataset.draw(self.batch_size, self.generator)
+                self.pending_samples[task] = next_specification
+                dataset.prefetch(next_specification)
+            loss = self.target_loss(agent.model, batch, teacher_mean, teacher_log_std)
             (loss / len(self.datasets)).backward()
             metrics[f"kl/{task}"] = float(loss.detach())
         torch.nn.utils.clip_grad_norm_(agent.model.actor_parameters(), agent.cfg.grad_clip_norm, error_if_nonfinite=True)
@@ -294,14 +469,22 @@ class Distillation:
         agent.pi_optim.state.clear()
         agent.pi_optim.zero_grad(set_to_none=True)
         self.stage = "online"
+        for dataset in self.datasets.values():
+            dataset.close()
         self.datasets.clear()
+        self.pending_samples.clear()
 
     def state_dict(self) -> dict:
         return dict(stage=self.stage, completed_updates=self.completed_updates,
-                    sources=self.sources, settings=self.settings, generator=self.generator.get_state())
+                    sources=self.sources, settings=self.settings, generator=self.generator.get_state(),
+                    pending_samples=_copy_sample_specs(self.pending_samples))
 
     def load_state_dict(self, state: dict) -> None:
-        if state["sources"] != self.sources or state["settings"] != self.settings:
+        saved_settings = state.get("settings", {})
+        saved_semantic_settings = {
+            key: saved_settings.get(key) for key in self.settings
+        }
+        if state["sources"] != self.sources or saved_semantic_settings != self.settings:
             raise ValueError("Distillation teacher sources or schedule/settings changed during resume.")
         stage, completed = state["stage"], int(state["completed_updates"])
         if stage not in {"offline", "online"} or not 0 <= completed <= self.pretrain_updates:
@@ -310,5 +493,20 @@ class Distillation:
             raise ValueError("Online checkpoint has incomplete offline distillation.")
         self.stage, self.completed_updates = stage, completed
         self.generator.set_state(state["generator"])
+        self.pending_samples = _copy_sample_specs(state.get("pending_samples", {}))
         if stage == "online":
+            for dataset in self.datasets.values():
+                dataset.close()
             self.datasets.clear()
+            self.pending_samples.clear()
+        else:
+            for task, specification in self.pending_samples.items():
+                self.datasets[task].prefetch(specification)
+
+
+def _copy_sample_specs(specifications: dict) -> dict:
+    """Copy JSON-like lookahead state without sharing mutable checkpoint values."""
+    return {
+        task: {"shard": int(value["shard"]), "indices": list(value["indices"])}
+        for task, value in specifications.items()
+    }
