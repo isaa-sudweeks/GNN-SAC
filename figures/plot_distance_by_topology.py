@@ -28,6 +28,7 @@ TOPOLOGIES = [
     "octahedron",
 ]
 METRIC = "eval/episode_distance"
+HISTORY_SAMPLES = 10_000
 DEFAULT_GREEDY_METRICS = Path(__file__).with_name("greedy_metrics.csv")
 
 
@@ -40,14 +41,13 @@ def _finite_float(value: Any) -> float | None:
 
 
 def collect_seed_results(runs: Iterable[Any], run_prefix: str) -> pd.DataFrame:
-    """Return one row per topology/seed, preferring the most advanced retry."""
+    """Return seed values at each topology's peak across-seed mean eval step."""
     candidates: list[dict[str, Any]] = []
     for run in runs:
         config = dict(run.config)
         topology = config.get("truss_topology")
         seed = config.get("seed")
-        distance = _finite_float(run.summary.get(METRIC))
-        if topology not in TOPOLOGIES or seed is None or distance is None:
+        if topology not in TOPOLOGIES or seed is None:
             continue
         if run_prefix and not str(run.name).startswith(run_prefix):
             continue
@@ -55,7 +55,7 @@ def collect_seed_results(runs: Iterable[Any], run_prefix: str) -> pd.DataFrame:
             {
                 "topology": topology,
                 "seed": int(seed),
-                "distance_m": distance,
+                "run": run,
                 "run_id": run.id,
                 "run_name": run.name,
                 "run_state": run.state,
@@ -66,15 +66,64 @@ def collect_seed_results(runs: Iterable[Any], run_prefix: str) -> pd.DataFrame:
 
     if not candidates:
         raise RuntimeError(
-            f"No runs matched prefix {run_prefix!r} with a finite {METRIC!r} summary."
+            f"No runs matched prefix {run_prefix!r} for a configured topology and seed."
         )
 
-    results = pd.DataFrame(candidates)
-    return (
-        results.sort_values(["topology", "seed", "logged_step", "run_id"])
+    selected_runs = (
+        pd.DataFrame(candidates)
+        .sort_values(["topology", "seed", "logged_step", "run_id"])
         .drop_duplicates(["topology", "seed"], keep="last")
         .reset_index(drop=True)
     )
+
+    history_rows: list[dict[str, Any]] = []
+    for candidate in selected_runs.to_dict("records"):
+        run = candidate.pop("run")
+        # These legacy runs do not expose ``_step`` in the exact-history endpoint's
+        # schema. Their evaluation histories are much shorter than this sample cap,
+        # so the sampled-history endpoint returns every evaluation row with metadata.
+        for history_row in run.history(
+            keys=[METRIC], samples=HISTORY_SAMPLES, pandas=False
+        ):
+            step = _finite_float(history_row.get("_step"))
+            distance = _finite_float(history_row.get(METRIC))
+            if step is None or distance is None:
+                continue
+            history_rows.append(
+                {
+                    **candidate,
+                    "evaluation_step": int(step),
+                    "distance_m": distance,
+                }
+            )
+
+    if not history_rows:
+        raise RuntimeError(f"Matched runs have no finite {METRIC!r} history rows.")
+
+    history = (
+        pd.DataFrame(history_rows)
+        .sort_values(["topology", "seed", "evaluation_step"])
+        .drop_duplicates(["topology", "seed", "evaluation_step"], keep="last")
+    )
+    selected_rows = []
+    for topology, topology_history in history.groupby("topology", sort=False):
+        seed_curves = topology_history.pivot(
+            index="evaluation_step", columns="seed", values="distance_m"
+        ).dropna()
+        if seed_curves.empty:
+            raise RuntimeError(
+                f"Topology {topology!r} has no evaluation step shared by every seed."
+            )
+        step_means = seed_curves.mean(axis=1)
+        peak_mean = step_means.max()
+        selected_step = int(step_means[step_means == peak_mean].index.max())
+        rows = topology_history[
+            topology_history["evaluation_step"] == selected_step
+        ].copy()
+        rows["selection_mean_distance_m"] = peak_mean
+        selected_rows.append(rows)
+
+    return pd.concat(selected_rows, ignore_index=True).drop(columns="logged_step")
 
 
 def aggregate_results(seed_results: pd.DataFrame) -> pd.DataFrame:
@@ -85,6 +134,7 @@ def aggregate_results(seed_results: pd.DataFrame) -> pd.DataFrame:
             distance_m=("distance_m", "mean"),
             distance_std_m=("distance_m", "std"),
             n_seeds=("seed", "nunique"),
+            selected_step=("evaluation_step", "first"),
         )
         .fillna({"distance_std_m": 0.0})
     )
@@ -157,13 +207,17 @@ def make_figure(aggregate: pd.DataFrame, greedy_metrics: pd.DataFrame | None = N
         error_x="distance_std_m",
         category_orders={"topology": list(reversed(TOPOLOGIES))},
         color_discrete_map={"GNN-SAC": "#636EFA", "Greedy": "#EF553B"},
-        title="Distance Achieved by Topology",
+        title="Peak Mean Evaluation Distance by Topology",
         labels={
             "distance_m": "Distance Traveled (m)",
             "topology": "Robot Configuration",
             "controller": "Controller",
         },
-        hover_data={"n_seeds": True, "distance_std_m": ":.3f"},
+        hover_data={
+            "n_seeds": True,
+            "distance_std_m": ":.3f",
+            "selected_step": True,
+        },
     )
     fig.update_layout(
         font_family="Arial",
@@ -202,7 +256,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", default="i-suds/paper_results")
     parser.add_argument(
-        "--run-prefix", default="paper-v2-",
+        "--run-prefix", default="paper-v3-",
         help="Only include run names beginning with this value; pass '' for all runs.",
     )
     parser.add_argument(
