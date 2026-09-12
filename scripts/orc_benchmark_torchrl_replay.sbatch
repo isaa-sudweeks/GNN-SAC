@@ -82,7 +82,7 @@ run_replay_case cpu_pinned --storage cpu_pinned
 run_replay_case cuda --storage cuda
 run_replay_case auto --storage auto
 run_replay_case auto_mixed --storage auto --replay-gpu-fraction 1 \
-  --replay-gpu-max-gb 0.06 --replay-gpu-reserve-gb 0
+  --replay-gpu-max-gb 0.006 --replay-gpu-reserve-gb 0
 
 run_training_case legacy legacy auto
 run_training_case auto torchrl_tensor auto
