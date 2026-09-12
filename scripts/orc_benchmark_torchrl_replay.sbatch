@@ -43,7 +43,7 @@ run_replay_case() {
   local log=$RESULTS/replay_${name}.log
   if uv run --offline --no-sync python scripts/benchmark_gnn_replay.py \
       --device cuda --prototype --node-counts 4,6,8 --feature-dim 6 \
-      --batch-size 255 --entries-per-task 100000 --warmup 10 --repeats 100 \
+      --batch-size 255 --entries-per-task 10000 --warmup 10 --repeats 100 \
       --checkpoint-repeats 3 --optimizer-repeats 20 --output "$output" \
       "$@" > "$log" 2>&1; then
     printf 'ok\n' > "$RESULTS/replay_${name}.status"
