@@ -78,6 +78,17 @@ def assert_batch_equal(test, expected, actual):
             torch.testing.assert_close(left, right, rtol=0, atol=0)
 
 
+def assert_tensor_task_state_equal(test, expected, actual):
+    """Compare the ring metadata and dense storage that affect future writes."""
+    for key in ("capacity", "batch_size", "num_eps", "size", "idx", "static"):
+        assert_nested_equal(test, expected[key], actual[key])
+    expected_storage = expected["replay_buffer"]["_storage"]["_storage"]
+    actual_storage = actual["replay_buffer"]["_storage"]["_storage"]
+    test.assertEqual(expected_storage.keys(), actual_storage.keys())
+    for key in expected_storage:
+        torch.testing.assert_close(expected_storage[key], actual_storage[key], rtol=0, atol=0)
+
+
 class TensorGNNBufferTest(unittest.TestCase):
     def test_factory_keeps_legacy_default(self):
         self.assertIsInstance(make_gnn_buffer(config(replay_backend="legacy")), GNNBuffer)
@@ -115,13 +126,47 @@ class TensorGNNBufferTest(unittest.TestCase):
         actual = tensor.sample()
         assert_batch_equal(self, expected, actual)
 
-    def test_ring_wrap_and_checkpoint_round_trip(self):
+    def test_full_ring_nonzero_cursor_round_trip_preserves_future_overwrites(self):
         tensor = TensorGNNBuffer(config(buffer_size=8))
         populate(tensor, count=7)
         state = tensor.state_dict()
+        for task, expected_rewards in (
+            ("graph:a", [4., 5., 6., 3.]),
+            ("graph:b", [14., 15., 16., 13.]),
+        ):
+            task_state = state["buffers"][task]
+            self.assertEqual(
+                (task_state["capacity"], task_state["size"], task_state["idx"]),
+                (4, 4, 3),
+            )
+            rewards = task_state["replay_buffer"]["_storage"]["_storage"]["reward"]
+            self.assertEqual(rewards.flatten().tolist(), expected_rewards)
+
         restored = TensorGNNBuffer(config(buffer_size=8))
         restored.load_state_dict(state)
         self.assertEqual(restored.sizes_by_task, tensor.sizes_by_task)
+        restored_state = restored.state_dict()
+        for task in tensor.task_names:
+            assert_tensor_task_state_equal(
+                self, state["buffers"][task], restored_state["buffers"][task]
+            )
+
+        for buffer in (tensor, restored):
+            buffer.add(transition(100, 3), task="graph:a")
+            buffer.add(transition(200, 5), task="graph:b")
+        expected_after_write = tensor.state_dict()
+        actual_after_write = restored.state_dict()
+        for task, expected_rewards in (
+            ("graph:a", [4., 5., 6., 100.]),
+            ("graph:b", [14., 15., 16., 200.]),
+        ):
+            expected_task = expected_after_write["buffers"][task]
+            actual_task = actual_after_write["buffers"][task]
+            self.assertEqual(expected_task["idx"], 0)
+            rewards = actual_task["replay_buffer"]["_storage"]["_storage"]["reward"]
+            self.assertEqual(rewards.flatten().tolist(), expected_rewards)
+            assert_tensor_task_state_equal(self, expected_task, actual_task)
+
         torch.manual_seed(44)
         expected = tensor.sample()
         torch.manual_seed(44)
@@ -187,6 +232,22 @@ class TensorGNNBufferTest(unittest.TestCase):
             tensor = TensorGNNBuffer(cfg)
         self.assertEqual(set(tensor.placement_metadata["placements"].values()), {"cpu"})
 
+    def test_auto_preserves_indexed_cuda_device_for_budget_and_placement(self):
+        cfg = config(
+            device="cuda:1", replay_storage="auto", replay_gpu_fraction=1.,
+            replay_gpu_max_gb=100., replay_gpu_reserve_gb=0.,
+        )
+        configured_device = torch.device("cuda:1")
+        with patch("torch.cuda.is_available", return_value=True), patch(
+            "torch.cuda.mem_get_info", return_value=(16 * 1024 ** 3, 24 * 1024 ** 3)
+        ) as mem_get_info:
+            tensor = TensorGNNBuffer(cfg)
+        mem_get_info.assert_called_once_with(configured_device)
+        self.assertEqual(
+            set(tensor.placement_metadata["placements"].values()),
+            {str(configured_device)},
+        )
+
     def test_legacy_checkpoint_conversion_is_non_destructive_and_exact(self):
         legacy = GNNBuffer(config(replay_backend="legacy"))
         populate(legacy)
@@ -208,6 +269,69 @@ class TensorGNNBufferTest(unittest.TestCase):
             torch.manual_seed(19)
             actual = restored.sample()
             assert_batch_equal(self, expected, actual)
+
+    def test_legacy_wrapped_nonzero_cursor_conversion_preserves_future_overwrites(self):
+        cfg = config(buffer_size=8, replay_backend="legacy")
+        legacy = GNNBuffer(cfg)
+        populate(legacy, count=7)
+        legacy_state = legacy.state_dict()
+        for task, expected_rewards in (
+            ("graph:a", [4., 5., 6., 3.]),
+            ("graph:b", [14., 15., 16., 13.]),
+        ):
+            task_state = legacy_state["buffers"][task]
+            self.assertEqual(
+                (task_state["capacity"], task_state["size"], task_state["idx"]),
+                (4, 4, 3),
+            )
+            self.assertEqual(
+                [reward.item() for reward in task_state["reward"]],
+                expected_rewards,
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "legacy-wrapped.pt"
+            destination = Path(directory) / "tensor-wrapped.pt"
+            torch.save({"buffer": legacy_state, "config": vars(cfg)}, source)
+            convert(source, destination, chunk_size=2)
+            converted_state = torch.load(destination, map_location="cpu", weights_only=False)
+            converted = TensorGNNBuffer(config(buffer_size=8))
+            converted.load_state_dict(converted_state["buffer"])
+
+            for task, expected_rewards in (
+                ("graph:a", [4., 5., 6., 3.]),
+                ("graph:b", [14., 15., 16., 13.]),
+            ):
+                task_state = converted.state_dict()["buffers"][task]
+                self.assertEqual(
+                    (task_state["capacity"], task_state["size"], task_state["idx"]),
+                    (4, 4, 3),
+                )
+                rewards = task_state["replay_buffer"]["_storage"]["_storage"]["reward"]
+                self.assertEqual(rewards.flatten().tolist(), expected_rewards)
+
+            legacy.add(transition(100, 3), task="graph:a")
+            legacy.add(transition(200, 5), task="graph:b")
+            converted.add(transition(100, 3), task="graph:a")
+            converted.add(transition(200, 5), task="graph:b")
+            converted_after_write = converted.state_dict()
+            for task, expected_rewards in (
+                ("graph:a", [4., 5., 6., 100.]),
+                ("graph:b", [14., 15., 16., 200.]),
+            ):
+                task_state = converted_after_write["buffers"][task]
+                self.assertEqual(task_state["idx"], 0)
+                rewards = task_state["replay_buffer"]["_storage"]["_storage"]["reward"]
+                self.assertEqual(rewards.flatten().tolist(), expected_rewards)
+
+            torch.manual_seed(73)
+            expected = legacy.sample()
+            expected_rng = torch.random.get_rng_state()
+            torch.manual_seed(73)
+            actual = converted.sample()
+            actual_rng = torch.random.get_rng_state()
+            assert_batch_equal(self, expected, actual)
+            self.assertTrue(torch.equal(expected_rng, actual_rng))
 
     @unittest.skipUnless(torch.cuda.is_available(), "CUDA is unavailable")
     def test_cuda_storage_returns_exact_batch(self):

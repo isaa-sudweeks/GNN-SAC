@@ -369,10 +369,12 @@ class TensorGNNBuffer:
         if len(node_counts) != self._task_count:
             node_counts = [int(getattr(self.cfg, "num_nodes", 1))] * self._task_count
         estimates = {task: self._estimated_task_bytes(int(nodes)) for task, nodes in zip(self.task_names, node_counts)}
-        cuda_available = torch.cuda.is_available() and torch.device(getattr(self.cfg, "device", "cpu")).type == "cuda"
+        learner_device = torch.device(getattr(self.cfg, "device", "cpu"))
+        cuda_available = torch.cuda.is_available() and learner_device.type == "cuda"
+        cuda_storage_device = str(learner_device)
         total_memory = free_memory = 0
         if cuda_available:
-            free_memory, total_memory = torch.cuda.mem_get_info()
+            free_memory, total_memory = torch.cuda.mem_get_info(learner_device)
         fraction = float(getattr(self.cfg, "replay_gpu_fraction", 0.20))
         max_bytes = float(getattr(self.cfg, "replay_gpu_max_gb", 8.0)) * _GIB
         reserve = float(getattr(self.cfg, "replay_gpu_reserve_gb", 12.0)) * _GIB
@@ -389,12 +391,12 @@ class TensorGNNBuffer:
             required = sum(estimates.values())
             if required > budget:
                 raise MemoryError(f"CUDA replay needs {required / _GIB:.2f} GiB but budget is {budget / _GIB:.2f} GiB.")
-            placements = {task: "cuda" for task in self.task_names}
+            placements = {task: cuda_storage_device for task in self.task_names}
             used = required
         elif mode == "auto" and cuda_available:
             for task in sorted(self.task_names, key=lambda name: (estimates[name], name)):
                 if used + estimates[task] <= budget:
-                    placements[task] = "cuda"
+                    placements[task] = cuda_storage_device
                     used += estimates[task]
         metadata = {
             "mode": mode,
@@ -421,8 +423,9 @@ class TensorGNNBuffer:
         metadata["actual_allocated_bytes"] = {
             task: buffer.allocated_bytes() for task, buffer in self._buffers.items()
         }
-        if torch.cuda.is_available() and torch.device(getattr(self.cfg, "device", "cpu")).type == "cuda":
-            free, total = torch.cuda.mem_get_info()
+        learner_device = torch.device(getattr(self.cfg, "device", "cpu"))
+        if torch.cuda.is_available() and learner_device.type == "cuda":
+            free, total = torch.cuda.mem_get_info(learner_device)
             metadata["current_free_cuda_bytes"] = int(free)
             metadata["current_total_cuda_bytes"] = int(total)
         return metadata

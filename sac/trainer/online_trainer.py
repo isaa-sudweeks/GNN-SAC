@@ -157,7 +157,7 @@ class OnlineTrainer(Trainer):
         distillation.finish_pretraining(self.agent)
         self.logger.log({"step": self._step, "stage": "online",
                          "offline_updates": distillation.completed_updates}, "distillation")
-        self.eval()
+        self._evaluate_and_log()
         if distillation.checkpoint_freq:
             self.save_checkpoint(identifier="distillation")
 

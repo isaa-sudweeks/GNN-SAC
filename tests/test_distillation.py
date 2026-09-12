@@ -498,14 +498,14 @@ class DistillationTrainingTest(unittest.TestCase):
             trainer.distillation = distill
             trainer._step = 0
             trainer.logger.log = Mock()
-            trainer.eval = Mock()
+            trainer._evaluate_and_log = Mock()
             trainer.save_checkpoint = Mock()
             OnlineTrainer._run_distillation_pretraining(trainer)
-            trainer.eval.assert_called_once()
+            trainer._evaluate_and_log.assert_called_once()
             self.assertEqual(trainer.buffer.size, 0)
             self.assertEqual(trainer._step, 0)
             OnlineTrainer._run_distillation_pretraining(trainer)
-            trainer.eval.assert_called_once()
+            trainer._evaluate_and_log.assert_called_once()
             trainer._step = 25
             snapshot = trainer._checkpoint_state_snapshot()
             trainer.load_checkpoint_state_dict(snapshot)
