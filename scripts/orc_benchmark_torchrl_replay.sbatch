@@ -29,6 +29,13 @@ nvidia-smi --query-gpu=timestamp,memory.used,memory.free --format=csv,noheader,n
 MONITOR_PID=$!
 trap 'kill "$MONITOR_PID" 2>/dev/null || true' EXIT
 
+if uv run --offline --no-sync python -m unittest tests.test_tensor_gnn_buffer -v \
+    > "$RESULTS/cuda_equivalence.log" 2>&1; then
+  printf 'ok\n' > "$RESULTS/cuda_equivalence.status"
+else
+  printf 'failed:%s\n' "$?" > "$RESULTS/cuda_equivalence.status"
+fi
+
 run_replay_case() {
   local name=$1
   shift
