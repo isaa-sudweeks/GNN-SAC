@@ -71,7 +71,7 @@ def run_training(cfg, trial=None):
 
     env = make_env(cfg)
     if sac_backend in {"gnn", "padded_mlp"}:
-        from common.gnn_buffer import GNNBuffer
+        from common.tensor_gnn_buffer import make_gnn_buffer
         if sac_backend == "gnn":
             from gnn_sac import GNNSAC
 
@@ -80,7 +80,7 @@ def run_training(cfg, trial=None):
             from padded_mlp_sac import PaddedMLPSAC
 
             agent = PaddedMLPSAC(cfg)
-        buffer = GNNBuffer(cfg)
+        buffer = make_gnn_buffer(cfg)
     else:
         agent = SAC(cfg)
         buffer = Buffer(cfg)

@@ -10,6 +10,11 @@ gradient_diagnostics_freq: 100 # Optimizer-update interval for gradient diagnost
 
 # Replay and update cadence
 buffer_size: 1_000_000 # Maximum number of transitions stored in replay.
+replay_backend: legacy # legacy or torchrl_tensor; remains opt-in until benchmark gates pass.
+replay_storage: auto # cpu_pinned, cuda, or auto for the tensorized backend.
+replay_gpu_fraction: 0.20 # Maximum fraction of total VRAM assigned to replay in auto mode.
+replay_gpu_max_gb: 8.0 # Absolute replay VRAM cap in auto mode.
+replay_gpu_reserve_gb: 12.0 # VRAM that auto mode must leave available to JAX/Warp and the learner.
 horizon: 2 # Sequence length used by the slice sampler; 2 gives one current/next transition.
 replay_ratio: 10.0 # Replay samples consumed per new transition; updates are replay_ratio * collected / batch_size.
 update_every_vector_steps: 1 # Spend accumulated update budget after this many vector-environment steps; set to 1 for every step.

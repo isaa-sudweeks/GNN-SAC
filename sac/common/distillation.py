@@ -71,6 +71,27 @@ def graph_mean_kl(kl: torch.Tensor, obs: Data) -> torch.Tensor:
 def replay_observations(replay: dict):
     """Yield every valid ring-buffer observation, oldest first, without copying."""
     capacity, size, index = (int(replay[key]) for key in ("capacity", "size", "idx"))
+    if int(replay.get("format_version", 0)) == 3:
+        storage = replay.get("replay_buffer")
+        if storage is None or replay.get("static") is None:
+            raise ValueError("Empty or invalid tensor teacher replay layout.")
+        fields = storage["_storage"]["_storage"]
+        static = replay["static"]
+        start = index if size == capacity else 0
+        for offset in range(size):
+            row = (start + offset) % capacity
+            graph = Data(
+                x=fields["obs_x"][row],
+                edge_index=static["edge_index"],
+            )
+            if static["action_mask"] is not None:
+                graph.action_mask = static["action_mask"]
+            if static["edge_role"] is not None:
+                graph.edge_role = static["edge_role"]
+            if static["has_rigidity"]:
+                graph.rigidity = fields["obs_rigidity"][row]
+            yield graph
+        return
     observations = replay["obs"]
     if not (capacity > 0 and 0 < size <= capacity and 0 <= index < capacity):
         raise ValueError("Empty or invalid teacher replay layout.")

@@ -17,3 +17,4 @@ kaleido
 wandb[media]
 mujoco-truss-gen==0.12.4
 torch_geometric
+torchrl>=0.13,<0.14

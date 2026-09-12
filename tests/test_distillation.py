@@ -19,6 +19,7 @@ from common.distillation import (
 )
 from common.gnn_actor_critic import GNNActorCritic
 from common.gnn_buffer import GNNBuffer
+from common.tensor_gnn_buffer import TensorGNNBuffer
 from common.graph_transforms import prepare_graph
 from common.logger import Logger
 from gnn_sac import GNNSAC
@@ -200,6 +201,26 @@ class TeacherReplayTest(unittest.TestCase):
                 ObservationShards(old, contract, prefetch=False)
         with self.assertRaises(ValueError):
             list(replay_observations(dict(full, size=0)))
+
+    def test_tensor_v3_replay_observations_preserve_ring_order(self):
+        cfg = config("/tmp", replay_backend="torchrl_tensor", replay_storage="cpu_pinned", buffer_size=8,
+                     node_counts=[3, 5], obs_dim=6, action_dim=1, graph_features={})
+        replay = TensorGNNBuffer(cfg)
+        for marker in range(6):
+            obs = raw_graph(3)
+            obs.x.fill_(marker)
+            following = raw_graph(3)
+            following.x.fill_(marker + .5)
+            item = lambda graph: dict(
+                obs=graph, action=torch.zeros(1, 3, 1), reward=torch.zeros(1),
+                terminated=torch.zeros(1),
+            )
+            replay.add([item(obs), item(following)], task=cfg.tasks[0])
+        task_state = replay.state_dict()["buffers"][cfg.tasks[0]]
+        self.assertEqual(
+            [int(graph.x[0, 0]) for graph in replay_observations(task_state)],
+            [2, 3, 4, 5],
+        )
 
     def test_frozen_teachers_routing_and_split_exclusion(self):
         with tempfile.TemporaryDirectory() as tmp:
