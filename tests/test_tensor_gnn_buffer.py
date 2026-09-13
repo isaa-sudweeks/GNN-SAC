@@ -90,9 +90,11 @@ def assert_tensor_task_state_equal(test, expected, actual):
 
 
 class TensorGNNBufferTest(unittest.TestCase):
-    def test_factory_keeps_legacy_default(self):
+    def test_factory_defaults_to_tensor_and_keeps_legacy_override(self):
         self.assertIsInstance(make_gnn_buffer(config(replay_backend="legacy")), GNNBuffer)
-        self.assertIsInstance(make_gnn_buffer(config()), TensorGNNBuffer)
+        cfg = config()
+        del cfg.replay_backend
+        self.assertIsInstance(make_gnn_buffer(cfg), TensorGNNBuffer)
 
     def test_direct_batches_match_legacy_for_mixed_node_counts(self):
         legacy, tensor = GNNBuffer(config()), TensorGNNBuffer(config())

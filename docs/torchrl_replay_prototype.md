@@ -1,9 +1,14 @@
-# TorchRL tensor replay prototype
+# TorchRL tensor replay
 
-The prototype is opt-in. Existing runs continue to use the object-based replay
-buffer because `replay_backend: legacy` remains the default.
+Tensor replay with bounded `auto` placement is the default. Use the legacy
+object-based buffer explicitly when reproducing an older run or resuming an
+unconverted legacy checkpoint:
 
-Use the tensor backend with one of three fixed-at-startup storage policies:
+```text
+replay_backend=legacy
+```
+
+The tensor backend supports three fixed-at-startup storage policies:
 
 ```text
 replay_backend=torchrl_tensor replay_storage=cpu_pinned
@@ -62,6 +67,7 @@ verifies the new file, and writes `converted.pt.conversion.json` with hashes,
 sizes, topology counts, and phase timings. Distillation reads the tensor fields
 directly when building its teacher-target shards.
 
-Do not change the default backend until the CUDA equivalence, memory-headroom,
+The default changed after the CUDA equivalence, memory-headroom, production
 restart, replay, checkpoint, and bounded end-to-end throughput promotion gates
-have all passed.
+passed. The legacy backend remains available as an explicit rollback and
+reproduction option.

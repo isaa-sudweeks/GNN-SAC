@@ -665,7 +665,7 @@ class TensorGNNBuffer:
 
 
 def make_gnn_buffer(cfg):
-    backend = str(getattr(cfg, "replay_backend", "legacy")).lower()
+    backend = str(getattr(cfg, "replay_backend", "torchrl_tensor")).lower()
     if backend == "legacy":
         from common.gnn_buffer import GNNBuffer
         return GNNBuffer(cfg)

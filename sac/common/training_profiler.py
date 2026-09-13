@@ -123,7 +123,7 @@ class TrainingProfiler:
                 "optimization_subphases": bool(
                     _get(profile_cfg, "optimization_subphases", False)
                 ),
-                "replay_backend": str(_get(cfg, "replay_backend", "legacy")),
+                "replay_backend": str(_get(cfg, "replay_backend", "torchrl_tensor")),
                 "replay_storage_mode": str(_get(cfg, "replay_storage", "auto")),
                 "replay_batching_strategy": "direct_balanced_collation",
             },

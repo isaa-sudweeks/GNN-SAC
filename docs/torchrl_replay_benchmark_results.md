@@ -136,11 +136,11 @@ Memory queries and replay placement now preserve the configured CUDA device.
 
 The production restart, occupancy, checkpoint, exact replay-data, bounded
 end-to-end, and memory-safety gates support the tensor replay backend as the
-better computational path. It remains opt-in in this PR so changing the
-default is an explicit follow-up decision rather than an incidental behavior
-change.
+better computational path. Tensor replay with `auto` placement is now the
+default; `replay_backend=legacy` remains available as an explicit rollback and
+reproduction option.
 
-Before changing the default, run one sustained training job through multiple
+After changing the default, run one sustained training job through multiple
 periodic asynchronous checkpoints and a real scheduler restart. Then run at
 least three paired seeds with periodic evaluation and compare learning-curve
 area and final-window performance under the same checkpoint-selection rule;
