@@ -147,6 +147,11 @@ class FakeExecutor:
 
 
 class FilteringLauncherTest(unittest.TestCase):
+    def test_supercomputer_profile_defaults_to_nusey_account(self):
+        profile = OmegaConf.load(ROOT / "config" / "platform" / "supercomputer.yaml")
+
+        self.assertEqual(profile.hydra.launcher.account, "nusey")
+
     def test_production_launcher_is_instantiated_by_hydra_plugin_registry(self):
         script = """
 from pathlib import Path

@@ -120,7 +120,9 @@ python sac/train.py platform=supercomputer --multirun \
   hydra.launcher.skip_completed_jobs=false
 ```
 
-Set `GNN_SAC_RUN_ROOT` to put runs on shared persistent storage, and override cluster-specific values on the command line as needed:
+Set `GNN_SAC_RUN_ROOT` to put runs on shared persistent storage. Supercomputer
+runs use the `nusey` Slurm account by default; override cluster-specific values
+on the command line as needed:
 
 ```bash
 GNN_SAC_RUN_ROOT=/scratch/$USER/gnn-sac-runs \
