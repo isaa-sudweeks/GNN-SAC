@@ -287,6 +287,14 @@ class TaskBalancedReplayTest(unittest.TestCase):
         self.assertEqual(buffer.sizes_by_task, {"truss-graph:a": 3, "truss-graph:b": 2})
         replay_batch = buffer.sample_with_tasks()
         self.assertEqual(list(replay_batch.by_task), ["truss-graph:a", "truss-graph:b"])
+        self.assertEqual(
+            list(replay_batch.raw_observations_by_task),
+            ["truss-graph:a", "truss-graph:b"],
+        )
+        self.assertEqual(
+            [len(graphs) for graphs in replay_batch.raw_observations_by_task.values()],
+            [2, 2],
+        )
         self.assertEqual([batch[2].shape[0] for batch in replay_batch.by_task.values()], [2, 2])
         self.assertEqual(replay_batch.combined[2].shape[0], 4)
         self.assertEqual(

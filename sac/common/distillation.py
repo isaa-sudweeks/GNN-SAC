@@ -16,9 +16,11 @@ from torch_geometric.nn import global_mean_pool
 
 from common.gnn_actor_critic import GNNActorCritic
 from common.graph_transforms import (
-    graph_feature_flags, graph_feature_schema,
+    graph_feature_flags,
+    graph_feature_schema,
     graph_structure_signature as graph_signature,
-    policy_action_mask, prepare_graph,
+    policy_action_mask,
+    prepare_graph,
 )
 
 
@@ -85,6 +87,35 @@ def replay_observations(replay: dict):
 
 
 TARGET_CACHE_FORMAT = "gnn-sac-distillation-targets-v2"
+
+
+def _prepare_graph_for(config, graph: Data, *, owner: str) -> Data:
+    """Build one policy's graph view and identify missing source metadata."""
+    try:
+        return prepare_graph(
+            graph,
+            use_virtual_node=bool(_get(config, "use_virtual_node", False)),
+            **graph_feature_flags(config),
+        )
+    except (TypeError, ValueError) as exc:
+        schema = graph_feature_schema(config)
+        raise ValueError(
+            f"Cannot construct {owner} graph feature schema {schema} from the raw "
+            f"observation: {exc}"
+        ) from exc
+
+
+def _validate_action_alignment(teacher_graph: Data, student_graph: Data) -> None:
+    """Require the two feature views to preserve action rows and their order."""
+    teacher_mask = policy_action_mask(teacher_graph).detach().cpu()
+    student_mask = policy_action_mask(student_graph).detach().cpu()
+    if (teacher_graph.x.size(0) != student_graph.x.size(0)
+            or not torch.equal(teacher_graph.edge_index.detach().cpu(),
+                               student_graph.edge_index.detach().cpu())
+            or not torch.equal(teacher_mask, student_mask)):
+        raise ValueError(
+            "Teacher and student graph views differ in topology or policy action ordering."
+        )
 
 
 class ObservationShards:
@@ -197,8 +228,9 @@ class ObservationShards:
 
     @classmethod
     def prepare(cls, directory: Path, observations, shard_size: int, contract: dict,
-                teacher, prepare_graph_fn, device: torch.device, target_batch_size: int,
-                *, pin_memory: bool = False, prefetch: bool = True):
+                teacher, teacher_prepare_graph_fn, device: torch.device,
+                target_batch_size: int, *, student_prepare_graph_fn=None,
+                pin_memory: bool = False, prefetch: bool = True):
         if (directory / "manifest.json").exists():
             return cls(directory, contract, pin_memory=pin_memory, prefetch=prefetch)
         directory.parent.mkdir(parents=True, exist_ok=True)
@@ -210,10 +242,22 @@ class ObservationShards:
 
             def write_shard(graphs):
                 nonlocal static
-                prepared = [prepare_graph_fn(graph) for graph in graphs]
-                if any(graph_signature(graph) != contract["prepared_signature"] for graph in prepared):
+                student_prepare = student_prepare_graph_fn or teacher_prepare_graph_fn
+                teacher_prepared = [teacher_prepare_graph_fn(graph) for graph in graphs]
+                student_prepared = [student_prepare(graph) for graph in graphs]
+                teacher_signature = contract.get(
+                    "teacher_prepared_signature", contract.get("prepared_signature")
+                )
+                student_signature = contract.get(
+                    "student_prepared_signature", contract.get("prepared_signature")
+                )
+                if any(graph_signature(graph) != teacher_signature for graph in teacher_prepared):
                     raise ValueError("Prepared teacher replay changes topology or action ordering.")
-                first = prepared[0]
+                if any(graph_signature(graph) != student_signature for graph in student_prepared):
+                    raise ValueError("Prepared student replay changes topology or action ordering.")
+                for teacher_graph, student_graph in zip(teacher_prepared, student_prepared):
+                    _validate_action_alignment(teacher_graph, student_graph)
+                first = student_prepared[0]
                 current_static = {
                     "edge_index": first.edge_index.cpu().contiguous(),
                     "action_mask": policy_action_mask(first).cpu().contiguous(),
@@ -226,10 +270,12 @@ class ObservationShards:
                     torch.save(static, root / "static.pt")
                 elif (set(static) != set(current_static)
                       or any(not torch.equal(value, current_static[key]) for key, value in static.items())):
-                    raise ValueError("Prepared teacher replay has changing structural tensors.")
+                    raise ValueError("Prepared student replay has changing structural tensors.")
                 means, log_stds = [], []
-                for start in range(0, len(prepared), target_batch_size):
-                    batch = Batch.from_data_list(prepared[start:start + target_batch_size]).to(device)
+                for start in range(0, len(teacher_prepared), target_batch_size):
+                    batch = Batch.from_data_list(
+                        teacher_prepared[start:start + target_batch_size]
+                    ).to(device)
                     with torch.no_grad():
                         mean, log_std = teacher.policy_distribution(batch)
                     if not torch.isfinite(mean).all() or not torch.isfinite(log_std).all():
@@ -238,17 +284,21 @@ class ObservationShards:
                     means.append(mean.reshape(-1, active, mean.size(-1)).cpu())
                     log_stds.append(log_std.reshape(-1, active, log_std.size(-1)).cpu())
                 payload = {
-                    "x": torch.stack([graph.x.cpu() for graph in prepared]).contiguous(),
+                    "x": torch.stack(
+                        [graph.x.cpu() for graph in student_prepared]
+                    ).contiguous(),
                     "teacher_mean": torch.cat(means).contiguous(),
                     "teacher_log_std": torch.cat(log_stds).contiguous(),
                 }
-                edge_attrs = [getattr(graph, "edge_attr", None) for graph in prepared]
+                edge_attrs = [
+                    getattr(graph, "edge_attr", None) for graph in student_prepared
+                ]
                 if any(value is not None for value in edge_attrs):
                     if any(value is None for value in edge_attrs):
                         raise ValueError("Prepared replay inconsistently provides edge features.")
                     payload["edge_attr"] = torch.stack([value.cpu() for value in edge_attrs]).contiguous()
                 torch.save(payload, root / f"{len(sizes)}.pt")
-                sizes.append(len(prepared))
+                sizes.append(len(student_prepared))
 
             for graph in observations:
                 if graph_signature(graph) != contract["replay_signature"]:
@@ -306,7 +356,9 @@ class Distillation:
         self.stage = "offline" if self.pretrain_updates else "online"
         self.step = 0
         self.generator = torch.Generator().manual_seed(int(_get(cfg, "seed", 0)))
-        self.teachers, self.datasets, self.sources = {}, {}, {}
+        self.teachers, self.teacher_configs = {}, {}
+        self.datasets, self.sources = {}, {}
+        self.schema_pairs = {}
         self._dataset_plans = {}
         self.replay_signatures = {}
         self.pending_samples = {}
@@ -332,6 +384,11 @@ class Distillation:
                     raise ValueError("Distillation teachers require full trainer checkpoints with config and replay.")
                 teacher_cfg = SimpleNamespace(**state["config"])
                 self._validate_config(teacher_cfg, topology, state["agent"])
+                self.teacher_configs[task] = teacher_cfg
+                self.schema_pairs[task] = {
+                    "teacher": graph_feature_schema(teacher_cfg),
+                    "student": graph_feature_schema(self.cfg),
+                }
                 teacher = GNNActorCritic(teacher_cfg)
                 teacher.load_state_dict(state["agent"]["model"])
                 teacher.requires_grad_(False).eval()
@@ -353,20 +410,41 @@ class Distillation:
                 signature = graph_signature(first)
                 if first.x.size(1) != int(cfg.obs_dim):
                     raise ValueError("Teacher replay observation width differs from student.")
+                teacher_prepared = self.prepare_teacher(task, first)
+                student_prepared = self.prepare_student(first)
+                _validate_action_alignment(teacher_prepared, student_prepared)
                 self.replay_signatures[task] = signature
                 if self.pretrain_updates:
                     contract = {
                         "format": TARGET_CACHE_FORMAT,
                         "source_sha256": digest,
                         "replay_signature": signature,
-                        "prepared_signature": graph_signature(self.prepare(first)),
-                        "graph_feature_schema": graph_feature_schema(self.cfg),
+                        "teacher_prepared_signature": graph_signature(teacher_prepared),
+                        "student_prepared_signature": graph_signature(student_prepared),
+                        "teacher_graph_feature_schema": self.schema_pairs[task]["teacher"],
+                        "student_graph_feature_schema": self.schema_pairs[task]["student"],
                         "use_virtual_node": bool(_get(self.cfg, "use_virtual_node", False)),
                     }
                     contract_hash = hashlib.sha256(
                         json.dumps(contract, sort_keys=True).encode()
                     ).hexdigest()[:16]
                     directory = cache / f"{digest}-targets-v2-{contract_hash}-s{shard_size}"
+                    if self.schema_pairs[task]["teacher"] == self.schema_pairs[task]["student"]:
+                        legacy_contract = {
+                            "format": TARGET_CACHE_FORMAT,
+                            "source_sha256": digest,
+                            "replay_signature": signature,
+                            "prepared_signature": graph_signature(student_prepared),
+                            "graph_feature_schema": self.schema_pairs[task]["student"],
+                            "use_virtual_node": bool(_get(self.cfg, "use_virtual_node", False)),
+                        }
+                        legacy_hash = hashlib.sha256(
+                            json.dumps(legacy_contract, sort_keys=True).encode()
+                        ).hexdigest()[:16]
+                        legacy_directory = cache / (
+                            f"{digest}-targets-v2-{legacy_hash}-s{shard_size}"
+                        )
+                        directory, contract = legacy_directory, legacy_contract
                     replay_key = None
                     if "buffers" in state["buffer"]:
                         replay_key = matching[0]
@@ -388,7 +466,9 @@ class Distillation:
         plan = self._dataset_plans[task]
         return ObservationShards.prepare(
             plan["directory"], observations, plan["shard_size"], plan["contract"],
-            self.teachers[task], self.prepare, self.device, plan["target_batch_size"],
+            self.teachers[task], lambda graph: self.prepare_teacher(task, graph),
+            self.device, plan["target_batch_size"],
+            student_prepare_graph_fn=self.prepare_student,
             pin_memory=self.pin_memory and self.device.type == "cuda",
             prefetch=self.prefetch,
         )
@@ -427,8 +507,6 @@ class Distillation:
             teacher_topologies = [teacher_topologies]
         if list(teacher_topologies) != [topology]:
             raise ValueError(f"Teacher topology does not match {topology!r}.")
-        if graph_feature_schema(teacher) != graph_feature_schema(self.cfg):
-            raise ValueError("Teacher and student graph feature schemas differ.")
         saved = agent_state.get("graph_feature_schema")
         if saved is not None and saved != graph_feature_schema(teacher):
             raise ValueError("Teacher checkpoint graph schema differs from its config.")
@@ -448,9 +526,17 @@ class Distillation:
         if str(_get(teacher, "task", "truss-graph")).split(":")[0] != str(self.cfg.task).split(":")[0]:
             raise ValueError("Teacher and student task conventions differ.")
 
+    def prepare_student(self, graph: Data) -> Data:
+        return _prepare_graph_for(self.cfg, graph, owner="student")
+
+    def prepare_teacher(self, task: str, graph: Data) -> Data:
+        return _prepare_graph_for(
+            self.teacher_configs[task], graph, owner=f"teacher for {task!r}"
+        )
+
     def prepare(self, graph: Data) -> Data:
-        return prepare_graph(graph, use_virtual_node=bool(_get(self.cfg, "use_virtual_node", False)),
-                             **graph_feature_flags(self.cfg))
+        """Backward-compatible alias for the student graph view."""
+        return self.prepare_student(graph)
 
     def bind_replay(self, replay) -> None:
         """Install teacher topology contracts at the replay's cold write/load boundary."""
@@ -463,12 +549,33 @@ class Distillation:
     def weight(self) -> float:
         return self.initial_weight * max(0.0, 1.0 - self.step / self.decay_steps)
 
-    def loss(self, student, task: str, obs: Data) -> torch.Tensor:
+    def loss(self, student, task: str, obs: Data,
+             raw_observations: list[Data] | None = None) -> torch.Tensor:
         if task not in self.teachers:
             raise ValueError(f"No teacher for replay task {task!r}.")
         teacher = self.teachers[task]
+        if self.schema_pairs[task]["teacher"] == self.schema_pairs[task]["student"]:
+            teacher_obs = obs
+        else:
+            if raw_observations is None:
+                raise ValueError(
+                    "Mismatched teacher/student graph feature schemas require raw "
+                    "replay observations for online distillation."
+                )
+            if len(raw_observations) != int(obs.num_graphs):
+                raise ValueError(
+                    "Raw replay observations do not align with the student task batch."
+                )
+            prepared = [self.prepare_teacher(task, graph) for graph in raw_observations]
+            teacher_obs = Batch.from_data_list(prepared)
+            object.__setattr__(
+                teacher_obs,
+                "_policy_action_count_cache",
+                sum(int(policy_action_mask(graph).sum()) for graph in prepared),
+            )
+            teacher_obs = teacher_obs.to(self.device, non_blocking=True)
         with torch.no_grad():
-            tm, tl = teacher.policy_distribution(obs)
+            tm, tl = teacher.policy_distribution(teacher_obs)
         sm, sl = student.policy_distribution(obs)
         return graph_mean_kl(gaussian_forward_kl(tm, tl, sm, sl), obs)
 
@@ -524,6 +631,7 @@ class Distillation:
     def state_dict(self) -> dict:
         return dict(stage=self.stage, completed_updates=self.completed_updates,
                     sources=self.sources, settings=self.settings, generator=self.generator.get_state(),
+                    schema_pairs=self.schema_pairs,
                     pending_samples=_copy_sample_specs(self.pending_samples))
 
     def load_state_dict(self, state: dict) -> None:
@@ -533,6 +641,18 @@ class Distillation:
         }
         if state["sources"] != self.sources or saved_semantic_settings != self.settings:
             raise ValueError("Distillation teacher sources or schedule/settings changed during resume.")
+        saved_schema_pairs = state.get("schema_pairs")
+        if saved_schema_pairs is None:
+            if any(
+                pair["teacher"] != pair["student"]
+                for pair in self.schema_pairs.values()
+            ):
+                raise ValueError(
+                    "Legacy distillation checkpoints require matching teacher/student "
+                    "graph feature schemas."
+                )
+        elif saved_schema_pairs != self.schema_pairs:
+            raise ValueError("Distillation teacher/student graph feature schemas changed during resume.")
         stage, completed = state["stage"], int(state["completed_updates"])
         if stage not in {"offline", "online"} or not 0 <= completed <= self.pretrain_updates:
             raise ValueError("Invalid distillation checkpoint stage/progress.")
