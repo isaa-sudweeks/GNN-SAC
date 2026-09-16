@@ -7,7 +7,7 @@ device: cpu # Torch device used for model training; use cpu when CUDA is unavail
 work_dir: ??? # Output directory; Hydra fills this when left unresolved.
 
 # Training schedule
-steps: 10_000_000 # Total environment steps to collect before ending training.
+steps: 10_000_000 # Environment steps to collect per topology before ending training.
 seed_steps: 5_000 # Random-action steps collected before policy updates begin; may be raised by env setup.
 pretrain_steps: 1_000 # Number of updates to run once when seed data first becomes available.
 eval_freq: 20_000 # Environment-step interval between evaluation passes.
