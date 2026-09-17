@@ -116,7 +116,13 @@ class GNNSAC(torch.nn.Module):
 
     def _validate_finite_model_state(self, label):
         self._require_finite(f"{label} model state", self.model.state_dict())
-        self._require_finite(f"{label} log_alpha", self.log_alpha)
+        self._validate_finite_temperature(label)
+
+    def _validate_finite_temperature(self, label):
+        self._require_finite(
+            f"{label} entropy temperature",
+            {"log_alpha": self.log_alpha, "alpha": self.alpha},
+        )
 
     def _validate_finite_training_state(self, label):
         self._validate_finite_model_state(label)
@@ -350,7 +356,7 @@ class GNNSAC(torch.nn.Module):
             (("log_alpha", self.log_alpha),),
         )
         self.alpha_optim.step()
-        self._require_finite("entropy temperature after optimizer step", self.log_alpha)
+        self._validate_finite_temperature("after optimizer step")
 
         return {
             "pi_loss": pi_loss.detach(),
@@ -650,7 +656,7 @@ class GNNSAC(torch.nn.Module):
                 (("log_alpha", self.log_alpha),),
             )
             self.alpha_optim.step()
-            self._require_finite("entropy temperature after optimizer step", self.log_alpha)
+            self._validate_finite_temperature("after optimizer step")
 
         entropy = torch.stack(entropies).mean()
         return (

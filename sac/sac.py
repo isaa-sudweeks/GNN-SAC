@@ -58,11 +58,17 @@ class SAC(torch.nn.Module):
 
     def _validate_finite_training_state(self, label):
         self._require_finite(f"{label} model state", self.model.state_dict())
-        self._require_finite(f"{label} log_alpha", self.log_alpha)
+        self._validate_finite_temperature(label)
         if self.finite_checks_enabled:
             require_finite_optimizer(f"{label} critic optimizer", self.q_optim)
             require_finite_optimizer(f"{label} actor optimizer", self.pi_optim)
             require_finite_optimizer(f"{label} alpha optimizer", self.alpha_optim)
+
+    def _validate_finite_temperature(self, label):
+        self._require_finite(
+            f"{label} entropy temperature",
+            {"log_alpha": self.log_alpha, "alpha": self.alpha},
+        )
 
     def _safe_action(self, action):
         if self.finite_checks_enabled:
@@ -76,7 +82,7 @@ class SAC(torch.nn.Module):
 
     def save(self, fp):
         self._require_finite("agent save model state", self.model.state_dict())
-        self._require_finite("agent save log_alpha", self.log_alpha)
+        self._validate_finite_temperature("agent save")
         torch.save(
             {
                 "model": self.model.state_dict(),
@@ -91,7 +97,7 @@ class SAC(torch.nn.Module):
         if isinstance(state_dict, dict) and "log_alpha" in state_dict:
             self.log_alpha.data.copy_(state_dict["log_alpha"].to(self.device))
         self._require_finite("loaded checkpoint model state", self.model.state_dict())
-        self._require_finite("loaded checkpoint log_alpha", self.log_alpha)
+        self._validate_finite_temperature("loaded checkpoint")
 
     def training_state_dict(self):
         self._validate_finite_training_state("trainer checkpoint save")
@@ -190,7 +196,7 @@ class SAC(torch.nn.Module):
                 "entropy temperature gradients", (("log_alpha", self.log_alpha),)
             )
         self.alpha_optim.step()
-        self._require_finite("entropy temperature after optimizer step", self.log_alpha)
+        self._validate_finite_temperature("after optimizer step")
 
         return {
             "pi_loss": pi_loss.detach(),

@@ -34,9 +34,28 @@ def _iter_tensors(value, path):
 
 def require_finite(label, value):
     """Raise with the first offending tensor path when ``value`` is non-finite."""
-    for path, tensor in _iter_tensors(value, label):
-        if not (tensor.is_floating_point() or tensor.is_complex()):
-            continue
+    tensors = [
+        (path, tensor)
+        for path, tensor in _iter_tensors(value, label)
+        if tensor.is_floating_point() or tensor.is_complex()
+    ]
+    if not tensors:
+        return
+
+    finite_flags = [torch.isfinite(tensor).all() for _, tensor in tensors]
+    aggregate_device = next(
+        (flag.device for flag in finite_flags if flag.device.type != "cpu"),
+        finite_flags[0].device,
+    )
+    all_finite = torch.stack(
+        [flag.to(device=aggregate_device) for flag in finite_flags]
+    ).all()
+    if bool(all_finite.item()):
+        return
+
+    # The healthy path above performs one device-to-host synchronization. Only
+    # inspect tensors individually after the aggregate reports a failure.
+    for path, tensor in tensors:
         finite = torch.isfinite(tensor)
         if bool(finite.all().item()):
             continue
@@ -59,5 +78,4 @@ def require_finite_gradients(label, named_parameters):
 
 def require_finite_optimizer(label, optimizer):
     """Validate tensor-valued optimizer accumulators before saving or resuming."""
-    for index, state in enumerate(optimizer.state.values()):
-        require_finite(f"{label}.state[{index}]", state)
+    require_finite(f"{label}.state", tuple(optimizer.state.values()))

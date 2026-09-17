@@ -76,6 +76,25 @@ class _FiniteForwardNaNBackward(torch.autograd.Function):
 
 
 class FiniteTrainingCheckTest(unittest.TestCase):
+    def test_healthy_nested_check_reads_one_aggregate_result(self):
+        original_item = torch.Tensor.item
+        item_calls = []
+
+        def counting_item(tensor, *args, **kwargs):
+            item_calls.append(tensor)
+            return original_item(tensor, *args, **kwargs)
+
+        with mock.patch.object(torch.Tensor, "item", counting_item):
+            require_finite(
+                "training state",
+                {
+                    "replay": [torch.ones(4), torch.zeros(3, 2)],
+                    "gradients": {"weight": torch.arange(5.0)},
+                },
+            )
+
+        self.assertEqual(len(item_calls), 1)
+
     def test_nested_replay_tensor_reports_exact_path(self):
         with self.assertRaisesRegex(
             NonFiniteTrainingError,
@@ -196,6 +215,19 @@ class FiniteTrainingCheckTest(unittest.TestCase):
         restored = GNNSAC(agent_cfg())
         with self.assertRaisesRegex(NonFiniteTrainingError, "loaded checkpoint"):
             restored.load_training_state_dict(state)
+
+    def test_finite_log_alpha_with_overflowed_alpha_is_rejected(self):
+        agent = GNNSAC(agent_cfg())
+        with torch.no_grad():
+            agent.log_alpha.fill_(100.0)
+
+        self.assertTrue(torch.isfinite(agent.log_alpha).all())
+        self.assertTrue(torch.isinf(agent.alpha).all())
+        with self.assertRaisesRegex(
+            NonFiniteTrainingError,
+            r"entropy temperature\.alpha contains 1 non-finite",
+        ):
+            agent.training_state_dict()
 
     def test_explicit_disable_preserves_legacy_action_sanitization(self):
         agent = GNNSAC(agent_cfg(finite_checks=False))
