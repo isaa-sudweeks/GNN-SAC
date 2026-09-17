@@ -109,7 +109,37 @@ class TensorGNNBufferTest(unittest.TestCase):
         assert_batch_equal(self, expected.combined, actual.combined)
         for task in tensor.task_names:
             assert_batch_equal(self, expected.by_task[task], actual.by_task[task])
+            expected_raw = expected.raw_observations_by_task[task]
+            actual_raw = actual.raw_observations_by_task[task]
+            self.assertEqual(len(expected_raw), len(actual_raw))
+            for expected_graph, actual_graph in zip(expected_raw, actual_raw):
+                torch.testing.assert_close(expected_graph.x, actual_graph.x)
+                torch.testing.assert_close(
+                    expected_graph.edge_index, actual_graph.edge_index
+                )
+                self.assertEqual(
+                    "action_mask" in expected_graph, "action_mask" in actual_graph
+                )
+                if "action_mask" in expected_graph:
+                    torch.testing.assert_close(
+                        expected_graph.action_mask, actual_graph.action_mask
+                    )
         self.assertTrue(torch.equal(expected_rng, actual_rng))
+
+    def test_task_only_sampling_skips_combined_batch_and_keeps_raw_graphs(self):
+        tensor = TensorGNNBuffer(config())
+        populate(tensor, metadata=True)
+
+        sampled = tensor.sample_with_tasks(combine=False)
+
+        self.assertIsNone(sampled.combined)
+        self.assertEqual(set(sampled.by_task), set(tensor.task_names))
+        self.assertEqual(
+            set(sampled.raw_observations_by_task), set(tensor.task_names)
+        )
+        for graphs in sampled.raw_observations_by_task.values():
+            self.assertTrue(graphs)
+            self.assertTrue(all(hasattr(graph, "edge_role") for graph in graphs))
 
     def test_graph_features_and_virtual_nodes_match_exactly(self):
         cfg = config(

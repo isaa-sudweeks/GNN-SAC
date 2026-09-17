@@ -120,7 +120,9 @@ python sac/train.py platform=supercomputer --multirun \
   hydra.launcher.skip_completed_jobs=false
 ```
 
-Set `GNN_SAC_RUN_ROOT` to put runs on shared persistent storage, and override cluster-specific values on the command line as needed:
+Set `GNN_SAC_RUN_ROOT` to put runs on shared persistent storage. Supercomputer
+runs use the `nusey` Slurm account by default; override cluster-specific values
+on the command line as needed:
 
 ```bash
 GNN_SAC_RUN_ROOT=/scratch/$USER/gnn-sac-runs \
@@ -209,7 +211,7 @@ python sac/gnn_infer.py --config-name inference/gnn_mjx \
   model=/path/to/final.pt episodes=256 num_envs=256
 ```
 
-The MJX training path requires `mujoco-truss-gen==0.12.4` and
+The MJX training path requires `mujoco-truss-gen==0.12.5` and
 training-environment rendering disabled. Native MuJoCo evaluation can render
 and record videos. MJX owns one compiled model and one fixed environment batch
 per topology, so realistic models and fixed-shape runtime domain randomization
@@ -222,7 +224,7 @@ JAX remains the default MJX physics implementation. On an NVIDIA CUDA host,
 install the Warp extra and select the upstream Warp implementation explicitly:
 
 ```bash
-python -m pip install 'mujoco-truss-gen[warp]==0.12.4'
+python -m pip install 'mujoco-truss-gen[warp]==0.12.5'
 python sac/gnn_train.py sim_backend=mjx mjx_impl=warp device=cuda
 ```
 

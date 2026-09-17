@@ -14,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "sac"))
 
 from common.distillation import (
-    TARGET_CACHE_FORMAT, Distillation, ObservationShards, gaussian_forward_kl, graph_mean_kl,
-    graph_signature, replay_observations,
+    TARGET_CACHE_FORMAT, Distillation, ObservationShards, _validate_action_alignment,
+    gaussian_forward_kl, graph_mean_kl, graph_signature, replay_observations,
 )
 from common.gnn_actor_critic import GNNActorCritic
 from common.gnn_buffer import GNNBuffer
@@ -49,7 +49,7 @@ def raw_graph(nodes):
     return obs
 
 
-def teacher_checkpoint(directory, topology, nodes, **overrides):
+def teacher_checkpoint(directory, topology, nodes, *, raw_edge_roles=None, **overrides):
     cfg = config(directory, truss_topology=topology, truss_topologies=None,
                  multitask=False, tasks=["truss-graph"], **overrides)
     agent = GNNSAC(cfg)
@@ -59,7 +59,7 @@ def teacher_checkpoint(directory, topology, nodes, **overrides):
     for index, observation in enumerate(observations):
         # Exercise dynamic node-derived edge features across cache entries.
         observation.x.mul_(1.0 + 0.1 * index)
-        if edge_roles:
+        if edge_roles if raw_edge_roles is None else raw_edge_roles:
             observation.edge_role = torch.arange(
                 observation.edge_index.size(1), dtype=torch.long
             ).remainder(2)
@@ -79,8 +79,8 @@ def setup(directory, **overrides):
     return cfg, Distillation(cfg, cfg.tasks)
 
 
-def replay_buffer(cfg):
-    buffer = GNNBuffer(cfg)
+def replay_buffer(cfg, buffer_type=GNNBuffer):
+    buffer = buffer_type(cfg)
     for task, nodes in zip(cfg.tasks, (3, 5)):
         obs = raw_graph(nodes)
         item = dict(obs=obs, action=torch.zeros(nodes, 1), reward=torch.tensor(0.), terminated=torch.tensor(False))
@@ -139,6 +139,13 @@ class GaussianKLTest(unittest.TestCase):
 
 
 class TeacherReplayTest(unittest.TestCase):
+    def test_teacher_student_views_require_identical_action_ordering(self):
+        teacher = prepare_graph(raw_graph(3), use_virtual_node=True)
+        student = teacher.clone()
+        student.action_mask = student.action_mask.roll(1)
+        with self.assertRaisesRegex(ValueError, "action ordering"):
+            _validate_action_alignment(teacher, student)
+
     def test_hydra_preset_and_teacher_mapping(self):
         from hydra import compose, initialize_config_dir
 
@@ -263,7 +270,7 @@ class TeacherReplayTest(unittest.TestCase):
             path = cfg.distillation["teachers"]["a"]
             original = torch.load(path, weights_only=False)
             for key, value in (("truss_topology", "wrong"), ("speed", 99),
-                               ("graph_features", {"node_roles": True})):
+                               ("use_virtual_node", False)):
                 bad = deepcopy(original)
                 bad["config"][key] = value
                 torch.save(bad, path)
@@ -292,6 +299,150 @@ class TeacherReplayTest(unittest.TestCase):
 
 
 class DistillationTrainingTest(unittest.TestCase):
+    def test_node_role_schema_mismatch_offline_and_online_for_both_actor_paths(self):
+        for pcgrad in (False, True):
+            with self.subTest(pcgrad=pcgrad), tempfile.TemporaryDirectory() as tmp:
+                student_features = dict(
+                    node_roles=True, edge_roles=False, edge_distance=False
+                )
+                cfg = config(tmp, graph_features=student_features, pcgrad=pcgrad)
+                cfg.distillation["teachers"] = {
+                    topology: teacher_checkpoint(
+                        tmp,
+                        topology,
+                        nodes,
+                        embedding_dim=embedding_dim,
+                        graph_features={},
+                    )
+                    for topology, nodes, embedding_dim in (
+                        ("a", 3, 8),
+                        ("b", 5, 12),
+                    )
+                }
+                distill = Distillation(cfg, cfg.tasks)
+                self.assertTrue(all(
+                    pair["teacher"] != pair["student"]
+                    for pair in distill.schema_pairs.values()
+                ))
+
+                task = cfg.tasks[0]
+                dataset = distill.datasets[task]
+                contract = dataset.metadata["contract"]
+                self.assertIn("teacher_graph_feature_schema", contract)
+                self.assertIn("student_graph_feature_schema", contract)
+                batch, cached_mean, cached_log_std = dataset.resolve(
+                    {"shard": 0, "indices": [0, 1]}, torch.device("cpu")
+                )
+                with open(cfg.distillation["teachers"]["a"], "rb") as stream:
+                    replay = torch.load(stream, weights_only=False)["buffer"]
+                raw = list(replay_observations(replay))[:2]
+                teacher_batch = Batch.from_data_list([
+                    distill.prepare_teacher(task, graph) for graph in raw
+                ])
+                with torch.no_grad():
+                    live_mean, live_log_std = distill.teachers[task].policy_distribution(
+                        teacher_batch
+                    )
+                torch.testing.assert_close(cached_mean, live_mean, rtol=0, atol=0)
+                torch.testing.assert_close(cached_log_std, live_log_std, rtol=0, atol=0)
+                self.assertEqual(batch.x.size(1), int(cfg.obs_dim) + 4)
+
+                agent = GNNSAC(cfg)
+                agent.distillation = distill
+                buffer = replay_buffer(cfg)
+                distill.bind_replay(buffer)
+                info = agent.update(buffer)
+                self.assertGreater(float(info["distillation/kl"]), 0)
+
+                tensor_agent = GNNSAC(cfg)
+                tensor_agent.distillation = distill
+                tensor_buffer = replay_buffer(cfg, TensorGNNBuffer)
+                distill.bind_replay(tensor_buffer)
+                tensor_info = tensor_agent.update(tensor_buffer)
+                self.assertGreater(float(tensor_info["distillation/kl"]), 0)
+
+                legacy_state = distill.state_dict()
+                legacy_state.pop("schema_pairs")
+                with self.assertRaisesRegex(ValueError, "Legacy.*matching"):
+                    distill.load_state_dict(legacy_state)
+
+    def test_all_graph_feature_flags_can_differ_when_raw_metadata_is_available(self):
+        cases = (
+            ({"node_roles": True}, {}),
+            ({}, {"node_roles": True}),
+            ({"edge_distance": True}, {}),
+            ({}, {"edge_distance": True}),
+            ({"edge_roles": True}, {}),
+            ({}, {"edge_roles": True}),
+        )
+        for student_features, teacher_features in cases:
+            with self.subTest(student=student_features, teacher=teacher_features), \
+                    tempfile.TemporaryDirectory() as tmp:
+                cfg = config(tmp, graph_features=student_features)
+                cfg.distillation["teachers"] = {
+                    topology: teacher_checkpoint(
+                        tmp,
+                        topology,
+                        nodes,
+                        embedding_dim=embedding_dim,
+                        graph_features=teacher_features,
+                        raw_edge_roles=True,
+                    )
+                    for topology, nodes, embedding_dim in (
+                        ("a", 3, 8),
+                        ("b", 5, 12),
+                    )
+                }
+                distill = Distillation(cfg, cfg.tasks)
+                metrics = distill.offline_update(GNNSAC(cfg))
+                self.assertTrue(torch.isfinite(torch.tensor(metrics["kl"])))
+
+    def test_teacher_schemas_can_differ_by_topology(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = config(tmp, graph_features={"edge_distance": True})
+            cfg.distillation["teachers"] = {
+                "a": teacher_checkpoint(
+                    tmp, "a", 3, embedding_dim=8, graph_features={}
+                ),
+                "b": teacher_checkpoint(
+                    tmp,
+                    "b",
+                    5,
+                    embedding_dim=12,
+                    graph_features={"node_roles": True},
+                ),
+            }
+            distill = Distillation(cfg, cfg.tasks)
+            self.assertNotEqual(
+                distill.schema_pairs[cfg.tasks[0]]["teacher"],
+                distill.schema_pairs[cfg.tasks[1]]["teacher"],
+            )
+            self.assertTrue(torch.isfinite(torch.tensor(
+                distill.offline_update(GNNSAC(cfg))["kl"]
+            )))
+
+    def test_missing_schema_metadata_and_changed_schema_state_fail_clearly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = config(tmp, graph_features={"edge_roles": True})
+            cfg.distillation["teachers"] = {
+                topology: teacher_checkpoint(
+                    tmp, topology, nodes, embedding_dim=8, graph_features={}
+                )
+                for topology, nodes in (("a", 3), ("b", 5))
+            }
+            with self.assertRaisesRegex(
+                ValueError, "Cannot construct student.*edge_role"
+            ):
+                Distillation(cfg, cfg.tasks)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, distill = setup(tmp)
+            changed = distill.state_dict()
+            changed["schema_pairs"] = deepcopy(changed["schema_pairs"])
+            changed["schema_pairs"][cfg.tasks[0]]["teacher"]["node_roles"] = True
+            with self.assertRaisesRegex(ValueError, "schemas changed"):
+                distill.load_state_dict(changed)
+
     def test_cached_targets_match_live_teacher_with_all_graph_features(self):
         with tempfile.TemporaryDirectory() as tmp:
             features = dict(node_roles=True, edge_roles=True, edge_distance=True)
@@ -326,6 +477,11 @@ class DistillationTrainingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, first = setup(tmp)
             cache_paths = {task: dataset.directory for task, dataset in first.datasets.items()}
+            for dataset in first.datasets.values():
+                self.assertIn("graph_feature_schema", dataset.metadata["contract"])
+                self.assertNotIn(
+                    "teacher_graph_feature_schema", dataset.metadata["contract"]
+                )
             manifests = {task: (path / "manifest.json").stat().st_mtime_ns
                          for task, path in cache_paths.items()}
             for dataset in first.datasets.values():
@@ -548,6 +704,8 @@ class DistillationTrainingTest(unittest.TestCase):
                 finally:
                     env.close()
             cfg = graph_test_cfg(**settings, truss_topologies=["tetrahedron", "octahedron"],
+                                 graph_features=dict(node_roles=True, edge_roles=False,
+                                                     edge_distance=False),
                                  distillation=dict(enabled=True, teachers=mapping, pretrain_updates=2,
                                                    batch_size=2, shard_size=2, checkpoint_freq=0, log_freq=1))
             env = make_env(cfg)
@@ -558,7 +716,7 @@ class DistillationTrainingTest(unittest.TestCase):
                 trainer.train()
                 self.assertEqual(trainer.distillation.completed_updates, 2)
                 self.assertEqual(trainer.distillation.stage, "online")
-                self.assertEqual(trainer._step, 8)
+                self.assertEqual(trainer._step, cfg.steps)
                 self.assertGreater(trainer._optimizer_updates, 0)
                 self.assertEqual(trainer.distillation.weight, 0)
             finally:

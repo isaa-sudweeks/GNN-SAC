@@ -517,6 +517,32 @@ class TensorGNNBuffer:
                 edge_attr[:, :static["raw_edge_count"], -1] = distance
         return x, edge_attr
 
+    @staticmethod
+    def _raw_observations(sample: _PackedReplaySample) -> list[Data]:
+        """Reconstruct sampled raw graphs for alternate feature-schema views."""
+        values, static = sample.values, sample.static
+        raw_x = values["obs_x"]
+        device = raw_x.device
+        edge_index = static["edge_index"].to(device)
+        action_mask = static["action_mask"]
+        edge_role = static["edge_role"]
+        if action_mask is not None:
+            action_mask = action_mask.to(device)
+        if edge_role is not None:
+            edge_role = edge_role.to(device)
+
+        observations = []
+        for index, x in enumerate(raw_x):
+            graph = Data(x=x, edge_index=edge_index)
+            if action_mask is not None:
+                graph.action_mask = action_mask
+            if edge_role is not None:
+                graph.edge_role = edge_role
+            if static["has_rigidity"]:
+                graph.rigidity = values["obs_rigidity"][index]
+            observations.append(graph)
+        return observations
+
     def _collate(self, samples, *, performance_profiler=None, subphase_name="combined_collation_transfer"):
         samples = list(samples)
         context = (
@@ -619,14 +645,25 @@ class TensorGNNBuffer:
             for task, sample in raw.items()
         }
 
-    def sample_with_tasks(self, performance_profiler=None):
+    def sample_with_tasks(self, performance_profiler=None, *, combine=True):
         raw = self._sample_raw_by_task(performance_profiler)
-        combined = self._collate(raw.values(), performance_profiler=performance_profiler)
+        combined = (
+            self._collate(raw.values(), performance_profiler=performance_profiler)
+            if combine
+            else None
+        )
         by_task = {
             task: self._collate([sample], performance_profiler=performance_profiler, subphase_name="task_collation_transfer")
             for task, sample in raw.items()
         }
-        return ReplayBatch(combined=combined, by_task=by_task)
+        return ReplayBatch(
+            combined=combined,
+            by_task=by_task,
+            raw_observations_by_task={
+                task: self._raw_observations(sample)
+                for task, sample in raw.items()
+            },
+        )
 
     def sample_ensemble(self):
         """Benchmark ReplayBufferEnsemble without changing the training path."""

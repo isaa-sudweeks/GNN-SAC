@@ -65,6 +65,39 @@ class TopologyAliasTest(unittest.TestCase):
 
         self.assertEqual(cfg.truss_topologies, ["octahedron", "tetrahedron"])
 
+    def test_learning_parameters_scale_as_per_topology_values(self):
+        cfg = parse_cfg(
+            topology_cfg(
+                truss_topologies=["a", "b", "c", "d"],
+                steps=10_000_000,
+                batch_size=256,
+                buffer_size=1_000_000,
+            )
+        )
+
+        self.assertEqual(cfg.training_topology_count, 4)
+        self.assertEqual(cfg.per_topology_steps, 10_000_000)
+        self.assertEqual(cfg.per_topology_batch_size, 256)
+        self.assertEqual(cfg.per_topology_buffer_size, 1_000_000)
+        self.assertEqual(cfg.steps, 40_000_000)
+        self.assertEqual(cfg.batch_size, 1_024)
+        self.assertEqual(cfg.buffer_size, 4_000_000)
+
+    def test_single_topology_learning_parameters_are_unchanged(self):
+        cfg = parse_cfg(
+            topology_cfg(
+                truss_topologies=["a"],
+                steps=100,
+                batch_size=8,
+                buffer_size=50,
+            )
+        )
+
+        self.assertEqual(cfg.training_topology_count, 1)
+        self.assertEqual(cfg.steps, 100)
+        self.assertEqual(cfg.batch_size, 8)
+        self.assertEqual(cfg.buffer_size, 50)
+
     def test_matching_topology_aliases_are_allowed(self):
         cfg = parse_cfg(
             topology_cfg(

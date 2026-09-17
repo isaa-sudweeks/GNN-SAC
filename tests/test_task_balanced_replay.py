@@ -287,6 +287,14 @@ class TaskBalancedReplayTest(unittest.TestCase):
         self.assertEqual(buffer.sizes_by_task, {"truss-graph:a": 3, "truss-graph:b": 2})
         replay_batch = buffer.sample_with_tasks()
         self.assertEqual(list(replay_batch.by_task), ["truss-graph:a", "truss-graph:b"])
+        self.assertEqual(
+            list(replay_batch.raw_observations_by_task),
+            ["truss-graph:a", "truss-graph:b"],
+        )
+        self.assertEqual(
+            [len(graphs) for graphs in replay_batch.raw_observations_by_task.values()],
+            [2, 2],
+        )
         self.assertEqual([batch[2].shape[0] for batch in replay_batch.by_task.values()], [2, 2])
         self.assertEqual(replay_batch.combined[2].shape[0], 4)
         self.assertEqual(
@@ -420,6 +428,22 @@ class TaskBalancedReplayTest(unittest.TestCase):
         self.assertEqual(config.batch_size, 4)
         self.assertEqual(buffer._capacity_per_task, 4)
         self.assertEqual(buffer._batch_size_per_task, 2)
+
+    def test_four_topology_totals_preserve_requested_per_topology_sizes(self):
+        tasks = [f"truss-graph:{name}" for name in ("a", "b", "c", "d")]
+        config = cfg(
+            tasks=tasks,
+            buffer_size=4_000_000,
+            batch_size=1_024,
+            steps=40_000_000,
+        )
+
+        buffer = GNNBuffer(config)
+
+        self.assertEqual(buffer.capacity, 4_000_000)
+        self.assertEqual(buffer._capacity_per_task, 1_000_000)
+        self.assertEqual(buffer._batch_size, 1_024)
+        self.assertEqual(buffer._batch_size_per_task, 256)
 
     def test_checkpoint_round_trip_and_layout_validation(self):
         original = GNNBuffer(cfg())
