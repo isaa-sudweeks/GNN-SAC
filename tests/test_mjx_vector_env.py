@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
 
 import torch
@@ -17,6 +18,7 @@ from common.parser import parse_cfg
 from common.gnn_buffer import GNNBuffer
 from common.tensor_gnn_buffer import TensorGNNBuffer
 from env import make_env
+from env.mujoco_gen.mjx_vector_env import MjxVectorGraphEnv
 from gnn_sac import GNNSAC
 
 
@@ -83,6 +85,67 @@ class MjxVectorEnvTest(unittest.TestCase):
             self.assertEqual(step_count.tolist(), [0, 1])
         finally:
             env.close()
+
+    def test_masked_step_delegates_shared_warp_data_merging_to_core(self):
+        import jax
+        import jax.numpy as jnp
+
+        env = object.__new__(MjxVectorGraphEnv)
+        env._jax = jax
+        env._jnp = jnp
+        old_data = {
+            "batched": jnp.array([1.0, 2.0]),
+            "shared_contact_buffer": jnp.arange(7.0),
+        }
+        new_data = {
+            "batched": jnp.array([10.0, 20.0]),
+            "shared_contact_buffer": jnp.arange(7.0) + 100.0,
+        }
+
+        def batch_where(mask, old, new):
+            expanded = mask.reshape((mask.shape[0],) + (1,) * (new.ndim - 1))
+            return jnp.where(expanded, new, old)
+
+        def data_where(mask, old, new):
+            return {
+                "batched": batch_where(mask, old["batched"], new["batched"]),
+                "shared_contact_buffer": old["shared_contact_buffer"],
+            }
+
+        env._core = SimpleNamespace(
+            _batch_where=batch_where,
+            _data_where=data_where,
+            _get_obs=lambda state: state.data["batched"],
+        )
+        state = SimpleNamespace(
+            data=old_data,
+            step_count=jnp.array([1, 2]),
+            node_commands=jnp.array([[1.0], [2.0]]),
+            domain_randomization={"value": jnp.array([3.0, 4.0])},
+        )
+        stepped = SimpleNamespace(
+            data=new_data,
+            step_count=jnp.array([10, 20]),
+            node_commands=jnp.array([[10.0], [20.0]]),
+            domain_randomization={"value": jnp.array([30.0, 40.0])},
+        )
+        env._step_with_actuator_energy = lambda keys, current, actions: (
+            jnp.zeros(2), stepped, jnp.array([5.0, 6.0]),
+            jnp.array([True, True]), {"critical_eig": jnp.array([7.0, 8.0])},
+        )
+
+        _, merged, reward, done, info = env._step_masked(
+            None, state, None, jnp.array([True, False])
+        )
+
+        self.assertEqual(merged.data["batched"].tolist(), [10.0, 2.0])
+        self.assertEqual(merged.data["shared_contact_buffer"].tolist(), list(range(7)))
+        self.assertEqual(merged.step_count.tolist(), [10, 2])
+        self.assertEqual(merged.node_commands[:, 0].tolist(), [10.0, 2.0])
+        self.assertEqual(merged.domain_randomization["value"].tolist(), [30.0, 4.0])
+        self.assertEqual(reward.tolist(), [5.0, 0.0])
+        self.assertEqual(done.tolist(), [True, False])
+        self.assertEqual(info["critical_eig"].tolist(), [7.0, 0.0])
 
     def test_energy_penalizes_routed_actuator_commands(self):
         cfg = mjx_cfg(

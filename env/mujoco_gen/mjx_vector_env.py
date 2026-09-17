@@ -295,13 +295,24 @@ class MjxVectorGraphEnv(gym.Env):
         flat_obs, stepped_state, reward, done, info = self._step_with_actuator_energy(
             keys, state, actions
         )
-        batch_size = self.num_envs
-
-        def select(new_value, old_value):
-            expanded_mask = mask.reshape((batch_size,) + (1,) * (new_value.ndim - 1))
-            return self._jnp.where(expanded_mask, new_value, old_value)
-
-        merged_state = self._jax.tree.map(select, stepped_state, state)
+        # Warp data contains shared, fixed-capacity contact buffers whose leading
+        # dimension is not the environment batch. Delegate data merging to the
+        # upstream implementation so those leaves remain untouched while the
+        # genuinely batched state fields advance only selected environments.
+        merged_state = type(state)(
+            data=self._core._data_where(mask, state.data, stepped_state.data),
+            step_count=self._core._batch_where(
+                mask, state.step_count, stepped_state.step_count
+            ),
+            node_commands=self._core._batch_where(
+                mask, state.node_commands, stepped_state.node_commands
+            ),
+            domain_randomization=self._jax.tree.map(
+                lambda old, new: self._core._batch_where(mask, old, new),
+                state.domain_randomization,
+                stepped_state.domain_randomization,
+            ),
+        )
         flat_obs = self._core._get_obs(merged_state)
         reward = self._jnp.where(mask, reward, 0.0)
         done = self._jnp.where(mask, done, False)
