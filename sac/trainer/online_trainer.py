@@ -39,6 +39,10 @@ class OnlineTrainer(Trainer):
         self._record_video_this_eval = True
         self.reward_normalizer = self._make_reward_normalizer()
         self.performance_profiler = TrainingProfiler.from_config(self.cfg, self.logger)
+        if hasattr(self.buffer, "runtime_storage_metadata"):
+            self.performance_profiler.metadata["replay_storage"] = (
+                self.buffer.runtime_storage_metadata()
+            )
         self._eval_training_topologies = []
         self._eval_heldout_topologies = self._topology_list(
             getattr(self.cfg, "eval_extra_topologies", None)
@@ -153,7 +157,7 @@ class OnlineTrainer(Trainer):
         distillation.finish_pretraining(self.agent)
         self.logger.log({"step": self._step, "stage": "online",
                          "offline_updates": distillation.completed_updates}, "distillation")
-        self.eval()
+        self._evaluate_and_log()
         if distillation.checkpoint_freq:
             self.save_checkpoint(identifier="distillation")
 

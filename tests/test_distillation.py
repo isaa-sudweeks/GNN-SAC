@@ -19,6 +19,7 @@ from common.distillation import (
 )
 from common.gnn_actor_critic import GNNActorCritic
 from common.gnn_buffer import GNNBuffer
+from common.tensor_gnn_buffer import TensorGNNBuffer
 from common.graph_transforms import prepare_graph
 from common.logger import Logger
 from gnn_sac import GNNSAC
@@ -78,8 +79,8 @@ def setup(directory, **overrides):
     return cfg, Distillation(cfg, cfg.tasks)
 
 
-def replay_buffer(cfg):
-    buffer = GNNBuffer(cfg)
+def replay_buffer(cfg, buffer_type=GNNBuffer):
+    buffer = buffer_type(cfg)
     for task, nodes in zip(cfg.tasks, (3, 5)):
         obs = raw_graph(nodes)
         item = dict(obs=obs, action=torch.zeros(nodes, 1), reward=torch.tensor(0.), terminated=torch.tensor(False))
@@ -208,6 +209,26 @@ class TeacherReplayTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             list(replay_observations(dict(full, size=0)))
 
+    def test_tensor_v3_replay_observations_preserve_ring_order(self):
+        cfg = config("/tmp", replay_backend="torchrl_tensor", replay_storage="cpu_pinned", buffer_size=8,
+                     node_counts=[3, 5], obs_dim=6, action_dim=1, graph_features={})
+        replay = TensorGNNBuffer(cfg)
+        for marker in range(6):
+            obs = raw_graph(3)
+            obs.x.fill_(marker)
+            following = raw_graph(3)
+            following.x.fill_(marker + .5)
+            item = lambda graph: dict(
+                obs=graph, action=torch.zeros(1, 3, 1), reward=torch.zeros(1),
+                terminated=torch.zeros(1),
+            )
+            replay.add([item(obs), item(following)], task=cfg.tasks[0])
+        task_state = replay.state_dict()["buffers"][cfg.tasks[0]]
+        self.assertEqual(
+            [int(graph.x[0, 0]) for graph in replay_observations(task_state)],
+            [2, 3, 4, 5],
+        )
+
     def test_frozen_teachers_routing_and_split_exclusion(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, distill = setup(tmp)
@@ -332,6 +353,13 @@ class DistillationTrainingTest(unittest.TestCase):
                 distill.bind_replay(buffer)
                 info = agent.update(buffer)
                 self.assertGreater(float(info["distillation/kl"]), 0)
+
+                tensor_agent = GNNSAC(cfg)
+                tensor_agent.distillation = distill
+                tensor_buffer = replay_buffer(cfg, TensorGNNBuffer)
+                distill.bind_replay(tensor_buffer)
+                tensor_info = tensor_agent.update(tensor_buffer)
+                self.assertGreater(float(tensor_info["distillation/kl"]), 0)
 
                 legacy_state = distill.state_dict()
                 legacy_state.pop("schema_pairs")
@@ -626,14 +654,14 @@ class DistillationTrainingTest(unittest.TestCase):
             trainer.distillation = distill
             trainer._step = 0
             trainer.logger.log = Mock()
-            trainer.eval = Mock()
+            trainer._evaluate_and_log = Mock()
             trainer.save_checkpoint = Mock()
             OnlineTrainer._run_distillation_pretraining(trainer)
-            trainer.eval.assert_called_once()
+            trainer._evaluate_and_log.assert_called_once()
             self.assertEqual(trainer.buffer.size, 0)
             self.assertEqual(trainer._step, 0)
             OnlineTrainer._run_distillation_pretraining(trainer)
-            trainer.eval.assert_called_once()
+            trainer._evaluate_and_log.assert_called_once()
             trainer._step = 25
             snapshot = trainer._checkpoint_state_snapshot()
             trainer.load_checkpoint_state_dict(snapshot)

@@ -121,6 +121,15 @@ class Trainer:
 
     def _snapshot_buffer_state_dict(self, state_dict):
         """Copy replay metadata while avoiding a full clone of immutable stored samples."""
+        if int(state_dict.get("format_version", 0)) == 3 and all(
+            int(task_state.get("format_version", 0)) == 3
+            for task_state in state_dict.get("buffers", {}).values()
+        ):
+            # Tensor replay state_dict() already performs the required single,
+            # contiguous CPU snapshot. It is isolated from live storage and can
+            # be handed directly to the background serializer.
+            return state_dict
+
         def snapshot_value(value):
             if isinstance(value, Mapping):
                 return {key: snapshot_value(item) for key, item in value.items()}
