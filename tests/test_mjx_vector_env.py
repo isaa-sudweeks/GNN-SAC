@@ -15,6 +15,7 @@ for path in (ROOT, SAC_ROOT):
 
 from common.parser import parse_cfg
 from common.gnn_buffer import GNNBuffer
+from common.tensor_gnn_buffer import TensorGNNBuffer
 from env import make_env
 from gnn_sac import GNNSAC
 
@@ -190,12 +191,11 @@ class MjxVectorEnvTest(unittest.TestCase):
             next_actions = agent.act_batch(next_observations)
             next_results = env.step_many(next_actions, env_indices=[0, 1])
 
-            buffer = GNNBuffer(cfg)
+            episodes = []
             for env_idx in range(2):
                 first_info = results[env_idx][3]
                 second_info = next_results[env_idx][3]
-                buffer.add(
-                    [
+                episodes.append([
                         {
                             "obs": selected_observations[env_idx],
                             "action": torch.zeros_like(actions[env_idx]).unsqueeze(0),
@@ -214,11 +214,16 @@ class MjxVectorEnvTest(unittest.TestCase):
                             "reward": next_results[env_idx][1],
                             "terminated": second_info["terminated"],
                         },
-                    ]
-                )
-            update_info = agent.update(buffer)
-            self.assertTrue(torch.isfinite(update_info["value_loss"]))
-            self.assertTrue(torch.isfinite(update_info["pi_loss"]))
+                    ])
+            for buffer_type in (GNNBuffer, TensorGNNBuffer):
+                with self.subTest(buffer=buffer_type.__name__):
+                    buffer = buffer_type(cfg)
+                    for episode in episodes:
+                        buffer.add(episode)
+                    learner = GNNSAC(cfg)
+                    update_info = learner.update(buffer)
+                    self.assertTrue(torch.isfinite(update_info["value_loss"]))
+                    self.assertTrue(torch.isfinite(update_info["pi_loss"]))
 
             reset_observation = env.reset_many(env_indices=[0])[0]
             self.assertTrue(torch.equal(

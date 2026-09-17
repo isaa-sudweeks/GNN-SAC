@@ -9,6 +9,7 @@ from torch_geometric.data import Batch, Data
 from common.config_utils import round_to_nearest_multiple
 from common.graph_transforms import (
     graph_feature_flags,
+    graph_signature_compatible,
     graph_structure_signature,
     physical_node_mask,
     policy_action_mask,
@@ -231,7 +232,14 @@ class _GNNTaskBuffer:
     def _validate_graphs(self, graphs):
         if self._graph_signature is None:
             return
-        if any(graph_structure_signature(graph) != self._graph_signature for graph in graphs):
+        if any(
+            not graph_signature_compatible(
+                graph_structure_signature(graph),
+                self._graph_signature,
+                allow_action_subset=True,
+            )
+            for graph in graphs
+        ):
             raise ValueError("Replay observation topology or action ordering differs from teacher.")
 
     def state_dict(self):

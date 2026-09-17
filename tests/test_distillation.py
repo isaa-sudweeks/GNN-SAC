@@ -209,7 +209,7 @@ class TeacherReplayTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             list(replay_observations(dict(full, size=0)))
 
-    def test_tensor_v3_replay_observations_preserve_ring_order(self):
+    def test_tensor_v3_and_v4_replay_observations_preserve_ring_order_and_masks(self):
         cfg = config("/tmp", replay_backend="torchrl_tensor", replay_storage="cpu_pinned", buffer_size=8,
                      node_counts=[3, 5], obs_dim=6, action_dim=1, graph_features={})
         replay = TensorGNNBuffer(cfg)
@@ -218,16 +218,38 @@ class TeacherReplayTest(unittest.TestCase):
             obs.x.fill_(marker)
             following = raw_graph(3)
             following.x.fill_(marker + .5)
+            if marker % 2:
+                obs.action_mask[1] = False
+            if not marker % 2:
+                following.action_mask[1] = False
             item = lambda graph: dict(
                 obs=graph, action=torch.zeros(1, 3, 1), reward=torch.zeros(1),
                 terminated=torch.zeros(1),
             )
             replay.add([item(obs), item(following)], task=cfg.tasks[0])
-        task_state = replay.state_dict()["buffers"][cfg.tasks[0]]
-        self.assertEqual(
-            [int(graph.x[0, 0]) for graph in replay_observations(task_state)],
-            [2, 3, 4, 5],
-        )
+        v4 = replay.state_dict()["buffers"][cfg.tasks[0]]
+        v3 = deepcopy(v4)
+        v3["format_version"] = 3
+        storage = v3["replay_buffer"]["_storage"]["_storage"]
+        del storage["obs_action_mask"]
+        del storage["next_obs_action_mask"]
+
+        for version, task_state in ((3, v3), (4, v4)):
+            with self.subTest(version=version):
+                observations = list(replay_observations(task_state))
+                self.assertEqual([int(graph.x[0, 0]) for graph in observations], [2, 3, 4, 5])
+                expected_masks = (
+                    [task_state["static"]["action_mask"]] * 4
+                    if version == 3
+                    else [
+                        torch.tensor([True, True, False]),
+                        torch.tensor([True, False, False]),
+                        torch.tensor([True, True, False]),
+                        torch.tensor([True, False, False]),
+                    ]
+                )
+                for graph, expected_mask in zip(observations, expected_masks):
+                    torch.testing.assert_close(graph.action_mask, expected_mask)
 
     def test_frozen_teachers_routing_and_split_exclusion(self):
         with tempfile.TemporaryDirectory() as tmp:
