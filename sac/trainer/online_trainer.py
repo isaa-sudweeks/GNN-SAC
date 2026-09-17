@@ -5,6 +5,7 @@ import numpy as np
 import re
 import torch 
 from tensordict.tensordict import TensorDict 
+from common.finite_checks import NonFiniteTrainingError
 from common.reward_normalizer import TaskRewardNormalizer
 from common.training_profiler import TrainingProfiler
 from trainer.base import Trainer 
@@ -430,12 +431,18 @@ class OnlineTrainer(Trainer):
             update_kwargs = {}
             if "compute_diagnostics" in update_parameters:
                 update_kwargs["compute_diagnostics"] = run_diagnostics
-            if "performance_profiler" in update_parameters:
-                update_kwargs["performance_profiler"] = self.performance_profiler
-                update_metrics = self.agent.update(self.buffer, **update_kwargs)
-            else:
-                with self.performance_profiler.phase("optimization"):
+            try:
+                if "performance_profiler" in update_parameters:
+                    update_kwargs["performance_profiler"] = self.performance_profiler
                     update_metrics = self.agent.update(self.buffer, **update_kwargs)
+                else:
+                    with self.performance_profiler.phase("optimization"):
+                        update_metrics = self.agent.update(self.buffer, **update_kwargs)
+            except NonFiniteTrainingError as exc:
+                raise NonFiniteTrainingError(
+                    "Non-finite training state detected at "
+                    f"environment step {self._step}, optimizer update {next_update}: {exc}"
+                ) from exc
             self._optimizer_updates = next_update
             diagnostics = update_metrics.pop("gradient_diagnostics", None)
             if diagnostics:

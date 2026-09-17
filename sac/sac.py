@@ -4,6 +4,12 @@ import torch
 import torch.nn.functional as F
 
 from common.actor_critic import ActorCritic
+from common.finite_checks import (
+    NonFiniteTrainingError,
+    require_finite,
+    require_finite_gradients,
+    require_finite_optimizer,
+)
 
 
 class SAC(torch.nn.Module):
@@ -18,6 +24,8 @@ class SAC(torch.nn.Module):
         self.cfg = cfg
         self.device = torch.device(getattr(cfg, "device", "cuda"))
         self.model = ActorCritic(cfg).to(self.device)
+        self._q_parameters = tuple(self.model._Qs.parameters())
+        self._actor_parameters = tuple(self.model._pi.parameters())
         capturable = self.device.type in {"cuda", "xpu", "hpu", "privateuseone", "xla"}
 
         self.q_optim = torch.optim.Adam(self.model._Qs.parameters(), lr=self.cfg.lr, capturable=capturable)
@@ -40,7 +48,26 @@ class SAC(torch.nn.Module):
     def alpha(self):
         return self.log_alpha.exp()
 
+    @property
+    def finite_checks_enabled(self):
+        return bool(getattr(self.cfg, "finite_checks", True))
+
+    def _require_finite(self, label, value):
+        if self.finite_checks_enabled:
+            require_finite(label, value)
+
+    def _validate_finite_training_state(self, label):
+        self._require_finite(f"{label} model state", self.model.state_dict())
+        self._require_finite(f"{label} log_alpha", self.log_alpha)
+        if self.finite_checks_enabled:
+            require_finite_optimizer(f"{label} critic optimizer", self.q_optim)
+            require_finite_optimizer(f"{label} actor optimizer", self.pi_optim)
+            require_finite_optimizer(f"{label} alpha optimizer", self.alpha_optim)
+
     def _safe_action(self, action):
+        if self.finite_checks_enabled:
+            require_finite("policy action", action)
+            return action.clamp(-1, 1)
         return torch.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0).clamp(-1, 1)
 
     def _get_discount(self, episode_length):
@@ -48,6 +75,8 @@ class SAC(torch.nn.Module):
         return min(max((frac - 1) / frac, self.cfg.discount_min), self.cfg.discount_max)
 
     def save(self, fp):
+        self._require_finite("agent save model state", self.model.state_dict())
+        self._require_finite("agent save log_alpha", self.log_alpha)
         torch.save(
             {
                 "model": self.model.state_dict(),
@@ -61,8 +90,11 @@ class SAC(torch.nn.Module):
         self.model.load_state_dict(state_dict["model"] if "model" in state_dict else state_dict)
         if isinstance(state_dict, dict) and "log_alpha" in state_dict:
             self.log_alpha.data.copy_(state_dict["log_alpha"].to(self.device))
+        self._require_finite("loaded checkpoint model state", self.model.state_dict())
+        self._require_finite("loaded checkpoint log_alpha", self.log_alpha)
 
     def training_state_dict(self):
+        self._validate_finite_training_state("trainer checkpoint save")
         return {
             "model": self.model.state_dict(),
             "log_alpha": self.log_alpha.detach().cpu(),
@@ -79,6 +111,7 @@ class SAC(torch.nn.Module):
             self.pi_optim.load_state_dict(state_dict["pi_optim"])
         if "alpha_optim" in state_dict:
             self.alpha_optim.load_state_dict(state_dict["alpha_optim"])
+        self._validate_finite_training_state("loaded trainer checkpoint")
 
     @torch.no_grad()
     def act(self, obs, t0=False, eval_mode=False):
@@ -99,11 +132,26 @@ class SAC(torch.nn.Module):
         td_target = self._td_target(next_obs, reward, terminated)
         qs = self.model.Q(obs, action, return_type="all")
         q_loss = F.mse_loss(qs, td_target.unsqueeze(0).expand_as(qs))
+        self._require_finite("critic loss", q_loss)
 
         self.q_optim.zero_grad(set_to_none=True)
         q_loss.backward()
-        q_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._Qs.parameters(), self.cfg.grad_clip_norm)
+        if self.finite_checks_enabled:
+            require_finite_gradients(
+                "critic gradients before clipping", self.model._Qs.named_parameters()
+            )
+        try:
+            q_grad_norm = torch.nn.utils.clip_grad_norm_(
+                self._q_parameters,
+                self.cfg.grad_clip_norm,
+                error_if_nonfinite=self.finite_checks_enabled,
+            )
+        except RuntimeError as exc:
+            if not self.finite_checks_enabled:
+                raise
+            raise NonFiniteTrainingError("critic gradient norm became non-finite.") from exc
         self.q_optim.step()
+        self._require_finite("critic parameters after optimizer step", self._q_parameters)
         return q_loss.detach(), q_grad_norm.detach()
 
     def update_pi_and_alpha(self, obs):
@@ -111,16 +159,38 @@ class SAC(torch.nn.Module):
         q = self.model.Q(obs, action, return_type="min")
         log_prob = info["log_prob"]
         pi_loss = (self.alpha.detach() * log_prob - q).mean()
+        self._require_finite("actor loss", pi_loss)
+        self._require_finite("actor distribution statistics", info)
 
         self.pi_optim.zero_grad(set_to_none=True)
         pi_loss.backward()
-        pi_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._pi.parameters(), self.cfg.grad_clip_norm)
+        if self.finite_checks_enabled:
+            require_finite_gradients(
+                "actor gradients before clipping", self.model._pi.named_parameters()
+            )
+        try:
+            pi_grad_norm = torch.nn.utils.clip_grad_norm_(
+                self._actor_parameters,
+                self.cfg.grad_clip_norm,
+                error_if_nonfinite=self.finite_checks_enabled,
+            )
+        except RuntimeError as exc:
+            if not self.finite_checks_enabled:
+                raise
+            raise NonFiniteTrainingError("actor gradient norm became non-finite.") from exc
         self.pi_optim.step()
+        self._require_finite("actor parameters after optimizer step", self._actor_parameters)
 
         alpha_loss = -(self.log_alpha * (log_prob.detach() + self.target_entropy)).mean()
+        self._require_finite("entropy temperature loss", alpha_loss)
         self.alpha_optim.zero_grad(set_to_none=True)
         alpha_loss.backward()
+        if self.finite_checks_enabled:
+            require_finite_gradients(
+                "entropy temperature gradients", (("log_alpha", self.log_alpha),)
+            )
         self.alpha_optim.step()
+        self._require_finite("entropy temperature after optimizer step", self.log_alpha)
 
         return {
             "pi_loss": pi_loss.detach(),
@@ -138,6 +208,9 @@ class SAC(torch.nn.Module):
         )
         with sampling_phase:
             obs, action, reward, terminated, next_obs = buffer.sample()
+        self._require_finite(
+            "replay batch", (obs, action, reward, terminated, next_obs)
+        )
 
         optimization_phase = (
             performance_profiler.phase("optimization")
@@ -151,6 +224,9 @@ class SAC(torch.nn.Module):
             q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
             pi_info = self.update_pi_and_alpha(obs)
             self.model.soft_update_target_Q()
+            self._require_finite(
+                "target critic after soft update", self.model._target_Qs.state_dict()
+            )
             self.model.eval()
 
         info = {
