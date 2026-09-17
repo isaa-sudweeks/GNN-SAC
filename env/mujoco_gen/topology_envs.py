@@ -486,6 +486,12 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         self.node_action_dim = int(_cfg_get(config, "node_action_dim", 1))
         self.node_feature_dim = 6
         self._broken_node_probability = _broken_nodes_probability(config)
+        self._broken_nodes_sampling_enabled = True
+        configured_seed = _cfg_get(config, "seed", None)
+        self._initial_reset_seed = (
+            None if configured_seed is None else int(configured_seed) + int(rank)
+        )
+        self._has_reset = False
         super().__init__(make_truss_env_config(config), render_mode=render_mode, rank=rank)
 
     def _use_control_graph(self):
@@ -622,6 +628,9 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
             return
         self._broken_node_mask.fill(False)
 
+        if not self._broken_nodes_sampling_enabled:
+            return
+
         eligible_indices = np.flatnonzero(~self._base_passive_node_mask)
         probability = self._broken_node_probability
         if probability <= 0.0:
@@ -633,6 +642,10 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
             restored_index = int(self.np_random.choice(eligible_indices))
             self._broken_node_mask[restored_index] = False
 
+    def set_broken_nodes_sampling_enabled(self, enabled: bool) -> None:
+        """Gate future reset-time samples without changing the current episode."""
+        self._broken_nodes_sampling_enabled = bool(enabled)
+
     def _add_broken_node_diagnostics(self, info):
         if self._broken_node_probability is None:
             return
@@ -640,7 +653,10 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         info["broken_node_count"] = int(self._broken_node_mask.sum())
 
     def reset(self, seed=None, options=None):
+        if seed is None and not self._has_reset:
+            seed = self._initial_reset_seed
         _, info = super().reset(seed=seed, options=options)
+        self._has_reset = True
         self._sample_broken_nodes()
         domain_info = info.setdefault("domain_randomization", {})
         self._add_broken_node_diagnostics(domain_info)

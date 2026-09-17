@@ -228,6 +228,17 @@ class MjxVectorEnvTest(unittest.TestCase):
                 reset_observation.action_mask.cpu(),
                 base_active & ~core._broken_node_masks[0].cpu(),
             ))
+
+            masks_before_gated_reset = core._broken_node_masks.clone()
+            core.set_broken_nodes_sampling_enabled(False)
+            gated_observation = env.reset_many(env_indices=[0])[0]
+            self.assertFalse(core._broken_node_masks[0].any())
+            self.assertTrue(torch.equal(
+                core._broken_node_masks[1:], masks_before_gated_reset[1:]
+            ))
+            self.assertTrue(torch.equal(
+                gated_observation.action_mask.cpu(), base_active
+            ))
         finally:
             env.close()
 

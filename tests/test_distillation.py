@@ -415,6 +415,59 @@ class DistillationTrainingTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "schemas changed"):
                 distill.load_state_dict(changed)
 
+    def test_broken_node_curriculum_waits_for_zero_weight_and_propagates(self):
+        class ScheduledDistillation:
+            def __init__(self, initial_weight=1.0, decay_steps=10):
+                self.initial_weight = initial_weight
+                self.decay_steps = decay_steps
+                self.step = -1
+
+            @property
+            def weight(self):
+                return self.initial_weight * max(
+                    0.0, 1.0 - self.step / self.decay_steps
+                )
+
+        class GateTarget:
+            def __init__(self):
+                self.enabled = None
+                self.calls = []
+
+            def set_broken_nodes_sampling_enabled(self, enabled):
+                self.enabled = bool(enabled)
+                self.calls.append(self.enabled)
+
+        first, second, bucket = GateTarget(), GateTarget(), GateTarget()
+        nested_env = SimpleNamespace(
+            env=first,
+            envs=[first, second],
+            buckets=[bucket],
+        )
+        distillation = ScheduledDistillation()
+        trainer = SimpleNamespace(env=nested_env, distillation=distillation, _step=9)
+
+        self.assertFalse(OnlineTrainer._sync_broken_nodes_curriculum(trainer))
+        self.assertEqual(distillation.step, 9)
+        self.assertEqual([first.enabled, second.enabled, bucket.enabled], [False] * 3)
+        self.assertEqual(first.calls, [False])
+
+        # A resumed run at the boundary must enable sampling before its next reset,
+        # even if the loaded distillation object's prior step was stale.
+        trainer._step = 10
+        distillation.step = 0
+        self.assertTrue(OnlineTrainer._sync_broken_nodes_curriculum(trainer))
+        self.assertEqual(distillation.step, 10)
+        self.assertEqual([first.enabled, second.enabled, bucket.enabled], [True] * 3)
+
+        zero_weight = ScheduledDistillation(initial_weight=0.0)
+        immediate = SimpleNamespace(env=GateTarget(), distillation=zero_weight, _step=0)
+        self.assertTrue(OnlineTrainer._sync_broken_nodes_curriculum(immediate))
+        self.assertTrue(immediate.env.enabled)
+
+        ordinary = SimpleNamespace(env=GateTarget(), distillation=None, _step=0)
+        self.assertTrue(OnlineTrainer._sync_broken_nodes_curriculum(ordinary))
+        self.assertTrue(ordinary.env.enabled)
+
     def test_cached_targets_match_live_teacher_with_all_graph_features(self):
         with tempfile.TemporaryDirectory() as tmp:
             features = dict(node_roles=True, edge_roles=True, edge_distance=True)

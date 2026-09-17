@@ -51,6 +51,7 @@ class MjxVectorGraphEnv(gym.Env):
         self.task = str(getattr(cfg, "task", "truss-graph"))
         self.topology = resolve_truss_topology(cfg)
         self._broken_node_probability = _broken_nodes_probability(cfg)
+        self._broken_nodes_sampling_enabled = True
         self.num_envs = int(getattr(cfg, "num_envs", 1))
         if self.num_envs < 1:
             raise ValueError("num_envs must be at least one.")
@@ -350,6 +351,10 @@ class MjxVectorGraphEnv(gym.Env):
             self._broken_node_masks[indices] = False
             return
 
+        if not self._broken_nodes_sampling_enabled:
+            self._broken_node_masks[indices] = False
+            return
+
         eligible_indices = np.flatnonzero(~self._base_passive_node_mask)
         probability = self._broken_node_probability
         for env_idx in indices:
@@ -364,6 +369,10 @@ class MjxVectorGraphEnv(gym.Env):
             self._broken_node_masks[env_idx] = torch.as_tensor(
                 broken, dtype=torch.bool, device=self._broken_node_masks.device
             )
+
+    def set_broken_nodes_sampling_enabled(self, enabled: bool) -> None:
+        """Gate future reset-time samples without changing active episode masks."""
+        self._broken_nodes_sampling_enabled = bool(enabled)
 
     def _to_torch(self, value) -> torch.Tensor:
         return torch.utils.dlpack.from_dlpack(value)
