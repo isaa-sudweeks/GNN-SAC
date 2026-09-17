@@ -1,8 +1,11 @@
 # Multi-teacher Gaussian KL distillation
 
 Distillation is optional and disabled by default. It supports GNN teachers and
-a GNN student, with different network widths/depths but matching observation,
-graph augmentation, and action conventions.
+a GNN student with different network widths, depths, and configurable graph
+feature schemas. Each teacher uses the schema saved in its checkpoint, while
+the student uses the resolved run configuration. Topology, base observation
+width, virtual-node use, action order, normalization, and control conventions
+must still match.
 
 ## Start a run
 
@@ -127,6 +130,40 @@ Adam moments again. Exact offline continuation is covered by regression tests;
 online simulator-state resume retains the repository's existing limitations.
 
 Inference uses the ordinary student export and requires no teacher artifacts.
+
+## Teacher and student feature schemas
+
+`graph_features.node_roles`, `graph_features.edge_roles`, and
+`graph_features.edge_distance` may differ independently between teachers and
+the student. Distillation prepares two views of the same raw graph: the teacher
+view produces the Gaussian target, and the student view receives gradients.
+Online KL therefore retains the raw student replay observations alongside the
+ordinary student-prepared learner batch. Equal-schema runs reuse the learner
+batch directly and do not perform the extra teacher preparation.
+
+For example, specialists trained without node identification can supervise a
+student that appends actuated/passive node roles:
+
+```bash
+python sac/gnn_train.py distillation=kl \
+  graph_features.node_roles=true \
+  '+distillation.teachers={tetrahedron:/path/to/teacher.pt}'
+```
+
+Optional features must be constructible from the raw replay. Node roles use the
+action mask and edge distance uses observed xyz coordinates. Edge roles require
+`edge_role` metadata; a checkpoint collected without that metadata cannot be
+used for an offline student that requires edge roles. Likewise, online teacher
+edge roles require the student's raw replay to retain them. Missing metadata
+fails during compatibility validation with the affected policy and schema.
+Distillation never guesses semantic roles.
+
+Target-cache contracts include both feature schemas and both prepared graph
+signatures, so incompatible pairs cannot share tensors. Existing v2 caches
+remain reusable for equal-schema teacher/student pairs; mismatched pairs receive
+their own schema-pair-keyed v2 cache. New checkpoints persist the resolved
+schema pairs. Legacy distillation checkpoints remain loadable only for the
+equal-schema case that older code supported.
 
 ## Metrics and validation
 

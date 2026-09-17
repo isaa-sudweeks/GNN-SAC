@@ -19,19 +19,21 @@ from common.graph_transforms import (
 class ReplayBatch:
     """One balanced learner batch plus its task-specific constituent batches."""
 
-    combined: tuple
+    combined: tuple | None
     by_task: Mapping[str, tuple]
+    raw_observations_by_task: Mapping[str, list[Data]] | None = None
 
 
 @dataclass(frozen=True)
 class _RawReplaySample:
-    """Prepared CPU replay values awaiting PyG collation and device transfer."""
+    """Raw and prepared CPU replay values awaiting collation and transfer."""
 
     observations: list[Data]
     actions: list[torch.Tensor]
     rewards: list[torch.Tensor]
     terminated: list[torch.Tensor]
     next_observations: list[Data]
+    raw_observations: list[Data]
 
 
 class _GNNTaskBuffer:
@@ -152,6 +154,7 @@ class _GNNTaskBuffer:
             rewards=rewards,
             terminated=terminations,
             next_observations=prepared_next_obs,
+            raw_observations=raw_obs,
         )
 
     def sample(self, performance_profiler=None):
@@ -271,8 +274,9 @@ class _GNNTaskBuffer:
 class GNNBuffer:
     """Task-balanced replay for graph SAC.
 
-    ``buffer_size`` remains the total replay capacity. Multi-task batches draw
-    exactly the same number of transitions from every distinct task.
+    Parsed multi-topology configs scale ``buffer_size`` and ``batch_size`` into
+    totals first. This buffer then assigns the requested per-topology capacity
+    and sample count to every distinct task.
     """
 
     def __init__(self, cfg):
@@ -477,14 +481,18 @@ class GNNBuffer:
         terminated = torch.cat([batch[3] for batch in batches], dim=0)
         return observations, actions, rewards, terminated, next_observations
 
-    def sample_with_tasks(self, performance_profiler=None):
+    def sample_with_tasks(self, performance_profiler=None, *, combine=True):
         raw_by_task = self._sample_raw_by_task(
             performance_profiler=performance_profiler
         )
-        combined = self._collate_raw_samples(
-            raw_by_task.values(),
-            performance_profiler=performance_profiler,
-            subphase_name="combined_collation_transfer",
+        combined = (
+            self._collate_raw_samples(
+                raw_by_task.values(),
+                performance_profiler=performance_profiler,
+                subphase_name="combined_collation_transfer",
+            )
+            if combine
+            else None
         )
         by_task = {
             task: self._collate_raw_samples(
@@ -494,7 +502,14 @@ class GNNBuffer:
             )
             for task, sample in raw_by_task.items()
         }
-        return ReplayBatch(combined=combined, by_task=by_task)
+        return ReplayBatch(
+            combined=combined,
+            by_task=by_task,
+            raw_observations_by_task={
+                task: list(sample.raw_observations)
+                for task, sample in raw_by_task.items()
+            },
+        )
 
     def sample(self, performance_profiler=None):
         raw_by_task = self._sample_raw_by_task(
