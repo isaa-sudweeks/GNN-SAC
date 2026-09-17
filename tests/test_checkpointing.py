@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import torch
+from torch_geometric.data import Data
 
 ROOT = Path(__file__).resolve().parents[1]
 SAC_ROOT = ROOT / "sac"
@@ -18,6 +19,7 @@ for path in (ROOT, SAC_ROOT):
 from trainer.base import Trainer
 from common.logger import Logger, wandb_resume_info
 from common.reward_normalizer import TaskRewardNormalizer
+from common.tensor_gnn_buffer import TensorGNNBuffer
 
 
 class DummyModel(torch.nn.Module):
@@ -91,6 +93,45 @@ def make_trainer(work_dir, **overrides):
     trainer._step = 0
     trainer._ep_idx = 0
     return trainer
+
+
+def tensor_buffer_config():
+    return SimpleNamespace(
+        device="cpu",
+        task="graph",
+        tasks=[],
+        multitask=False,
+        mujoco_backend="mujoco",
+        truss_topologies=None,
+        buffer_size=4,
+        batch_size=1,
+        steps=20,
+        obs_dim=6,
+        action_dim=1,
+        node_counts=[3],
+        num_nodes=3,
+        use_virtual_node=False,
+        graph_features={},
+        replay_storage="cpu_pinned",
+        replay_gpu_fraction=0.2,
+        replay_gpu_max_gb=8.0,
+        replay_gpu_reserve_gb=12.0,
+    )
+
+
+def tensor_transition(marker):
+    def graph(value):
+        x = torch.full((3, 6), float(value))
+        edge_index = torch.tensor([[0, 1, 2], [1, 2, 0]])
+        return Data(x=x, edge_index=edge_index)
+
+    action = torch.full((1, 3, 1), float(marker))
+    reward = torch.tensor([float(marker)])
+    terminated = torch.tensor([0.0])
+    return [
+        {"obs": graph(marker), "action": action, "reward": reward, "terminated": terminated},
+        {"obs": graph(marker + 0.5), "action": action, "reward": reward, "terminated": terminated},
+    ]
 
 
 class CheckpointingTest(unittest.TestCase):
@@ -218,6 +259,67 @@ class CheckpointingTest(unittest.TestCase):
                 weights_only=False,
             )
             self.assertEqual(float(agent_sidecar["model"]["weight"].item()), 3.0)
+
+    def test_async_checkpoint_tensor_replay_remains_consistent_during_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = make_trainer(Path(tmp_dir), checkpoint_async=True)
+            trainer.buffer = TensorGNNBuffer(tensor_buffer_config())
+            for marker in range(5):
+                trainer.buffer.add(tensor_transition(marker), task="graph")
+            trainer._step = 10
+
+            torch.manual_seed(73)
+            expected_batch = trainer.buffer.sample()
+            expected_task = trainer.buffer.state_dict()["buffers"]["graph"]
+            self.assertEqual((expected_task["size"], expected_task["idx"]), (4, 1))
+
+            entered_writer = Event()
+            release_writer = Event()
+            original_writer = Trainer._write_checkpoint_files.__func__
+
+            def delayed_writer(cls, *args, **kwargs):
+                entered_writer.set()
+                release_writer.wait(timeout=5)
+                return original_writer(cls, *args, **kwargs)
+
+            with patch.object(Trainer, "_write_checkpoint_files", classmethod(delayed_writer)):
+                checkpoint = trainer.maybe_save_checkpoint(previous_step=9)
+                self.assertTrue(entered_writer.wait(timeout=5))
+                trainer.buffer.add(tensor_transition(100), task="graph")
+                trainer.buffer.add(tensor_transition(101), task="graph")
+                trainer._step = 20
+                release_writer.set()
+                trainer.wait_for_async_checkpoint()
+
+            live_task = trainer.buffer.state_dict()["buffers"]["graph"]
+            self.assertEqual((live_task["size"], live_task["idx"]), (4, 3))
+
+            saved = torch.load(checkpoint, map_location="cpu", weights_only=False)
+            saved_task = saved["buffer"]["buffers"]["graph"]
+            self.assertEqual(saved["trainer"]["step"], 10)
+            self.assertEqual((saved_task["size"], saved_task["idx"]), (4, 1))
+            expected_fields = expected_task["replay_buffer"]["_storage"]["_storage"]
+            saved_fields = saved_task["replay_buffer"]["_storage"]["_storage"]
+            self.assertEqual(expected_fields.keys(), saved_fields.keys())
+            for key, expected_value in expected_fields.items():
+                torch.testing.assert_close(expected_value, saved_fields[key], rtol=0, atol=0)
+
+            restored = TensorGNNBuffer(tensor_buffer_config())
+            restored.load_state_dict(saved["buffer"])
+            torch.manual_seed(73)
+            restored_batch = restored.sample()
+            for expected, actual in zip(expected_batch, restored_batch):
+                if isinstance(expected, torch.Tensor):
+                    torch.testing.assert_close(expected, actual, rtol=0, atol=0)
+                else:
+                    self.assertEqual(expected.to_dict().keys(), actual.to_dict().keys())
+                    for key, expected_value in expected.to_dict().items():
+                        torch.testing.assert_close(
+                            expected_value,
+                            actual.to_dict()[key],
+                            rtol=0,
+                            atol=0,
+                        )
 
     def test_forced_checkpoint_waits_for_pending_async_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
