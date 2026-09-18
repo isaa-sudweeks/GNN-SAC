@@ -21,7 +21,7 @@ from common.gnn_actor_critic import GNNActorCritic
 from common.gnn_buffer import GNNBuffer
 from common.tensor_gnn_buffer import TensorGNNBuffer
 from common.graph_transforms import prepare_graph
-from common.logger import Logger
+from common.logger import Logger, VideoRecorder
 from gnn_sac import GNNSAC
 from trainer.base import Trainer
 from trainer.online_trainer import OnlineTrainer
@@ -573,17 +573,33 @@ class DistillationTrainingTest(unittest.TestCase):
             distill.finish_pretraining(agent)
             self.assertIn("sentinel", agent.pi_optim.state)
 
-    def test_wandb_offline_updates_do_not_reuse_environment_event_step(self):
+    def test_wandb_uses_monotonic_step_across_offline_and_online_training(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = config(tmp, enable_wandb=False, save_agent=False, save_csv=False)
             logger = Logger(cfg)
             logger._wandb = Mock()
             logger.log(dict(step=0, offline_updates=1, kl=1.), "distillation")
             logger.log(dict(step=0, offline_updates=2, kl=.5), "distillation")
+            logger.log(dict(step=0, stage="online", offline_updates=3), "distillation")
             logger.log(dict(step=0, episode_reward=1.), "eval")
-            for call in logger._wandb.log.call_args_list:
-                self.assertNotIn("step", call.kwargs)
-            self.assertEqual(logger._wandb.log.call_count, 3)
+            logger.log(dict(step=7, episode_reward=2.), "eval")
+            calls = logger._wandb.log.call_args_list
+            self.assertEqual([call.kwargs["step"] for call in calls], [1, 2, 3, 3, 10])
+            self.assertEqual([call.args[0]["global_step"] for call in calls], [1, 2, 3, 3, 10])
+            self.assertEqual(calls[-1].args[0]["eval/step"], 7)
+
+    def test_distillation_video_uses_global_training_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = config(tmp)
+            wandb = Mock()
+            recorder = VideoRecorder(cfg, wandb)
+            recorder.enabled = True
+            recorder.frames = [torch.zeros((2, 2, 3), dtype=torch.uint8).numpy()]
+            recorder.save(7)
+            metrics = wandb.log.call_args.args[0]
+            self.assertEqual(wandb.log.call_args.kwargs["step"], 10)
+            self.assertEqual(metrics["global_step"], 10)
+            self.assertEqual(metrics["eval/step"], 7)
 
     def test_offline_learning_only_changes_actor_and_transition_once(self):
         with tempfile.TemporaryDirectory() as tmp:
