@@ -18,6 +18,7 @@ from common.gnn_actor_critic import GNNActorCritic
 from common.graph_transforms import (
     graph_feature_flags,
     graph_feature_schema,
+    graph_signature_compatible,
     graph_structure_signature as graph_signature,
     policy_action_mask,
     prepare_graph,
@@ -112,7 +113,25 @@ def replay_observations(replay: dict):
         yield graph
 
 
-TARGET_CACHE_FORMAT = "gnn-sac-distillation-targets-v2"
+def replay_contract_observation(replay: dict, first: Data) -> Data:
+    """Return the base-topology view used to validate student replay writes.
+
+    Tensor replay v4 stores episode-specific broken-node masks per row while its
+    static action mask remains the intact topology contract. The oldest valid
+    row is therefore not necessarily a valid source for that contract.
+    """
+    if int(replay.get("format_version", 0)) not in {3, 4}:
+        return first
+    static = replay.get("static")
+    base_mask = None if static is None else static.get("action_mask")
+    if base_mask is None:
+        return first
+    contract = first.clone()
+    contract.action_mask = base_mask.detach().clone().bool()
+    return contract
+
+
+TARGET_CACHE_FORMAT = "gnn-sac-distillation-targets-v3"
 
 
 def _prepare_graph_for(config, graph: Data, *, owner: str) -> Data:
@@ -209,15 +228,16 @@ class ObservationShards:
         shard = self._get_shard(index)
         count = int(indices.numel())
         x = shard["x"].index_select(0, indices).contiguous()
-        teacher_mean = shard["teacher_mean"].index_select(0, indices).flatten(0, 1).contiguous()
-        teacher_log_std = shard["teacher_log_std"].index_select(0, indices).flatten(0, 1).contiguous()
+        action_mask = shard["action_mask"].index_select(0, indices).contiguous()
+        teacher_mean = shard["teacher_mean"].index_select(0, indices)[action_mask].contiguous()
+        teacher_log_std = shard["teacher_log_std"].index_select(0, indices)[action_mask].contiguous()
         nodes = int(x.size(1))
         edges = int(self.static["edge_index"].size(1))
         offsets = torch.arange(count).view(-1, 1, 1) * nodes
         edge_index = (self.static["edge_index"].view(1, 2, edges) + offsets).permute(1, 0, 2).reshape(2, -1)
         kwargs = dict(
             x=x.flatten(0, 1), edge_index=edge_index,
-            action_mask=self.static["action_mask"].repeat(count),
+            action_mask=action_mask.flatten(),
             batch=torch.arange(count).repeat_interleave(nodes),
             ptr=torch.arange(0, (count + 1) * nodes, nodes),
         )
@@ -277,16 +297,19 @@ class ObservationShards:
                 student_signature = contract.get(
                     "student_prepared_signature", contract.get("prepared_signature")
                 )
-                if any(graph_signature(graph) != teacher_signature for graph in teacher_prepared):
+                if any(not graph_signature_compatible(
+                    graph_signature(graph), teacher_signature, allow_action_subset=True
+                ) for graph in teacher_prepared):
                     raise ValueError("Prepared teacher replay changes topology or action ordering.")
-                if any(graph_signature(graph) != student_signature for graph in student_prepared):
+                if any(not graph_signature_compatible(
+                    graph_signature(graph), student_signature, allow_action_subset=True
+                ) for graph in student_prepared):
                     raise ValueError("Prepared student replay changes topology or action ordering.")
                 for teacher_graph, student_graph in zip(teacher_prepared, student_prepared):
                     _validate_action_alignment(teacher_graph, student_graph)
                 first = student_prepared[0]
                 current_static = {
                     "edge_index": first.edge_index.cpu().contiguous(),
-                    "action_mask": policy_action_mask(first).cpu().contiguous(),
                 }
                 physical = getattr(first, "physical_node_mask", None)
                 if physical is not None:
@@ -299,20 +322,32 @@ class ObservationShards:
                     raise ValueError("Prepared student replay has changing structural tensors.")
                 means, log_stds = [], []
                 for start in range(0, len(teacher_prepared), target_batch_size):
-                    batch = Batch.from_data_list(
-                        teacher_prepared[start:start + target_batch_size]
-                    ).to(device)
+                    graphs = teacher_prepared[start:start + target_batch_size]
+                    batch = Batch.from_data_list(graphs).to(device)
                     with torch.no_grad():
                         mean, log_std = teacher.policy_distribution(batch)
                     if not torch.isfinite(mean).all() or not torch.isfinite(log_std).all():
                         raise ValueError("Nonfinite teacher distribution parameters while building cache.")
-                    active = int(current_static["action_mask"].sum())
-                    means.append(mean.reshape(-1, active, mean.size(-1)).cpu())
-                    log_stds.append(log_std.reshape(-1, active, log_std.size(-1)).cpu())
+                    masks = [policy_action_mask(graph).to(device) for graph in graphs]
+                    counts = [int(mask.sum()) for mask in masks]
+                    if sum(counts) != int(mean.size(0)):
+                        raise ValueError("Teacher targets do not align with replay action masks.")
+                    padded_mean = mean.new_zeros((len(graphs), first.x.size(0), mean.size(-1)))
+                    padded_log_std = log_std.new_zeros(padded_mean.shape)
+                    for row, (mask, row_mean, row_log_std) in enumerate(zip(
+                        masks, mean.split(counts), log_std.split(counts)
+                    )):
+                        padded_mean[row, mask] = row_mean
+                        padded_log_std[row, mask] = row_log_std
+                    means.append(padded_mean.cpu())
+                    log_stds.append(padded_log_std.cpu())
                 payload = {
                     "x": torch.stack(
                         [graph.x.cpu() for graph in student_prepared]
                     ).contiguous(),
+                    "action_mask": torch.stack([
+                        policy_action_mask(graph).cpu() for graph in student_prepared
+                    ]).contiguous(),
                     "teacher_mean": torch.cat(means).contiguous(),
                     "teacher_log_std": torch.cat(log_stds).contiguous(),
                 }
@@ -327,7 +362,10 @@ class ObservationShards:
                 sizes.append(len(student_prepared))
 
             for graph in observations:
-                if graph_signature(graph) != contract["replay_signature"]:
+                if not graph_signature_compatible(
+                    graph_signature(graph), contract["replay_signature"],
+                    allow_action_subset=True,
+                ):
                     raise ValueError("Teacher replay changes topology or action ordering.")
                 shard.append(graph.clone().cpu())
                 if len(shard) == shard_size:
@@ -433,11 +471,12 @@ class Distillation:
                         raise ValueError(f"Cannot identify replay for {topology!r}.")
                     replay = replay["buffers"][matching[0]]
                 first = next(replay_observations(replay))
-                signature = graph_signature(first)
+                contract_observation = replay_contract_observation(replay, first)
+                signature = graph_signature(contract_observation)
                 if first.x.size(1) != int(cfg.obs_dim):
                     raise ValueError("Teacher replay observation width differs from student.")
-                teacher_prepared = self.prepare_teacher(task, first)
-                student_prepared = self.prepare_student(first)
+                teacher_prepared = self.prepare_teacher(task, contract_observation)
+                student_prepared = self.prepare_student(contract_observation)
                 _validate_action_alignment(teacher_prepared, student_prepared)
                 self.replay_signatures[task] = signature
                 if self.pretrain_updates:
@@ -454,7 +493,7 @@ class Distillation:
                     contract_hash = hashlib.sha256(
                         json.dumps(contract, sort_keys=True).encode()
                     ).hexdigest()[:16]
-                    directory = cache / f"{digest}-targets-v2-{contract_hash}-s{shard_size}"
+                    directory = cache / f"{digest}-targets-v3-{contract_hash}-s{shard_size}"
                     if self.schema_pairs[task]["teacher"] == self.schema_pairs[task]["student"]:
                         legacy_contract = {
                             "format": TARGET_CACHE_FORMAT,
@@ -468,7 +507,7 @@ class Distillation:
                             json.dumps(legacy_contract, sort_keys=True).encode()
                         ).hexdigest()[:16]
                         legacy_directory = cache / (
-                            f"{digest}-targets-v2-{legacy_hash}-s{shard_size}"
+                            f"{digest}-targets-v3-{legacy_hash}-s{shard_size}"
                         )
                         directory, contract = legacy_directory, legacy_contract
                     replay_key = None
@@ -486,7 +525,7 @@ class Distillation:
                         self.datasets[task] = self._prepare_dataset(
                             task, replay_observations(replay)
                         )
-                del first, replay, state
+                del first, contract_observation, replay, state
 
     def _prepare_dataset(self, task: str, observations) -> ObservationShards:
         plan = self._dataset_plans[task]
