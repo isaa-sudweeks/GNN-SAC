@@ -6,6 +6,12 @@ domain_randomization: true
 # Domain-randomization parameters live here so future randomized dynamics,
 # sensing, latency, terrain, and actuator effects can be added in one place.
 domain_randomization_params:
+  # Independently disable originally active control nodes for one episode.
+  # Requires graph_features.node_roles=true and use_control_graph=true.
+  broken_nodes:
+    enabled: false
+    probability: 0.1
+
   # Randomly scale generated truss geometry at reset time.
   length_scale:
     enabled: false

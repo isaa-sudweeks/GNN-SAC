@@ -16,7 +16,10 @@ class RepeatedEnvWrapper(gym.Env):
         if self.num_envs < 1:
             raise ValueError("RepeatedEnvWrapper requires at least one environment")
 
-        self.envs = [self._make_env(cfg, make_env_fns) for _ in range(self.num_envs)]
+        self.envs = [
+            self._make_env(cfg, make_env_fns, env_idx)
+            for env_idx in range(self.num_envs)
+        ]
         self._validate_spaces()
 
         self.active_env_idx = 0
@@ -25,9 +28,11 @@ class RepeatedEnvWrapper(gym.Env):
         self.action_space = self.env.action_space
         self._executor = ThreadPoolExecutor(max_workers=self.num_envs)
 
-    def _make_env(self, cfg, make_env_fns):
+    def _make_env(self, cfg, make_env_fns, env_idx):
         env_cfg = deepcopy(cfg)
         env_cfg.num_envs = 1
+        if getattr(env_cfg, "seed", None) is not None:
+            env_cfg.seed = int(env_cfg.seed) + int(env_idx)
         errors = []
         for fn in make_env_fns:
             try:

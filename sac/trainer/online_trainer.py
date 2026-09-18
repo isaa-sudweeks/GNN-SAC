@@ -141,6 +141,7 @@ class OnlineTrainer(Trainer):
             self.distillation.bind_replay(self.buffer)
             self.agent.distillation = self.distillation
         self.maybe_load_checkpoint()
+        self._sync_broken_nodes_curriculum()
         if self.distillation is not None:
             self.distillation.prepare_offline_datasets()
 
@@ -160,6 +161,36 @@ class OnlineTrainer(Trainer):
         self._evaluate_and_log()
         if distillation.checkpoint_freq:
             self.save_checkpoint(identifier="distillation")
+
+    def _sync_broken_nodes_curriculum(self) -> bool:
+        """Gate broken-node sampling until the online KL coefficient is zero.
+
+        Environment setters deliberately affect only future resets, so episodes
+        already in progress keep the mask with which they started.
+        """
+        distillation = getattr(self, "distillation", None)
+        if distillation is not None:
+            distillation.step = int(self._step)
+        enabled = distillation is None or distillation.weight == 0.0
+
+        pending = [self.env]
+        visited = set()
+        while pending:
+            current = pending.pop()
+            if current is None or id(current) in visited:
+                continue
+            visited.add(id(current))
+            setter = getattr(current, "set_broken_nodes_sampling_enabled", None)
+            if callable(setter):
+                setter(enabled)
+            nested = getattr(current, "env", None)
+            if nested is not None:
+                pending.append(nested)
+            for attribute in ("envs", "buckets"):
+                children = getattr(current, attribute, None)
+                if children is not None:
+                    pending.extend(children)
+        return enabled
 
     def _make_reward_normalizer(self):
         if not bool(getattr(self.cfg, "normalize_rewards", False)):
@@ -793,6 +824,7 @@ class OnlineTrainer(Trainer):
                             reward_metrics.update(self._episode_reward_components)
                             self.logger.log(reward_metrics, 'training_rewards')
                     self._reset_reward_normalizer_streams([0])
+                    self._sync_broken_nodes_curriculum()
                     obs = self._apply_observation_noise(self.env.reset())
                     self._tds = [self.to_td(obs)]
                     self._episode_reward_components = {}
@@ -917,6 +949,7 @@ class OnlineTrainer(Trainer):
                     self._episode_reward_components = previous_components
 
                     self._reset_reward_normalizer_streams(done_indices)
+                    self._sync_broken_nodes_curriculum()
                     reset_obs = [
                         self._apply_observation_noise(obs)
                         for obs in self.env.reset_many(env_indices=done_indices)
