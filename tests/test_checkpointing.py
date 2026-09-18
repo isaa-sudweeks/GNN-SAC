@@ -120,17 +120,25 @@ def tensor_buffer_config():
 
 
 def tensor_transition(marker):
-    def graph(value):
+    def graph(value, mask):
         x = torch.full((3, 6), float(value))
         edge_index = torch.tensor([[0, 1, 2], [1, 2, 0]])
-        return Data(x=x, edge_index=edge_index)
+        return Data(x=x, edge_index=edge_index, action_mask=torch.tensor(mask))
 
     action = torch.full((1, 3, 1), float(marker))
     reward = torch.tensor([float(marker)])
     terminated = torch.tensor([0.0])
+    current_mask = [True, marker % 2 == 0, False]
+    next_mask = [True, marker % 2 != 0, False]
     return [
-        {"obs": graph(marker), "action": action, "reward": reward, "terminated": terminated},
-        {"obs": graph(marker + 0.5), "action": action, "reward": reward, "terminated": terminated},
+        {
+            "obs": graph(marker, current_mask), "action": action,
+            "reward": reward, "terminated": terminated,
+        },
+        {
+            "obs": graph(marker + 0.5, next_mask), "action": action,
+            "reward": reward, "terminated": terminated,
+        },
     ]
 
 
@@ -301,6 +309,8 @@ class CheckpointingTest(unittest.TestCase):
             expected_fields = expected_task["replay_buffer"]["_storage"]["_storage"]
             saved_fields = saved_task["replay_buffer"]["_storage"]["_storage"]
             self.assertEqual(expected_fields.keys(), saved_fields.keys())
+            self.assertIn("obs_action_mask", saved_fields)
+            self.assertIn("next_obs_action_mask", saved_fields)
             for key, expected_value in expected_fields.items():
                 torch.testing.assert_close(expected_value, saved_fields[key], rtol=0, atol=0)
 

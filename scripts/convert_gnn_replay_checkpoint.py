@@ -63,7 +63,7 @@ def convert(source: Path, destination: Path, *, chunk_size: int = 4096) -> dict:
     save_seconds = time.perf_counter() - save_started
     verify_started = time.perf_counter()
     verified = torch.load(temporary, map_location="cpu", weights_only=False)
-    if verified["buffer"]["format_version"] != 3:
+    if verified["buffer"]["format_version"] != 4:
         raise RuntimeError("Converted checkpoint failed format verification.")
     temporary.replace(destination)
     verify_seconds = time.perf_counter() - verify_started

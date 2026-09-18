@@ -121,8 +121,8 @@ class Trainer:
 
     def _snapshot_buffer_state_dict(self, state_dict):
         """Copy replay metadata while avoiding a full clone of immutable stored samples."""
-        if int(state_dict.get("format_version", 0)) == 3 and all(
-            int(task_state.get("format_version", 0)) == 3
+        if int(state_dict.get("format_version", 0)) in {3, 4} and all(
+            int(task_state.get("format_version", 0)) in {3, 4}
             for task_state in state_dict.get("buffers", {}).values()
         ):
             # Tensor replay state_dict() already performs the required single,
