@@ -170,9 +170,11 @@ equal-schema case that older code supported.
 Offline logs use `distillation/kl`, per-task KL, `offline_updates`, and `stage`.
 Online training logs include `train/distillation/kl`, per-task KL,
 `sac_actor_loss`, `weighted_kl`, `weight`, and `offline_updates`.
-Distillation-enabled W&B runs use an automatic event counter with explicit
-environment-step/offline-update axes, so repeated updates at environment step
-zero are retained. Existing disabled runs keep their logging behavior.
+Distillation-enabled W&B runs use one monotonic global step. Offline updates
+occupy steps `1..pretrain_updates`; online environment step `k` is logged at
+`pretrain_updates + k`. The raw `offline_updates` and per-category `step`
+metrics remain available, and runs with distillation disabled keep their
+existing environment-step behavior.
 
 ```bash
 python -m unittest tests.test_distillation -v
