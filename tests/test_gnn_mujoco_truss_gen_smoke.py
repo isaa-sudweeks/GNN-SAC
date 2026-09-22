@@ -980,7 +980,10 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         env = make_env(cfg)
         try:
             env.reset_many()
-            action = torch.ones(env.envs[0].unwrapped.action_space.shape, dtype=torch.float32)
+            # make_env wraps the RepeatedEnvWrapper in a TensorWrapper; unwrap
+            # one layer to reach the per-slot env list.
+            repeated = env.env
+            action = torch.ones(repeated.envs[0].unwrapped.action_space.shape, dtype=torch.float32)
             for _ in range(2):
                 results = env.step_many([action] * env.num_envs)
                 regimes = [info["regime"] for _, _, _, info in results]
@@ -988,7 +991,7 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
                 # first half standard and the second half broken-eligible.
                 self.assertEqual(regimes, ["standard", "standard", "broken", "broken"])
                 for env_idx, (_, _, _, info) in enumerate(results):
-                    core = env.envs[env_idx].unwrapped
+                    core = repeated.envs[env_idx].unwrapped
                     if info["regime"] == "standard":
                         self.assertFalse(np.any(core._broken_node_mask))
                     else:

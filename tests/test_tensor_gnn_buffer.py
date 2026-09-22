@@ -536,6 +536,7 @@ class TensorGNNBufferTest(unittest.TestCase):
                     "enabled": True, "probability": 0.2, "regime_fraction": 0.5,
                 },
             },
+            graph_features={"node_roles": True}, use_control_graph=True,
         )
         self.assertEqual(_task_names(base_cfg), ["graph", "graph__broken"])
 
