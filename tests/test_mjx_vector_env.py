@@ -346,6 +346,32 @@ class MjxVectorEnvTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_single_slot_mjx_ignores_regime_fraction_and_samples_broken_nodes_normally(self):
+        # A single slot cannot represent both regimes at once. Locking it to
+        # "standard" regardless of a positive regime_fraction would silently
+        # disable broken-node randomization for every num_envs=1 run under
+        # the new interleaved default -- it must fall back to the legacy
+        # per-node Bernoulli draw instead.
+        cfg = mjx_cfg(
+            num_envs=1,
+            domain_randomization=True,
+            domain_randomization_params={
+                "length_scale": {"enabled": False},
+                "broken_nodes": {
+                    "enabled": True, "probability": 1.0, "regime_fraction": 0.5,
+                },
+            },
+            graph_features={"node_roles": True},
+        )
+        env = make_env(cfg)
+        try:
+            env.reset_many()
+            core = env.env
+            self.assertIsNone(core._broken_regime_slots)
+            self.assertGreater(int(core._broken_node_masks[0].sum()), 0)
+        finally:
+            env.close()
+
     def test_mjx_broken_nodes_zero_commands_and_report_diagnostics(self):
         cfg = mjx_cfg(
             num_envs=1,

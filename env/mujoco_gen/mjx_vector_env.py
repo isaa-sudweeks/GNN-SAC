@@ -59,12 +59,18 @@ class MjxVectorGraphEnv(gym.Env):
         if self.num_envs < 1:
             raise ValueError("num_envs must be at least one.")
         regime_fraction = broken_node_regime_fraction(cfg)
-        if broken_node_schedule(cfg) == "interleaved" and regime_fraction > 0.0:
+        if (
+            broken_node_schedule(cfg) == "interleaved"
+            and regime_fraction > 0.0
+            and self.num_envs > 1
+        ):
             self._broken_regime_slots = broken_node_regime_slots(self.num_envs, regime_fraction)
         else:
             # None (rather than an all-False array) preserves the exact
-            # legacy behavior when no regime split is configured: every slot
-            # remains eligible for the plain per-node Bernoulli draw.
+            # legacy behavior when no regime split is configured -- including
+            # the single-env case, which cannot represent both regimes at
+            # once and must stay eligible for the plain per-node Bernoulli
+            # draw rather than being silently locked to standard.
             self._broken_regime_slots = None
 
         self._jax = jax

@@ -557,6 +557,16 @@ class TensorGNNBufferTest(unittest.TestCase):
             ["graph"],
         )
 
+        # regime_fraction=1.0 makes every slot broken-eligible, so a standard
+        # sibling task would never receive transitions and stall replay
+        # readiness forever -- only the broken task should be registered.
+        all_broken = SimpleNamespace(**{**vars(base_cfg)})
+        all_broken.domain_randomization_params = dict(base_cfg.domain_randomization_params)
+        all_broken.domain_randomization_params["broken_nodes"] = {
+            **base_cfg.domain_randomization_params["broken_nodes"], "regime_fraction": 1.0,
+        }
+        self.assertEqual(_task_names(all_broken), ["graph__broken"])
+
 
 if __name__ == "__main__":
     unittest.main()

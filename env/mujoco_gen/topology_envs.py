@@ -171,6 +171,37 @@ def broken_node_regime_slots(num_envs: int, fraction: float) -> np.ndarray:
     return slots
 
 
+def fan_out_broken_regime_tasks(candidates: list[str], cfg, slots_per_task: int) -> list[str]:
+    """Extend a base per-topology task list with broken-regime sibling tasks.
+
+    Shared by every replay buffer's task registry (TensorGNNBuffer, the
+    legacy GNNBuffer) so they stay consistent with what the env layer can
+    actually produce for a given cfg:
+
+    - No fan-out at all unless schedule=interleaved, regime_fraction > 0, and
+      slots_per_task > 1 -- a fixed per-slot partition needs at least two
+      slots to represent both regimes, matching the guard the env layer uses
+      before it ever locks a slot to the standard regime (see
+      RepeatedEnvWrapper/MjxVectorGraphEnv).
+    - At regime_fraction >= 1.0 every slot is broken-eligible, so a standard
+      sibling task would never receive transitions and stall replay
+      readiness forever -- register only the broken task in that case
+      instead of an always-empty pair.
+    """
+    if slots_per_task <= 1 or broken_node_schedule(cfg) != "interleaved":
+        return list(candidates)
+    fraction = broken_node_regime_fraction(cfg)
+    if fraction <= 0.0:
+        return list(candidates)
+    if fraction >= 1.0:
+        return [regime_task_name(task, "broken") for task in candidates]
+    return [
+        name
+        for task in candidates
+        for name in (task, regime_task_name(task, "broken"))
+    ]
+
+
 def _semantic_edge_roles(source, *, graph_view: str) -> np.ndarray:
     """Map upstream edge labels to tube=0 and connector=1."""
     upstream_roles = get_edge_types(source, graph_view=graph_view)

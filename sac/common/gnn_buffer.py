@@ -6,6 +6,8 @@ from typing import Mapping
 import torch
 from torch_geometric.data import Batch, Data
 
+from env.mujoco_gen.topology_envs import fan_out_broken_regime_tasks
+
 from common.config_utils import round_to_nearest_multiple
 from common.graph_transforms import (
     graph_feature_flags,
@@ -323,17 +325,24 @@ class GNNBuffer:
         multitask = bool(getattr(cfg, "multitask", False))
         backend = str(getattr(cfg, "mujoco_backend", "mujoco")).lower()
         topologies = getattr(cfg, "truss_topologies", None)
+        num_envs = int(getattr(cfg, "num_envs", 1))
         if backend == "mjx" and topologies and len(topologies) > 1:
             base_task = str(getattr(cfg, "task", "truss-graph")).split(":", 1)[0]
             candidates = [f"{base_task}:{topology}" for topology in topologies]
+            # See tensor_gnn_buffer._task_names: MjxTopologyBucketEnv splits
+            # num_envs evenly across topologies, so the actual per-task slot
+            # count is the bucket size, not the aggregate num_envs.
+            slots_per_task = num_envs // len(topologies)
         elif multitask:
             candidates = [str(task) for task in getattr(cfg, "tasks", [])]
+            slots_per_task = 1
         else:
             candidates = [str(getattr(cfg, "task", "task"))]
+            slots_per_task = num_envs
         task_names = list(dict.fromkeys(candidates))
         if not task_names:
             raise ValueError("Task-balanced replay requires at least one task.")
-        return task_names
+        return fan_out_broken_regime_tasks(task_names, cfg, slots_per_task)
 
     @property
     def capacity(self):

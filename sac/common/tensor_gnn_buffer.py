@@ -10,11 +10,7 @@ from tensordict import TensorDict
 from torch_geometric.data import Batch, Data
 from torchrl.data import LazyTensorStorage, ReplayBufferEnsemble, TensorDictReplayBuffer
 
-from env.mujoco_gen.topology_envs import (
-    broken_node_regime_fraction,
-    broken_node_schedule,
-    regime_task_name,
-)
+from env.mujoco_gen.topology_envs import fan_out_broken_regime_tasks
 
 from common.config_utils import round_to_nearest_multiple
 from common.gnn_buffer import ReplayBatch
@@ -65,17 +61,7 @@ def _task_names(cfg) -> list[str]:
     result = list(dict.fromkeys(candidates))
     if not result:
         raise ValueError("Task-balanced replay requires at least one task.")
-    if (
-        slots_per_task > 1
-        and broken_node_schedule(cfg) == "interleaved"
-        and broken_node_regime_fraction(cfg) > 0.0
-    ):
-        result = [
-            name
-            for task in result
-            for name in (task, regime_task_name(task, "broken"))
-        ]
-    return result
+    return fan_out_broken_regime_tasks(result, cfg, slots_per_task)
 
 
 def _move_tree(value, device):
