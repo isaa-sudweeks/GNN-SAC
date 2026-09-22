@@ -14,6 +14,8 @@ import torch
 from torch_geometric.data import Batch, Data
 from torch_geometric.nn import global_mean_pool
 
+from env.mujoco_gen.topology_envs import base_regime_task, is_broken_regime_task
+
 from common.gnn_actor_critic import GNNActorCritic
 from common.graph_transforms import (
     graph_feature_flags,
@@ -604,11 +606,28 @@ class Distillation:
         return self.prepare_student(graph)
 
     def bind_replay(self, replay) -> None:
-        """Install teacher topology contracts at the replay's cold write/load boundary."""
+        """Install teacher topology contracts at the replay's cold write/load boundary.
+
+        The replay may also contain broken-node regime tasks (see
+        tensor_gnn_buffer._task_names) that Distillation was never given a
+        teacher for. Those share the same physical/nominal graph contract as
+        their standard sibling task -- only the per-episode broken-node mask
+        varies, and that is already carried per-row by the replay (v4 dynamic
+        `obs_action_mask`/`next_obs_action_mask`) -- so backfill their
+        signature from the sibling rather than requiring a second teacher.
+        """
         setter = getattr(replay, "set_task_graph_signatures", None)
         if setter is None:
             raise TypeError("Distillation requires replay topology validation support.")
-        setter(self.replay_signatures)
+        signatures = dict(self.replay_signatures)
+        for task in getattr(replay, "task_names", None) or ():
+            if task in signatures:
+                continue
+            base_task = base_regime_task(task)
+            if not is_broken_regime_task(task) or base_task not in self.replay_signatures:
+                raise ValueError(f"No graph signature available for replay task {task!r}.")
+            signatures[task] = self.replay_signatures[base_task]
+        setter(signatures)
 
     @property
     def weight(self) -> float:

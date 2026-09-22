@@ -963,6 +963,40 @@ class GNNMujocoTrussGenSmokeTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_native_repeated_env_regime_split_locks_standard_slots(self):
+        cfg = graph_test_cfg(
+            domain_randomization=True,
+            domain_randomization_params={
+                "broken_nodes": {
+                    "enabled": True, "probability": 1.0, "regime_fraction": 0.5,
+                },
+            },
+            graph_features={"node_roles": True},
+            use_control_graph=True,
+            max_steps=2,
+            nsubsteps=1,
+            num_envs=4,
+        )
+        env = make_env(cfg)
+        try:
+            env.reset_many()
+            action = torch.ones(env.envs[0].unwrapped.action_space.shape, dtype=torch.float32)
+            for _ in range(2):
+                results = env.step_many([action] * env.num_envs)
+                regimes = [info["regime"] for _, _, _, info in results]
+                # regime_fraction=0.5 over 4 slots deterministically locks the
+                # first half standard and the second half broken-eligible.
+                self.assertEqual(regimes, ["standard", "standard", "broken", "broken"])
+                for env_idx, (_, _, _, info) in enumerate(results):
+                    core = env.envs[env_idx].unwrapped
+                    if info["regime"] == "standard":
+                        self.assertFalse(np.any(core._broken_node_mask))
+                    else:
+                        self.assertGreater(int(core._broken_node_mask.sum()), 0)
+                env.reset_many()
+        finally:
+            env.close()
+
     def test_native_broken_node_sampling_is_seed_reproducible(self):
         cfg = graph_test_cfg(
             domain_randomization=True,

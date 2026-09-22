@@ -553,36 +553,48 @@ class DistillationTrainingTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "schemas changed"):
                 distill.load_state_dict(changed)
 
-    def test_broken_node_curriculum_waits_for_zero_weight_and_propagates(self):
-        class ScheduledDistillation:
-            def __init__(self, initial_weight=1.0, decay_steps=10):
-                self.initial_weight = initial_weight
-                self.decay_steps = decay_steps
-                self.step = -1
+    @staticmethod
+    def _schedule_cfg(schedule):
+        return SimpleNamespace(
+            domain_randomization_params=SimpleNamespace(
+                broken_nodes=SimpleNamespace(schedule=schedule)
+            )
+        )
 
-            @property
-            def weight(self):
-                return self.initial_weight * max(
-                    0.0, 1.0 - self.step / self.decay_steps
-                )
+    class _ScheduledDistillation:
+        def __init__(self, initial_weight=1.0, decay_steps=10):
+            self.initial_weight = initial_weight
+            self.decay_steps = decay_steps
+            self.step = -1
 
-        class GateTarget:
-            def __init__(self):
-                self.enabled = None
-                self.calls = []
+        @property
+        def weight(self):
+            return self.initial_weight * max(
+                0.0, 1.0 - self.step / self.decay_steps
+            )
 
-            def set_broken_nodes_sampling_enabled(self, enabled):
-                self.enabled = bool(enabled)
-                self.calls.append(self.enabled)
+    class _GateTarget:
+        def __init__(self):
+            self.enabled = None
+            self.calls = []
 
-        first, second, bucket = GateTarget(), GateTarget(), GateTarget()
+        def set_broken_nodes_sampling_enabled(self, enabled):
+            self.enabled = bool(enabled)
+            self.calls.append(self.enabled)
+
+    def test_broken_node_curriculum_staged_waits_for_zero_weight_and_propagates(self):
+        # schedule="staged" reproduces the legacy behavior exactly: broken-node
+        # sampling stays off for every env until the distillation KL weight has
+        # fully decayed to zero.
+        cfg = self._schedule_cfg("staged")
+        first, second, bucket = self._GateTarget(), self._GateTarget(), self._GateTarget()
         nested_env = SimpleNamespace(
             env=first,
             envs=[first, second],
             buckets=[bucket],
         )
-        distillation = ScheduledDistillation()
-        trainer = SimpleNamespace(env=nested_env, distillation=distillation, _step=9)
+        distillation = self._ScheduledDistillation()
+        trainer = SimpleNamespace(cfg=cfg, env=nested_env, distillation=distillation, _step=9)
 
         self.assertFalse(OnlineTrainer._sync_broken_nodes_curriculum(trainer))
         self.assertEqual(distillation.step, 9)
@@ -597,14 +609,28 @@ class DistillationTrainingTest(unittest.TestCase):
         self.assertEqual(distillation.step, 10)
         self.assertEqual([first.enabled, second.enabled, bucket.enabled], [True] * 3)
 
-        zero_weight = ScheduledDistillation(initial_weight=0.0)
-        immediate = SimpleNamespace(env=GateTarget(), distillation=zero_weight, _step=0)
+        zero_weight = self._ScheduledDistillation(initial_weight=0.0)
+        immediate = SimpleNamespace(cfg=cfg, env=self._GateTarget(), distillation=zero_weight, _step=0)
         self.assertTrue(OnlineTrainer._sync_broken_nodes_curriculum(immediate))
         self.assertTrue(immediate.env.enabled)
 
-        ordinary = SimpleNamespace(env=GateTarget(), distillation=None, _step=0)
+        ordinary = SimpleNamespace(cfg=cfg, env=self._GateTarget(), distillation=None, _step=0)
         self.assertTrue(OnlineTrainer._sync_broken_nodes_curriculum(ordinary))
         self.assertTrue(ordinary.env.enabled)
+
+    def test_broken_node_curriculum_interleaved_ignores_distillation_weight(self):
+        # schedule="interleaved" (also the default when unspecified) keeps
+        # sampling enabled from step zero regardless of distillation weight,
+        # since each env slot's regime was already fixed at construction time.
+        for cfg in (self._schedule_cfg("interleaved"), SimpleNamespace()):
+            distillation = self._ScheduledDistillation()
+            trainer = SimpleNamespace(cfg=cfg, env=self._GateTarget(), distillation=distillation, _step=0)
+            self.assertTrue(OnlineTrainer._sync_broken_nodes_curriculum(trainer))
+            self.assertTrue(trainer.env.enabled)
+
+            trainer._step = 9
+            self.assertTrue(OnlineTrainer._sync_broken_nodes_curriculum(trainer))
+            self.assertTrue(trainer.env.enabled)
 
     def test_cached_targets_match_live_teacher_with_all_graph_features(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -801,6 +827,39 @@ class DistillationTrainingTest(unittest.TestCase):
                 deferred.prepare_offline_datasets()
             self.assertEqual(deferred.stage, "online")
             self.assertFalse(deferred.datasets)
+
+    def test_broken_regime_task_skips_teacher_loss_unconditionally(self):
+        # Broken-node regime tasks (see tensor_gnn_buffer._task_names, the
+        # "<task>__broken" suffix) have no teacher and must never receive the
+        # KL term, independent of the distillation.weight decay schedule.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, distill = setup(tmp)
+            agent = GNNSAC(cfg)
+            agent.distillation = distill
+            standard_task = cfg.tasks[0]
+            broken_task = standard_task + "__broken"
+            self.assertNotIn(broken_task, distill.teachers)
+            obs = Batch.from_data_list([distill.prepare(raw_graph(3))])
+
+            rng = torch.random.get_rng_state()
+            with patch.object(
+                distill, "loss",
+                side_effect=AssertionError("teacher called for broken-regime task"),
+            ):
+                loss, _ = agent._task_pi_loss(broken_task, obs)
+            torch.random.set_rng_state(rng)
+            expected, _ = agent._pi_loss(obs)
+            torch.testing.assert_close(loss, expected)
+            self.assertNotIn(f"kl/{broken_task}", distill.metrics)
+            self.assertIn(f"sac_actor_loss/{broken_task}", distill.metrics)
+
+            distill.metrics = {}
+            with patch.object(distill, "loss", wraps=distill.loss) as loss_spy:
+                agent.update_pi_and_alpha(
+                    obs, task_batches={standard_task: (obs,), broken_task: (obs,)}
+                )
+            self.assertEqual(loss_spy.call_count, 1)
+            self.assertEqual(loss_spy.call_args.args[1], standard_task)
 
     def test_online_ordinary_and_pcgrad_and_zero_weight_equivalence(self):
         for pcgrad in (False, True):

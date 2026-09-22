@@ -3,6 +3,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import gymnasium as gym
 
+from env.mujoco_gen.topology_envs import (
+    broken_node_regime_fraction,
+    broken_node_regime_slots,
+    broken_node_schedule,
+)
+
 
 class RepeatedEnvWrapper(gym.Env):
     """
@@ -15,6 +21,13 @@ class RepeatedEnvWrapper(gym.Env):
         self.num_envs = int(getattr(cfg, "num_envs", 1))
         if self.num_envs < 1:
             raise ValueError("RepeatedEnvWrapper requires at least one environment")
+
+        if broken_node_schedule(cfg) == "interleaved":
+            self._broken_regime_slots = broken_node_regime_slots(
+                self.num_envs, broken_node_regime_fraction(cfg)
+            )
+        else:
+            self._broken_regime_slots = None
 
         self.envs = [
             self._make_env(cfg, make_env_fns, env_idx)
@@ -33,6 +46,8 @@ class RepeatedEnvWrapper(gym.Env):
         env_cfg.num_envs = 1
         if getattr(env_cfg, "seed", None) is not None:
             env_cfg.seed = int(env_cfg.seed) + int(env_idx)
+        if self._broken_regime_slots is not None and not self._broken_regime_slots[env_idx]:
+            self._lock_to_standard_regime(env_cfg)
         errors = []
         for fn in make_env_fns:
             try:
@@ -41,6 +56,19 @@ class RepeatedEnvWrapper(gym.Env):
                 errors.append(str(exc))
         details = "; ".join(errors)
         raise ValueError(f'Failed to make environment "{cfg.task}": {details}')
+
+    @staticmethod
+    def _lock_to_standard_regime(env_cfg):
+        """Force this slot's copy to the nominal (all-active) topology.
+
+        Broken-node sampling is a per-episode reset-time draw; disabling it
+        here keeps this slot's episodes teacher-compatible for the lifetime
+        of the env, guaranteeing a "clean" standard-regime data source.
+        """
+        params = getattr(env_cfg, "domain_randomization_params", None)
+        broken_nodes = getattr(params, "broken_nodes", None) if params is not None else None
+        if broken_nodes is not None:
+            broken_nodes.enabled = False
 
     def set_active_env(self, env_idx):
         if env_idx < 0 or env_idx >= self.num_envs:
@@ -81,6 +109,8 @@ class RepeatedEnvWrapper(gym.Env):
     def _annotate_info(self, info, env_idx):
         info["task"] = self.task
         info["env_idx"] = env_idx
+        if self._broken_regime_slots is not None:
+            info["regime"] = "broken" if self._broken_regime_slots[env_idx] else "standard"
 
     def _normalize_indices(self, env_indices):
         if env_indices is None:

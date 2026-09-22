@@ -310,6 +310,42 @@ class MjxVectorEnvTest(unittest.TestCase):
         finally:
             env.close()
 
+    def test_broken_node_regime_split_locks_standard_slots_from_construction(self):
+        cfg = mjx_cfg(
+            num_envs=8,
+            seed=17,
+            domain_randomization=True,
+            domain_randomization_params={
+                "length_scale": {"enabled": False},
+                "broken_nodes": {
+                    "enabled": True, "probability": 1.0, "regime_fraction": 0.5,
+                },
+            },
+            graph_features={"node_roles": True},
+        )
+        env = make_env(cfg)
+        try:
+            env.reset_many()
+            core = env.env
+            # regime_fraction=0.5 over 8 slots deterministically locks the
+            # first half standard (nominal, teacher-compatible) and the
+            # second half broken-eligible, regardless of the per-node
+            # probability draw.
+            expected_regimes = ["standard"] * 4 + ["broken"] * 4
+            action = torch.zeros(core.action_space.shape, dtype=torch.float32)
+            for _ in range(2):
+                results = env.step_many([action] * cfg.num_envs)
+                regimes = [info["regime"] for _, _, _, info in results]
+                self.assertEqual(regimes, expected_regimes)
+                for env_idx, regime in enumerate(regimes):
+                    if regime == "standard":
+                        self.assertFalse(core._broken_node_masks[env_idx].any())
+                    else:
+                        self.assertGreater(int(core._broken_node_masks[env_idx].sum()), 0)
+                env.reset_many()
+        finally:
+            env.close()
+
     def test_mjx_broken_nodes_zero_commands_and_report_diagnostics(self):
         cfg = mjx_cfg(
             num_envs=1,

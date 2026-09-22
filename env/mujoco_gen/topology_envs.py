@@ -74,6 +74,103 @@ def _broken_nodes_probability(config) -> float | None:
     return probability
 
 
+BROKEN_REGIME_TASK_SUFFIX = "__broken"
+
+
+def regime_task_name(task: str, regime: str | None) -> str:
+    """Buffer/distillation task key for a transition's (topology, regime) pair.
+
+    Uses a non-colon suffix deliberately: task strings elsewhere are
+    colon-delimited (``base_task:topology``) and parsed with
+    ``split(":", 1)``/``split(":")[-1]`` in several places (notably
+    distillation's topology lookup), so a colon-based regime suffix would
+    corrupt that parsing. ``"broken"`` is the only regime that changes the
+    key; ``"standard"``/``None`` map to the plain task name.
+    """
+    if regime == "broken":
+        return f"{task}{BROKEN_REGIME_TASK_SUFFIX}"
+    return task
+
+
+def is_broken_regime_task(task: str) -> bool:
+    return task.endswith(BROKEN_REGIME_TASK_SUFFIX)
+
+
+def base_regime_task(task: str) -> str:
+    """Strip a broken-regime suffix, if present, back to the plain task name."""
+    if is_broken_regime_task(task):
+        return task[: -len(BROKEN_REGIME_TASK_SUFFIX)]
+    return task
+
+
+def broken_node_schedule(config) -> str:
+    """Return "interleaved" (default) or "staged".
+
+    "interleaved" locks each env slot's regime at construction time so
+    broken-node RL and standard/distillation RL run concurrently from step
+    zero. "staged" reproduces the legacy behavior of gating all broken-node
+    sampling on the distillation curriculum instead.
+    """
+    params = _cfg_get(config, "domain_randomization_params", {})
+    broken_nodes = _cfg_get(params, "broken_nodes", {})
+    schedule = str(_cfg_get(broken_nodes, "schedule", "interleaved")).lower()
+    if schedule not in ("interleaved", "staged"):
+        raise ValueError(
+            "domain_randomization_params.broken_nodes.schedule must be "
+            "'interleaved' or 'staged'."
+        )
+    return schedule
+
+
+def broken_node_regime_fraction(config) -> float:
+    """Fraction of parallel env slots permanently reserved for broken-node RL.
+
+    Only meaningful while broken-node domain randomization is enabled; the
+    remaining slots are locked to the nominal (all-active) topology so
+    distillation always sees teacher-compatible episodes. Returns 0.0 when
+    broken-node randomization is disabled.
+    """
+    if _broken_nodes_probability(config) is None:
+        return 0.0
+    params = _cfg_get(config, "domain_randomization_params", {})
+    broken_nodes = _cfg_get(params, "broken_nodes", {})
+    try:
+        fraction = float(_cfg_get(broken_nodes, "regime_fraction", 0.0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "domain_randomization_params.broken_nodes.regime_fraction must be "
+            "finite and within [0, 1]."
+        ) from exc
+    if not np.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+        raise ValueError(
+            "domain_randomization_params.broken_nodes.regime_fraction must be "
+            "finite and within [0, 1]."
+        )
+    return fraction
+
+
+def broken_node_regime_slots(num_envs: int, fraction: float) -> np.ndarray:
+    """Fixed partition of env slots into broken-eligible (True) vs nominal-locked (False).
+
+    Deterministic given `fraction`; guarantees at least one slot of each
+    regime whenever `num_envs >= 2` and `0 < fraction < 1`, since a lone
+    standard slot is what keeps distillation targets valid and a lone broken
+    slot is what the request depends on.
+    """
+    if num_envs < 1:
+        raise ValueError("num_envs must be at least 1.")
+    if not np.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+        raise ValueError("fraction must be finite and within [0, 1].")
+    if num_envs < 2 or fraction <= 0.0:
+        return np.zeros(num_envs, dtype=bool)
+    if fraction >= 1.0:
+        return np.ones(num_envs, dtype=bool)
+    num_broken = max(1, min(int(round(num_envs * fraction)), num_envs - 1))
+    slots = np.zeros(num_envs, dtype=bool)
+    slots[-num_broken:] = True
+    return slots
+
+
 def _semantic_edge_roles(source, *, graph_view: str) -> np.ndarray:
     """Map upstream edge labels to tube=0 and connector=1."""
     upstream_roles = get_edge_types(source, graph_view=graph_view)

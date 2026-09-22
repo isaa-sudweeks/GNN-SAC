@@ -11,6 +11,16 @@ domain_randomization_params:
   broken_nodes:
     enabled: false
     probability: 0.1
+    # Fraction of parallel env slots permanently reserved for broken-node RL
+    # (the rest are locked to the nominal, all-active topology so
+    # distillation always sees teacher-compatible episodes). Only used when
+    # schedule=interleaved and num_envs>1.
+    regime_fraction: 0.3
+    # "interleaved": broken-node RL and standard/distillation RL run
+    # concurrently from step zero, via the fixed regime_fraction split above.
+    # "staged": legacy behavior — broken-node sampling stays off for every
+    # env until the distillation KL weight has fully decayed to zero.
+    schedule: interleaved
 
   # Randomly scale generated truss geometry at reset time.
   length_scale:

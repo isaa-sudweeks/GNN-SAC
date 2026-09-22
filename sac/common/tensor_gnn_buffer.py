@@ -10,6 +10,12 @@ from tensordict import TensorDict
 from torch_geometric.data import Batch, Data
 from torchrl.data import LazyTensorStorage, ReplayBufferEnsemble, TensorDictReplayBuffer
 
+from env.mujoco_gen.topology_envs import (
+    broken_node_regime_fraction,
+    broken_node_schedule,
+    regime_task_name,
+)
+
 from common.config_utils import round_to_nearest_multiple
 from common.gnn_buffer import ReplayBatch
 from common.graph_transforms import (
@@ -37,16 +43,38 @@ def _task_names(cfg) -> list[str]:
     multitask = bool(getattr(cfg, "multitask", False))
     backend = str(getattr(cfg, "mujoco_backend", "mujoco")).lower()
     topologies = getattr(cfg, "truss_topologies", None)
-    if backend == "mjx" and topologies and len(topologies) > 1:
+    num_envs = int(getattr(cfg, "num_envs", 1))
+    is_mjx_multi_topology = backend == "mjx" and topologies and len(topologies) > 1
+    if is_mjx_multi_topology:
         base_task = str(getattr(cfg, "task", "truss-graph")).split(":", 1)[0]
         candidates = [f"{base_task}:{topology}" for topology in topologies]
+        # MjxTopologyBucketEnv splits num_envs evenly across topologies, so
+        # each task's actual parallel-slot count is the bucket size, not the
+        # aggregate num_envs -- registering a broken sibling task for a
+        # bucket too small to ever populate it would leave that task's
+        # buffer permanently empty and stall sampling.
+        slots_per_task = num_envs // len(topologies)
     elif multitask:
+        # MultitaskWrapper has no per-slot regime-locking implementation;
+        # never fan out a broken sibling task here (it would never receive data).
         candidates = [str(task) for task in getattr(cfg, "tasks", [])]
+        slots_per_task = 1
     else:
         candidates = [str(getattr(cfg, "task", "task"))]
+        slots_per_task = num_envs
     result = list(dict.fromkeys(candidates))
     if not result:
         raise ValueError("Task-balanced replay requires at least one task.")
+    if (
+        slots_per_task > 1
+        and broken_node_schedule(cfg) == "interleaved"
+        and broken_node_regime_fraction(cfg) > 0.0
+    ):
+        result = [
+            name
+            for task in result
+            for name in (task, regime_task_name(task, "broken"))
+        ]
     return result
 
 

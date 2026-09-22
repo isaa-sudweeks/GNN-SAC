@@ -18,7 +18,7 @@ for path in (ROOT, SAC_ROOT):
 
 from common.gnn_buffer import GNNBuffer
 from common.graph_transforms import graph_structure_signature
-from common.tensor_gnn_buffer import TensorGNNBuffer, make_gnn_buffer
+from common.tensor_gnn_buffer import TensorGNNBuffer, _task_names, make_gnn_buffer
 from common.distillation import replay_observations
 from gnn_sac import GNNSAC
 from tests.test_task_balanced_replay import (
@@ -525,6 +525,36 @@ class TensorGNNBufferTest(unittest.TestCase):
         torch.manual_seed(27)
         actual = tensor.sample()
         assert_batch_equal(self, expected, actual)
+
+    def test_task_names_fans_out_broken_regime_sibling_when_interleaved(self):
+        base_cfg = config(
+            task="graph", tasks=None, multitask=False, mujoco_backend="mujoco",
+            truss_topologies=None, num_envs=4,
+            domain_randomization=True,
+            domain_randomization_params={
+                "broken_nodes": {
+                    "enabled": True, "probability": 0.2, "regime_fraction": 0.5,
+                },
+            },
+        )
+        self.assertEqual(_task_names(base_cfg), ["graph", "graph__broken"])
+
+        # Disabling either the fraction, the schedule, or num_envs>1 must
+        # leave today's task registry untouched.
+        self.assertEqual(
+            _task_names(SimpleNamespace(**{**vars(base_cfg), "num_envs": 1})),
+            ["graph"],
+        )
+        staged = SimpleNamespace(**{**vars(base_cfg)})
+        staged.domain_randomization_params = dict(base_cfg.domain_randomization_params)
+        staged.domain_randomization_params["broken_nodes"] = {
+            **base_cfg.domain_randomization_params["broken_nodes"], "schedule": "staged",
+        }
+        self.assertEqual(_task_names(staged), ["graph"])
+        self.assertEqual(
+            _task_names(config(task="graph", tasks=None, multitask=False, num_envs=4)),
+            ["graph"],
+        )
 
 
 if __name__ == "__main__":

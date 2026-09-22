@@ -11,6 +11,9 @@ from env.mujoco_gen.topology_envs import (
     _broken_nodes_probability,
     _edge_roles_enabled,
     _semantic_edge_roles,
+    broken_node_regime_fraction,
+    broken_node_regime_slots,
+    broken_node_schedule,
     make_truss_env_config,
     resolve_truss_topology,
 )
@@ -55,6 +58,12 @@ class MjxVectorGraphEnv(gym.Env):
         self.num_envs = int(getattr(cfg, "num_envs", 1))
         if self.num_envs < 1:
             raise ValueError("num_envs must be at least one.")
+        if broken_node_schedule(cfg) == "interleaved":
+            self._broken_regime_slots = broken_node_regime_slots(
+                self.num_envs, broken_node_regime_fraction(cfg)
+            )
+        else:
+            self._broken_regime_slots = None
 
         self._jax = jax
         self._jnp = jnp
@@ -275,6 +284,8 @@ class MjxVectorGraphEnv(gym.Env):
             env_info = {key: value[env_idx] for key, value in torch_info.items()}
             env_info["task"] = self.task
             env_info["env_idx"] = env_idx
+            if self._broken_regime_slots is not None:
+                env_info["regime"] = "broken" if self._broken_regime_slots[env_idx] else "standard"
             env_info["success"] = float(env_info.get("success", 0.0))
             if self._broken_node_probability is not None:
                 env_info["broken_node_mask"] = self._broken_node_masks[env_idx].clone()
@@ -369,6 +380,12 @@ class MjxVectorGraphEnv(gym.Env):
         eligible_indices = np.flatnonzero(~self._base_passive_node_mask)
         probability = self._broken_node_probability
         for env_idx in indices:
+            if self._broken_regime_slots is not None and not self._broken_regime_slots[env_idx]:
+                # This slot is locked to the nominal regime: never sample a
+                # broken node here, regardless of the batch-wide toggle,
+                # so distillation always has teacher-compatible episodes.
+                self._broken_node_masks[env_idx] = False
+                continue
             broken = np.zeros_like(self._base_passive_node_mask)
             if probability > 0.0:
                 broken[eligible_indices] = (
