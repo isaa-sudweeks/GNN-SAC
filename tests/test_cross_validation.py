@@ -13,8 +13,13 @@ for path in (ROOT, SAC_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from common.cross_validation import resolve_cross_validation, validate_cross_validation_spec
+from common.cross_validation import (
+    random_partition,
+    resolve_cross_validation,
+    validate_cross_validation_spec,
+)
 from scripts.launch_cross_validation import build_launch, load_definition, main, ordered_folds
+from scripts.make_random_cross_validation import build_definition, render_definition
 
 
 def spec(**overrides):
@@ -167,6 +172,76 @@ class CrossValidationLauncherTest(unittest.TestCase):
     def test_loads_smoke_definition(self):
         loaded = load_definition("smoke", ROOT / "config")
         self.assertEqual(list(loaded["groups"]), ["octahedron_group", "tetrahedron_group"])
+
+
+class RandomPartitionTest(unittest.TestCase):
+    topologies = [f"topology_{index}" for index in range(10)]
+
+    def test_same_seed_is_reproducible_and_order_independent(self):
+        first = random_partition(self.topologies, 5, seed=3)
+        second = random_partition(list(reversed(self.topologies)), 5, seed=3)
+        other = random_partition(self.topologies, 5, seed=4)
+
+        self.assertEqual(first, second)
+        self.assertNotEqual(first, other)
+        self.assertEqual(list(first), [f"fold_{index}" for index in range(5)])
+
+    def test_folds_are_disjoint_complete_and_balanced(self):
+        for num_folds in (2, 3, 4, 7, 10):
+            folds = random_partition(self.topologies, num_folds, seed=0)
+            members = [topology for fold in folds.values() for topology in fold]
+            sizes = [len(fold) for fold in folds.values()]
+
+            self.assertEqual(sorted(members), sorted(self.topologies))
+            self.assertEqual(len(members), len(set(members)))
+            self.assertLessEqual(max(sizes) - min(sizes), 1)
+
+    def test_rejects_invalid_fold_counts_and_duplicates(self):
+        for num_folds in (1, 11):
+            with self.assertRaisesRegex(ValueError, "num_folds"):
+                random_partition(self.topologies, num_folds, seed=0)
+        with self.assertRaisesRegex(ValueError, "unique"):
+            random_partition(["octahedron", "octahedron", "tetrahedron"], 2, seed=0)
+
+    def test_committed_random_5fold_matches_generator(self):
+        path = ROOT / "config" / "cross_validation" / "random_5fold.yaml"
+        split = OmegaConf.load(path).cross_validation.split
+        regenerated = build_definition(
+            source=split.source,
+            num_folds=split.num_folds,
+            split_seed=split.seed,
+            name="random_5fold",
+        )
+        loaded = load_definition("random_5fold", ROOT / "config")
+        source = load_definition(split.source, ROOT / "config")
+        source_pool = {
+            topology for topologies in source["groups"].values() for topology in topologies
+        }
+        members = [topology for fold in loaded["groups"].values() for topology in fold]
+
+        self.assertEqual(path.read_text(), render_definition(regenerated))
+        self.assertEqual(loaded["groups"], regenerated["groups"])
+        self.assertEqual(set(members), source_pool)
+        self.assertEqual(loaded["final_test"], source["final_test"])
+        self.assertFalse(set(members) & set(loaded["final_test"]))
+
+    def test_random_5fold_launch_matrix(self):
+        loaded = load_definition("random_5fold", ROOT / "config")
+        _, jobs = build_launch(
+            config_name="random_5fold",
+            spec=loaded,
+            seeds=[1, 2],
+            shuffle_seed=17,
+            overrides=[],
+            python_executable="python-test",
+        )
+
+        self.assertEqual(len(jobs), 10)
+        for job in jobs:
+            self.assertEqual(len(job["heldout_topologies"]), 2)
+            self.assertEqual(len(job["training_topologies"]), 8)
+            self.assertFalse(set(job["heldout_topologies"]) & set(job["training_topologies"]))
+            self.assertFalse(set(job["training_topologies"]) & set(loaded["final_test"]))
 
 
 if __name__ == "__main__":

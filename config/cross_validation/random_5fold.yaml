@@ -1,0 +1,33 @@
+# @package _global_
+
+# Random-configuration folds pooled from 'node_count_loso'.
+# Generated file; regenerate instead of editing by hand:
+#   python scripts/make_random_cross_validation.py --source node_count_loso --num-folds 5 --split-seed 0 --name random_5fold
+cross_validation:
+  enabled: true
+  name: random_5fold
+  split:
+    source: node_count_loso
+    num_folds: 5
+    seed: 0
+  groups:
+    fold_0:
+      - henneberg_n8_2tube_187
+      - tetrahedron
+    fold_1:
+      - henneberg_n6_2tube_1
+      - usevitch_210272254_p1
+    fold_2:
+      - henneberg_n5_1tube_1
+      - henneberg_n6_1tube_2
+    fold_3:
+      - henneberg_n8_3tube_64
+      - usevitch_60243677150_p1
+    fold_4:
+      - henneberg_n8_1tube_57
+      - octahedron
+  final_test:
+    - henneberg_n7_1tube_3
+    - henneberg_n7_3tube_1
+    - usevitch_1514879
+  held_out_group: null
