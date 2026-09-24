@@ -1,0 +1,16 @@
+source,fold,seed,job,wandb_run_url,role_in_analysis
+CV-3WAY-FEATURES,node_6,1,job_0000_3ee0ad1a488f,https://wandb.ai/i-suds/CV/runs/56ruvt5g,performance data (node_6 fold)
+CV-3WAY-FEATURES,node_8,1,job_0003_78d9c5ab1895,https://wandb.ai/i-suds/CV/runs/ypmimdkj,performance data (node_8 fold)
+CV-3WAY-FEATURES,node_6,2,job_0001_740e0d999873,https://wandb.ai/i-suds/CV/runs/tvlz482o,performance data (node_6 fold)
+CV-3WAY-FEATURES,node_8,2,job_0004_500c6d99587b,https://wandb.ai/i-suds/CV/runs/g3m0ec7w,performance data (node_8 fold)
+CV-3WAY-FEATURES,node_6,3,job_0002_0d7a19b6b608,https://wandb.ai/i-suds/CV/runs/m41n17jb,performance data (node_6 fold)
+CV-3WAY-FEATURES,node_8,3,job_0005_22f5ed932b7e,https://wandb.ai/i-suds/CV/runs/w5sigp4m,"GNN-embedding CHECKPOINT + performance data (node_8 fold, 8.7M steps, roles enabled)"
+CV-BASE,node_4,1,job_0000_6fbd02149508,https://wandb.ai/i-suds/CV/runs/uzcjx79j,performance data (node_4 fold)
+CV-BASE,node_5,1,job_0006_9e85c2645320,https://wandb.ai/i-suds/CV/runs/txplev9b,performance data (node_5 fold)
+CV-BASE,node_9,1,job_0012_c0226ac85a3b,https://wandb.ai/i-suds/CV/runs/lgt0hb9d,performance data (node_9 fold)
+CV-BASE,node_4,2,job_0001_6252b9754c2e,https://wandb.ai/i-suds/CV/runs/qb4c0r24,performance data (node_4 fold)
+CV-BASE,node_5,2,job_0007_05cfa1ebb7ea,https://wandb.ai/i-suds/CV/runs/y268h857,performance data (node_5 fold)
+CV-BASE,node_9,2,job_0013_a891e21a51ba,https://wandb.ai/i-suds/CV/runs/khk5fafw,performance data (node_9 fold)
+CV-BASE,node_4,3,job_0002_ac9787478933,https://wandb.ai/i-suds/CV/runs/n487uwg2,performance data (node_4 fold)
+CV-BASE,node_5,3,job_0008_2e51ef002b4e,https://wandb.ai/i-suds/CV/runs/j934eyad,performance data (node_5 fold)
+CV-BASE,node_9,3,job_0014_d790cdcd89da,https://wandb.ai/i-suds/CV/runs/zi85t4yc,performance data (node_9 fold)

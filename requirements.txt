@@ -17,3 +17,5 @@ kaleido
 wandb[media]
 mujoco-truss-gen==0.12.5
 torch_geometric
+networkx
+scikit-learn
