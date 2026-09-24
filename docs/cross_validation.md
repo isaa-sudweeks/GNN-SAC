@@ -23,11 +23,12 @@ cross_validation:
 Launch all folds and seeds locally with:
 
 ```bash
-python scripts/launch_cross_validation.py cross_validation=node_count_loso \
+uv run python scripts/launch_cross_validation.py cross_validation=node_count_loso \
   --seeds 1,2,3,4,5 --shuffle-seed 17 platform=local
 ```
 
-Use `platform=supercomputer` to submit the same matrix through Submitit. Add
+The launcher starts each Hydra multirun with `uv run python`, so jobs use the
+locked project environment. Use `platform=supercomputer` to submit the same matrix through Submitit. Add
 `--dry-run` to write and inspect the launch manifest without starting jobs. A
 custom manifest path can be selected with `--manifest PATH`.
 
@@ -59,7 +60,7 @@ The split is generated once and committed so every seed and relaunch uses the
 same folds:
 
 ```bash
-python scripts/make_random_cross_validation.py \
+uv run python scripts/make_random_cross_validation.py \
   --source node_count_loso --num-folds 5 --split-seed 0 --name random_5fold
 ```
 

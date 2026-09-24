@@ -2,7 +2,7 @@
 
 # Random-configuration folds pooled from 'node_count_loso'.
 # Generated file; regenerate instead of editing by hand:
-#   python scripts/make_random_cross_validation.py --source node_count_loso --num-folds 5 --split-seed 0 --name random_5fold
+#   uv run python scripts/make_random_cross_validation.py --source node_count_loso --num-folds 5 --split-seed 0 --name random_5fold
 cross_validation:
   enabled: true
   name: random_5fold

@@ -62,7 +62,7 @@ def render_definition(definition: dict) -> str:
     """Render a definition in the hand-written config/cross_validation style."""
     split = definition["split"]
     command = (
-        "python scripts/make_random_cross_validation.py "
+        "uv run python scripts/make_random_cross_validation.py "
         f"--source {split['source']} --num-folds {split['num_folds']} "
         f"--split-seed {split['seed']} --name {definition['name']}"
     )

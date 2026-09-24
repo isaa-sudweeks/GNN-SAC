@@ -110,10 +110,11 @@ class CrossValidationLauncherTest(unittest.TestCase):
             seeds=[3, 7],
             shuffle_seed=11,
             overrides=["platform=supercomputer", "steps=1000"],
-            python_executable="python-test",
+            python_command=["python-test"],
         )
 
         self.assertEqual(len(jobs), 6)
+        self.assertEqual(command[0], "python-test")
         self.assertEqual(
             {(job["held_out_group"], job["seed"]) for job in jobs},
             {(group, seed) for group in self.spec["groups"] for seed in (3, 7)},
@@ -132,6 +133,17 @@ class CrossValidationLauncherTest(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(set(first), set(other))
         self.assertNotEqual(first, other)
+
+    def test_defaults_to_uv_managed_python(self):
+        command, _ = build_launch(
+            config_name="node_groups",
+            spec=self.spec,
+            seeds=[1],
+            shuffle_seed=0,
+            overrides=[],
+        )
+        self.assertEqual(command[:3], ["uv", "run", "python"])
+        self.assertTrue(command[3].endswith("sac/gnn_train.py"))
 
     def test_rejects_launcher_owned_overrides(self):
         with self.assertRaisesRegex(ValueError, "owned"):
@@ -233,7 +245,7 @@ class RandomPartitionTest(unittest.TestCase):
             seeds=[1, 2],
             shuffle_seed=17,
             overrides=[],
-            python_executable="python-test",
+            python_command=["python-test"],
         )
 
         self.assertEqual(len(jobs), 10)
