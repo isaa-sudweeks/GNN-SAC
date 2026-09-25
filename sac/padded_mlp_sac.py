@@ -24,6 +24,7 @@ class PaddedMLPSAC(GNNSAC):
         }
 
     def save(self, fp):
+        self._validate_finite_model_state("agent save")
         torch.save(
             {
                 "model": self.model.state_dict(),
@@ -34,6 +35,7 @@ class PaddedMLPSAC(GNNSAC):
         )
 
     def training_state_dict(self):
+        self._validate_finite_training_state("trainer checkpoint save")
         return {
             "model": self.model.state_dict(),
             "log_alpha": self.log_alpha.detach().cpu(),
