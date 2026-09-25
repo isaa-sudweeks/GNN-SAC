@@ -8,6 +8,12 @@ import torch.nn.functional as F
 from torch_geometric.data import Batch, Data
 
 from common.gnn_actor_critic import GNNActorCritic 
+from common.finite_checks import (
+    NonFiniteTrainingError,
+    require_finite,
+    require_finite_gradients,
+    require_finite_optimizer,
+)
 from common.graph_transforms import (
     graph_feature_flags,
     graph_feature_schema,
@@ -28,6 +34,18 @@ class GNNSAC(torch.nn.Module):
         self.model = self._make_model(cfg).to(self.device)
         self._q_parameters = tuple(self.model._Qs.parameters())
         self._actor_parameters = tuple(self.model.actor_parameters())
+        q_parameter_ids = {id(parameter) for parameter in self._q_parameters}
+        actor_parameter_ids = {id(parameter) for parameter in self._actor_parameters}
+        self._q_named_parameters = tuple(
+            (name, parameter)
+            for name, parameter in self.model.named_parameters()
+            if id(parameter) in q_parameter_ids
+        )
+        self._actor_named_parameters = tuple(
+            (name, parameter)
+            for name, parameter in self.model.named_parameters()
+            if id(parameter) in actor_parameter_ids
+        )
         capturable = self.device.type in {"cuda", "xpu", "hpu", "privateuseone", "xla"}
 
         self.q_optim = torch.optim.Adam(self._q_parameters, lr=self.cfg.lr, capturable=capturable)
@@ -63,11 +81,60 @@ class GNNSAC(torch.nn.Module):
     def alpha(self):
         return self.log_alpha.exp()
 
-    def _safe_action(self, action):
-        """
-        TODO: I think it would be benefitial to add some sort of checking to make sure that the GNN stuff is right for the actions.
+    @property
+    def finite_checks_enabled(self):
+        return bool(getattr(self.cfg, "finite_checks", True))
 
-        """
+    def _require_finite(self, label, value):
+        if self.finite_checks_enabled:
+            require_finite(label, value)
+
+    def _require_finite_gradients(self, label, named_parameters):
+        if self.finite_checks_enabled:
+            require_finite_gradients(label, named_parameters)
+
+    def _require_finite_optimizer(self, label, optimizer):
+        if self.finite_checks_enabled:
+            require_finite_optimizer(label, optimizer)
+
+    def _clip_grad_norm(self, label, parameters, named_parameters):
+        self._require_finite_gradients(f"{label} gradients before clipping", named_parameters)
+        try:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                parameters,
+                self.cfg.grad_clip_norm,
+                error_if_nonfinite=self.finite_checks_enabled,
+            )
+        except RuntimeError as exc:
+            if not self.finite_checks_enabled:
+                raise
+            raise NonFiniteTrainingError(
+                f"{label} gradient norm became non-finite during clipping."
+            ) from exc
+        self._require_finite(f"{label} gradient norm", grad_norm)
+        self._require_finite_gradients(f"{label} gradients after clipping", named_parameters)
+        return grad_norm
+
+    def _validate_finite_model_state(self, label):
+        self._require_finite(f"{label} model state", self.model.state_dict())
+        self._validate_finite_temperature(label)
+
+    def _validate_finite_temperature(self, label):
+        self._require_finite(
+            f"{label} entropy temperature",
+            {"log_alpha": self.log_alpha, "alpha": self.alpha},
+        )
+
+    def _validate_finite_training_state(self, label):
+        self._validate_finite_model_state(label)
+        self._require_finite_optimizer(f"{label} critic optimizer", self.q_optim)
+        self._require_finite_optimizer(f"{label} actor optimizer", self.pi_optim)
+        self._require_finite_optimizer(f"{label} alpha optimizer", self.alpha_optim)
+
+    def _safe_action(self, action):
+        if self.finite_checks_enabled:
+            require_finite("policy action", action)
+            return action.clamp(-1, 1)
         return torch.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0).clamp(-1, 1)
 
     def project_action(self, obs, action):
@@ -86,6 +153,7 @@ class GNNSAC(torch.nn.Module):
         return min(max((frac - 1) / frac, self.cfg.discount_min), self.cfg.discount_max)
 
     def save(self, fp):
+        self._validate_finite_model_state("agent save")
         torch.save(
             {
                 "model": self.model.state_dict(),
@@ -100,8 +168,10 @@ class GNNSAC(torch.nn.Module):
         self.model.load_state_dict(state_dict["model"] if "model" in state_dict else state_dict)
         if isinstance(state_dict, dict) and "log_alpha" in state_dict:
             self.log_alpha.data.copy_(state_dict["log_alpha"].to(self.device))
+        self._validate_finite_model_state("loaded checkpoint")
 
     def training_state_dict(self):
+        self._validate_finite_training_state("trainer checkpoint save")
         return {
             "model": self.model.state_dict(),
             "log_alpha": self.log_alpha.detach().cpu(),
@@ -142,6 +212,7 @@ class GNNSAC(torch.nn.Module):
             self._load_actor_optimizer_state(state_dict["pi_optim"])
         if "alpha_optim" in state_dict:
             self.alpha_optim.load_state_dict(state_dict["alpha_optim"])
+        self._validate_finite_training_state("loaded trainer checkpoint")
 
     def _load_actor_optimizer_state(self, saved_state):
         """Load actor Adam state, upgrading checkpoints that omitted the GNN head."""
@@ -248,11 +319,17 @@ class GNNSAC(torch.nn.Module):
 
     def update_q(self, obs, action, reward, terminated, next_obs):
         q_loss = self._q_loss(obs, action, reward, terminated, next_obs)
+        self._require_finite("critic loss", q_loss)
 
         self.q_optim.zero_grad(set_to_none=True)
         q_loss.backward()
-        q_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._Qs.parameters(), self.cfg.grad_clip_norm)
+        q_grad_norm = self._clip_grad_norm(
+            "critic",
+            self._q_parameters,
+            self._q_named_parameters,
+        )
         self.q_optim.step()
+        self._require_finite("critic parameters after optimizer step", self._q_parameters)
         return q_loss.detach(), q_grad_norm.detach()
 
     def update_pi_and_alpha(self, obs, task_batches=None,
@@ -277,18 +354,29 @@ class GNNSAC(torch.nn.Module):
                 ]
                 pi_loss = pi_loss + distillation.weight * torch.stack(losses).mean()
         log_prob = info["log_prob"]
+        self._require_finite("actor loss", pi_loss)
+        self._require_finite("actor distribution statistics", info)
 
         self.pi_optim.zero_grad(set_to_none=True)
         pi_loss.backward()
-        pi_grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.model.actor_parameters(), self.cfg.grad_clip_norm
+        pi_grad_norm = self._clip_grad_norm(
+            "actor",
+            self._actor_parameters,
+            self._actor_named_parameters,
         )
         self.pi_optim.step()
+        self._require_finite("actor parameters after optimizer step", self._actor_parameters)
 
         alpha_loss = -(self.log_alpha * (log_prob.detach() + self.target_entropy)).mean()
+        self._require_finite("entropy temperature loss", alpha_loss)
         self.alpha_optim.zero_grad(set_to_none=True)
         alpha_loss.backward()
+        self._require_finite_gradients(
+            "entropy temperature gradients",
+            (("log_alpha", self.log_alpha),),
+        )
         self.alpha_optim.step()
+        self._validate_finite_temperature("after optimizer step")
 
         return {
             "pi_loss": pi_loss.detach(),
@@ -525,8 +613,10 @@ class GNNSAC(torch.nn.Module):
             for task, batch in task_batches.items():
                 obs, action, reward, terminated, next_obs = batch
                 loss = self._q_loss(obs, action, reward, terminated, next_obs)
+                self._require_finite(f"critic loss for task {task!r}", loss)
                 losses.append(loss.detach())
                 gradients = self._parameter_gradients(loss, parameters)
+                self._require_finite(f"critic gradients for task {task!r}", gradients)
                 task_gradient_values.append(gradients)
                 if retained_gradients is not None:
                     retained_gradients[task] = gradients
@@ -535,14 +625,18 @@ class GNNSAC(torch.nn.Module):
             performance_profiler, "pcgrad_critic_projection"
         ):
             projected_gradients = self.pcgrad_project(task_gradient_values)
+            self._require_finite("projected critic gradients", projected_gradients)
             self._set_parameter_gradients(parameters, projected_gradients)
         with self._optimization_subphase(
             performance_profiler, "pcgrad_critic_step"
         ):
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                parameters, self.cfg.grad_clip_norm
+            grad_norm = self._clip_grad_norm(
+                "critic",
+                parameters,
+                self._q_named_parameters,
             )
             self.q_optim.step()
+            self._require_finite("critic parameters after optimizer step", parameters)
         return (
             torch.stack(losses).mean(),
             grad_norm.detach(),
@@ -575,10 +669,15 @@ class GNNSAC(torch.nn.Module):
                     raw_observations_by_task.get(task),
                     performance_profiler=performance_profiler,
                 )
+                self._require_finite(f"actor loss for task {task!r}", pi_loss)
+                self._require_finite(
+                    f"actor distribution statistics for task {task!r}", info
+                )
                 losses.append(pi_loss.detach())
                 log_probabilities.append(info["log_prob"].detach())
                 entropies.append(info["entropy"].detach().mean())
                 gradients = self._parameter_gradients(pi_loss, parameters)
+                self._require_finite(f"actor gradients for task {task!r}", gradients)
                 task_gradient_values.append(gradients)
                 if retained_gradients is not None:
                     retained_gradients[task] = gradients
@@ -587,14 +686,18 @@ class GNNSAC(torch.nn.Module):
             performance_profiler, "pcgrad_actor_projection"
         ):
             projected_gradients = self.pcgrad_project(task_gradient_values)
+            self._require_finite("projected actor gradients", projected_gradients)
             self._set_parameter_gradients(parameters, projected_gradients)
         with self._optimization_subphase(
             performance_profiler, "pcgrad_actor_step"
         ):
-            pi_grad_norm = torch.nn.utils.clip_grad_norm_(
-                parameters, self.cfg.grad_clip_norm
+            pi_grad_norm = self._clip_grad_norm(
+                "actor",
+                parameters,
+                self._actor_named_parameters,
             )
             self.pi_optim.step()
+            self._require_finite("actor parameters after optimizer step", parameters)
 
         with self._optimization_subphase(
             performance_profiler, "pcgrad_entropy_step"
@@ -605,9 +708,15 @@ class GNNSAC(torch.nn.Module):
             alpha_loss = -(
                 self.log_alpha * (log_prob + self.target_entropy)
             ).mean()
+            self._require_finite("entropy temperature loss", alpha_loss)
             self.alpha_optim.zero_grad(set_to_none=True)
             alpha_loss.backward()
+            self._require_finite_gradients(
+                "entropy temperature gradients",
+                (("log_alpha", self.log_alpha),),
+            )
             self.alpha_optim.step()
+            self._validate_finite_temperature("after optimizer step")
 
         entropy = torch.stack(entropies).mean()
         return (
@@ -628,6 +737,14 @@ class GNNSAC(torch.nn.Module):
         if distillation is not None:
             distillation.metrics = {}
         raw_observations_by_task = None
+        finite_checks_enabled = bool(getattr(self.cfg, "finite_checks", True))
+        check_finite = getattr(self, "_require_finite", None)
+        if check_finite is None:
+            check_finite = (
+                require_finite
+                if finite_checks_enabled
+                else lambda _label, _value: None
+            )
         sampling_phase = (
             performance_profiler.phase("replay_sampling")
             if performance_profiler is not None
@@ -678,6 +795,13 @@ class GNNSAC(torch.nn.Module):
                     )
                 obs, action, reward, terminated, next_obs = buffer.sample()
                 task_batches = None
+        if pcgrad_enabled:
+            check_finite("replay task batches", task_batches)
+        else:
+            check_finite(
+                "replay batch",
+                (obs, action, reward, terminated, next_obs),
+            )
        # if self.device.type == 'cuda':
        #     torch.compiler.cudagraph_mark_step_begin()
         
@@ -732,6 +856,12 @@ class GNNSAC(torch.nn.Module):
                 performance_profiler, "target_update"
             ):
                 self.model.soft_update_target_Q()
+                target_critics = getattr(self.model, "_target_Qs", None)
+                if target_critics is not None:
+                    check_finite(
+                        "target critic after soft update",
+                        target_critics.state_dict(),
+                    )
             self.model.eval()
 
         info = {

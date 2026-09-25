@@ -7,6 +7,7 @@ import torch
 from torch_geometric.data import Batch, Data
 
 from common.config_utils import round_to_nearest_multiple
+from common.finite_checks import require_finite
 from common.graph_transforms import (
     graph_feature_flags,
     graph_structure_signature,
@@ -100,15 +101,29 @@ class _GNNTaskBuffer:
             terminated = terminated[-self._capacity:]
             n = self._capacity
 
+        if bool(getattr(self.cfg, "finite_checks", True)):
+            require_finite(
+                "replay insertion",
+                {
+                    "obs": obs,
+                    "next_obs": next_obs,
+                    "action": actions,
+                    "reward": rewards,
+                    "terminated": terminated,
+                },
+            )
+
         for i in range(n):
             write_idx = (self._idx + i) % self._capacity
             action = self._clone_tensor(actions[i]).float()
+            reward = self._scalar_tensor(rewards[i])
+            terminated_value = self._scalar_tensor(terminated[i])
             self._validate_action(obs[i], action)
             self._obs[write_idx] = self._clone_graph(obs[i])
             self._next_obs[write_idx] = self._clone_graph(next_obs[i])
             self._action[write_idx] = action
-            self._reward[write_idx] = self._scalar_tensor(rewards[i])
-            self._terminated[write_idx] = self._scalar_tensor(terminated[i])
+            self._reward[write_idx] = reward
+            self._terminated[write_idx] = terminated_value
 
         self._idx = (self._idx + n) % self._capacity
         self._size = min(self._size + n, self._capacity)
@@ -269,6 +284,17 @@ class _GNNTaskBuffer:
         self._action = state_dict["action"]
         self._reward = state_dict["reward"]
         self._terminated = state_dict["terminated"]
+        if bool(getattr(self.cfg, "finite_checks", True)) and self._size:
+            require_finite(
+                "loaded replay checkpoint",
+                {
+                    "obs": self._obs,
+                    "next_obs": self._next_obs,
+                    "action": self._action,
+                    "reward": self._reward,
+                    "terminated": self._terminated,
+                },
+            )
 
 
 class GNNBuffer:
