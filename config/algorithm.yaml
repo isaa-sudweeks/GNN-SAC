@@ -7,6 +7,7 @@ grad_clip_norm: 10.0 # Maximum global gradient norm before clipping optimizer st
 pcgrad: false # GNN profiles can enable projection of conflicting per-task gradients.
 gradient_diagnostics: false # Compare task-specific actor and critic gradients without changing the optimizer update.
 gradient_diagnostics_freq: 100 # Optimizer-update interval for gradient diagnostics when enabled.
+finite_checks: true # Fail before non-finite replay, losses, gradients, actions, or checkpoints can silently poison training.
 
 # Replay and update cadence
 buffer_size: 1_000_000 # Maximum transitions stored per topology in replay.

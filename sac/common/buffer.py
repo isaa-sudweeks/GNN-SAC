@@ -1,5 +1,7 @@
 import torch
 
+from common.finite_checks import require_finite
+
 
 class Buffer:
     """Circular transition replay buffer for SAC."""
@@ -59,6 +61,17 @@ class Buffer:
         action = td["action"][1:].float().cpu()
         reward = td["reward"][1:].float().view(-1, 1).cpu()
         terminated = td["terminated"][1:].float().view(-1, 1).cpu()
+        if bool(getattr(self.cfg, "finite_checks", True)):
+            require_finite(
+                "replay insertion",
+                {
+                    "obs": obs,
+                    "next_obs": next_obs,
+                    "action": action,
+                    "reward": reward,
+                    "terminated": terminated,
+                },
+            )
 
         if self._obs is None:
             self._init(obs, action)
@@ -132,3 +145,14 @@ class Buffer:
         self._action = state_dict["action"]
         self._reward = state_dict["reward"]
         self._terminated = state_dict["terminated"]
+        if bool(getattr(self.cfg, "finite_checks", True)) and self._size:
+            require_finite(
+                "loaded replay checkpoint",
+                {
+                    "obs": self._obs[:self._size],
+                    "next_obs": self._next_obs[:self._size],
+                    "action": self._action[:self._size],
+                    "reward": self._reward[:self._size],
+                    "terminated": self._terminated[:self._size],
+                },
+            )
