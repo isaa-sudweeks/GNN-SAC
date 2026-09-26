@@ -38,6 +38,170 @@ def _edge_roles_enabled(config) -> bool:
     return bool(_cfg_get(features, "edge_roles", False))
 
 
+def _broken_nodes_probability(config) -> float | None:
+    """Validate and return the enabled per-node failure probability."""
+    if not bool(_cfg_get(config, "domain_randomization", False)):
+        return None
+    params = _cfg_get(config, "domain_randomization_params", {})
+    broken_nodes = _cfg_get(params, "broken_nodes", {})
+    if not bool(_cfg_get(broken_nodes, "enabled", False)):
+        return None
+
+    features = _cfg_get(config, "graph_features", {})
+    if not bool(_cfg_get(features, "node_roles", False)):
+        raise ValueError(
+            "domain_randomization_params.broken_nodes.enabled=true requires "
+            "graph_features.node_roles=true so the policy can identify passive nodes."
+        )
+    if not bool(_cfg_get(config, "use_control_graph", False)):
+        raise ValueError(
+            "domain_randomization_params.broken_nodes.enabled=true requires "
+            "use_control_graph=true so broken-node commands are disabled before routing."
+        )
+
+    try:
+        probability = float(_cfg_get(broken_nodes, "probability", 0.1))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "domain_randomization_params.broken_nodes.probability must be finite "
+            "and within [0, 1]."
+        ) from exc
+    if not np.isfinite(probability) or not 0.0 <= probability <= 1.0:
+        raise ValueError(
+            "domain_randomization_params.broken_nodes.probability must be finite "
+            "and within [0, 1]."
+        )
+    return probability
+
+
+BROKEN_REGIME_TASK_SUFFIX = "__broken"
+
+
+def regime_task_name(task: str, regime: str | None) -> str:
+    """Buffer/distillation task key for a transition's (topology, regime) pair.
+
+    Uses a non-colon suffix deliberately: task strings elsewhere are
+    colon-delimited (``base_task:topology``) and parsed with
+    ``split(":", 1)``/``split(":")[-1]`` in several places (notably
+    distillation's topology lookup), so a colon-based regime suffix would
+    corrupt that parsing. ``"broken"`` is the only regime that changes the
+    key; ``"standard"``/``None`` map to the plain task name.
+    """
+    if regime == "broken":
+        return f"{task}{BROKEN_REGIME_TASK_SUFFIX}"
+    return task
+
+
+def is_broken_regime_task(task: str) -> bool:
+    return task.endswith(BROKEN_REGIME_TASK_SUFFIX)
+
+
+def base_regime_task(task: str) -> str:
+    """Strip a broken-regime suffix, if present, back to the plain task name."""
+    if is_broken_regime_task(task):
+        return task[: -len(BROKEN_REGIME_TASK_SUFFIX)]
+    return task
+
+
+def broken_node_schedule(config) -> str:
+    """Return "interleaved" (default) or "staged".
+
+    "interleaved" locks each env slot's regime at construction time so
+    broken-node RL and standard/distillation RL run concurrently from step
+    zero. "staged" reproduces the legacy behavior of gating all broken-node
+    sampling on the distillation curriculum instead.
+    """
+    params = _cfg_get(config, "domain_randomization_params", {})
+    broken_nodes = _cfg_get(params, "broken_nodes", {})
+    schedule = str(_cfg_get(broken_nodes, "schedule", "interleaved")).lower()
+    if schedule not in ("interleaved", "staged"):
+        raise ValueError(
+            "domain_randomization_params.broken_nodes.schedule must be "
+            "'interleaved' or 'staged'."
+        )
+    return schedule
+
+
+def broken_node_regime_fraction(config) -> float:
+    """Fraction of parallel env slots permanently reserved for broken-node RL.
+
+    Only meaningful while broken-node domain randomization is enabled; the
+    remaining slots are locked to the nominal (all-active) topology so
+    distillation always sees teacher-compatible episodes. Returns 0.0 when
+    broken-node randomization is disabled.
+    """
+    if _broken_nodes_probability(config) is None:
+        return 0.0
+    params = _cfg_get(config, "domain_randomization_params", {})
+    broken_nodes = _cfg_get(params, "broken_nodes", {})
+    try:
+        fraction = float(_cfg_get(broken_nodes, "regime_fraction", 0.0))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "domain_randomization_params.broken_nodes.regime_fraction must be "
+            "finite and within [0, 1]."
+        ) from exc
+    if not np.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+        raise ValueError(
+            "domain_randomization_params.broken_nodes.regime_fraction must be "
+            "finite and within [0, 1]."
+        )
+    return fraction
+
+
+def broken_node_regime_slots(num_envs: int, fraction: float) -> np.ndarray:
+    """Fixed partition of env slots into broken-eligible (True) vs nominal-locked (False).
+
+    Deterministic given `fraction`; guarantees at least one slot of each
+    regime whenever `num_envs >= 2` and `0 < fraction < 1`, since a lone
+    standard slot is what keeps distillation targets valid and a lone broken
+    slot is what the request depends on.
+    """
+    if num_envs < 1:
+        raise ValueError("num_envs must be at least 1.")
+    if not np.isfinite(fraction) or not 0.0 <= fraction <= 1.0:
+        raise ValueError("fraction must be finite and within [0, 1].")
+    if num_envs < 2 or fraction <= 0.0:
+        return np.zeros(num_envs, dtype=bool)
+    if fraction >= 1.0:
+        return np.ones(num_envs, dtype=bool)
+    num_broken = max(1, min(int(round(num_envs * fraction)), num_envs - 1))
+    slots = np.zeros(num_envs, dtype=bool)
+    slots[-num_broken:] = True
+    return slots
+
+
+def fan_out_broken_regime_tasks(candidates: list[str], cfg, slots_per_task: int) -> list[str]:
+    """Extend a base per-topology task list with broken-regime sibling tasks.
+
+    Shared by every replay buffer's task registry (TensorGNNBuffer, the
+    legacy GNNBuffer) so they stay consistent with what the env layer can
+    actually produce for a given cfg:
+
+    - No fan-out at all unless schedule=interleaved, regime_fraction > 0, and
+      slots_per_task > 1 -- a fixed per-slot partition needs at least two
+      slots to represent both regimes, matching the guard the env layer uses
+      before it ever locks a slot to the standard regime (see
+      RepeatedEnvWrapper/MjxVectorGraphEnv).
+    - At regime_fraction >= 1.0 every slot is broken-eligible, so a standard
+      sibling task would never receive transitions and stall replay
+      readiness forever -- register only the broken task in that case
+      instead of an always-empty pair.
+    """
+    if slots_per_task <= 1 or broken_node_schedule(cfg) != "interleaved":
+        return list(candidates)
+    fraction = broken_node_regime_fraction(cfg)
+    if fraction <= 0.0:
+        return list(candidates)
+    if fraction >= 1.0:
+        return [regime_task_name(task, "broken") for task in candidates]
+    return [
+        name
+        for task in candidates
+        for name in (task, regime_task_name(task, "broken"))
+    ]
+
+
 def _semantic_edge_roles(source, *, graph_view: str) -> np.ndarray:
     """Map upstream edge labels to tube=0 and connector=1."""
     upstream_roles = get_edge_types(source, graph_view=graph_view)
@@ -449,6 +613,13 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         self.topology = resolve_truss_topology(config)
         self.node_action_dim = int(_cfg_get(config, "node_action_dim", 1))
         self.node_feature_dim = 6
+        self._broken_node_probability = _broken_nodes_probability(config)
+        self._broken_nodes_sampling_enabled = True
+        configured_seed = _cfg_get(config, "seed", None)
+        self._initial_reset_seed = (
+            None if configured_seed is None else int(configured_seed) + int(rank)
+        )
+        self._has_reset = False
         super().__init__(make_truss_env_config(config), render_mode=render_mode, rank=rank)
 
     def _use_control_graph(self):
@@ -484,6 +655,18 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
     def _on_model_changed(self):
         if self._use_control_graph():
             self._initialize_node_velocity_controller()
+            self._base_passive_node_mask = np.asarray(
+                self.node_velocity_controller.passive_node_mask, dtype=bool
+            ).copy()
+            self._broken_node_mask = np.zeros_like(self._base_passive_node_mask)
+            if (
+                self._broken_node_probability is not None
+                and not np.any(~self._base_passive_node_mask)
+            ):
+                raise ValueError(
+                    "Broken-node domain randomization requires at least one originally "
+                    "active control node."
+                )
         super()._on_model_changed()
         self.logical_node_names = self._logical_node_names()
         self.graph_node_names = self._node_names()
@@ -555,9 +738,7 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
 
     def _policy_action_mask(self):
         if self._use_control_graph():
-            passive = np.asarray(
-                self.node_velocity_controller.passive_node_mask, dtype=bool
-            )
+            passive = self._base_passive_node_mask | self._broken_node_mask
             return ~passive
 
         actuated_nodes = {
@@ -569,6 +750,45 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
         return np.asarray(
             [name in actuated_nodes for name in self.graph_node_names], dtype=bool
         )
+
+    def _sample_broken_nodes(self) -> None:
+        if self._broken_node_probability is None:
+            return
+        self._broken_node_mask.fill(False)
+
+        if not self._broken_nodes_sampling_enabled:
+            return
+
+        eligible_indices = np.flatnonzero(~self._base_passive_node_mask)
+        probability = self._broken_node_probability
+        if probability <= 0.0:
+            return
+        self._broken_node_mask[eligible_indices] = (
+            self.np_random.random(eligible_indices.size) < probability
+        )
+        if np.all(self._broken_node_mask[eligible_indices]):
+            restored_index = int(self.np_random.choice(eligible_indices))
+            self._broken_node_mask[restored_index] = False
+
+    def set_broken_nodes_sampling_enabled(self, enabled: bool) -> None:
+        """Gate future reset-time samples without changing the current episode."""
+        self._broken_nodes_sampling_enabled = bool(enabled)
+
+    def _add_broken_node_diagnostics(self, info):
+        if self._broken_node_probability is None:
+            return
+        info["broken_node_mask"] = self._broken_node_mask.copy()
+        info["broken_node_count"] = int(self._broken_node_mask.sum())
+
+    def reset(self, seed=None, options=None):
+        if seed is None and not self._has_reset:
+            seed = self._initial_reset_seed
+        _, info = super().reset(seed=seed, options=options)
+        self._has_reset = True
+        self._sample_broken_nodes()
+        domain_info = info.setdefault("domain_randomization", {})
+        self._add_broken_node_diagnostics(domain_info)
+        return self._get_obs(), info
 
     def _get_obs(self):
         graph_view = self._graph_view()
@@ -629,6 +849,7 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
             substeps_executed=int(advance_info["substeps_executed"]),
         )
         info.update(advance_info)
+        self._add_broken_node_diagnostics(info)
         truncated = self.steps >= self.max_steps
         return self._get_obs(), reward, terminated, truncated, info
 
@@ -645,7 +866,8 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
             node_actions.reshape(len(self.graph_node_names), self.node_action_dim)[:, 0],
             -1.0,
             1.0,
-        ).astype(np.float32, copy=False)
+        ).astype(np.float32, copy=True)
+        normalized_node_action[self._broken_node_mask] = 0.0
         node_commands = normalized_node_action * float(self.config.speed)
         ctrl = self.node_velocity_controller.clipped_edge_commands(
             self.mj_model.model,

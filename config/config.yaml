@@ -5,6 +5,7 @@ defaults:
   - physics/domain_randomization
   - cross_validation: disabled
   - training
+  - distillation: disabled
   - sac_backend: mlp
   - sim_backend: mujoco
   - platform: local

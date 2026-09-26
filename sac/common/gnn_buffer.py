@@ -6,10 +6,14 @@ from typing import Mapping
 import torch
 from torch_geometric.data import Batch, Data
 
+from env.mujoco_gen.topology_envs import fan_out_broken_regime_tasks
+
 from common.config_utils import round_to_nearest_multiple
 from common.finite_checks import require_finite
 from common.graph_transforms import (
     graph_feature_flags,
+    graph_signature_compatible,
+    graph_structure_signature,
     physical_node_mask,
     policy_action_mask,
     prepare_graph,
@@ -19,19 +23,21 @@ from common.graph_transforms import (
 class ReplayBatch:
     """One balanced learner batch plus its task-specific constituent batches."""
 
-    combined: tuple
+    combined: tuple | None
     by_task: Mapping[str, tuple]
+    raw_observations_by_task: Mapping[str, list[Data]] | None = None
 
 
 @dataclass(frozen=True)
 class _RawReplaySample:
-    """Prepared CPU replay values awaiting PyG collation and device transfer."""
+    """Raw and prepared CPU replay values awaiting collation and transfer."""
 
     observations: list[Data]
     actions: list[torch.Tensor]
     rewards: list[torch.Tensor]
     terminated: list[torch.Tensor]
     next_observations: list[Data]
+    raw_observations: list[Data]
 
 
 class _GNNTaskBuffer:
@@ -46,6 +52,7 @@ class _GNNTaskBuffer:
         self._size = 0
         self._idx = 0
         self._storage_device = torch.device("cpu")
+        self._graph_signature = None
 
         self._obs = [None] * self._capacity
         self._next_obs = [None] * self._capacity
@@ -76,6 +83,8 @@ class _GNNTaskBuffer:
             actions = self._transition_sequence(td["action"])[1:]
             rewards = self._transition_sequence(td["reward"])[1:]
             terminated = self._transition_sequence(td["terminated"])[1:]
+
+        self._validate_graphs(obs_seq)
 
         obs = obs_seq[:-1]
         next_obs = obs_seq[1:]
@@ -163,6 +172,7 @@ class _GNNTaskBuffer:
             rewards=rewards,
             terminated=terminations,
             next_observations=prepared_next_obs,
+            raw_observations=raw_obs,
         )
 
     def sample(self, performance_profiler=None):
@@ -230,6 +240,25 @@ class _GNNTaskBuffer:
                 f"Node action count ({action.shape[0]}) must match graph node count ({num_nodes})."
             )
 
+    def set_graph_signature(self, signature):
+        self._graph_signature = signature
+        self._validate_graphs(
+            [graph for graph in (*self._obs, *self._next_obs) if graph is not None]
+        )
+
+    def _validate_graphs(self, graphs):
+        if self._graph_signature is None:
+            return
+        if any(
+            not graph_signature_compatible(
+                graph_structure_signature(graph),
+                self._graph_signature,
+                allow_action_subset=True,
+            )
+            for graph in graphs
+        ):
+            raise ValueError("Replay observation topology or action ordering differs from teacher.")
+
     def state_dict(self):
         return {
             "capacity": self._capacity,
@@ -251,12 +280,17 @@ class _GNNTaskBuffer:
                 f"Checkpoint replay capacity ({saved_capacity}) does not match current capacity ({self._capacity}). "
                 "Resume with the same buffer_size and steps, or start a fresh run."
             )
+        observations = state_dict["obs"]
+        next_observations = state_dict["next_obs"]
+        self._validate_graphs(
+            [graph for graph in (*observations, *next_observations) if graph is not None]
+        )
         self._batch_size = int(state_dict.get("batch_size", self._batch_size))
         self._num_eps = int(state_dict["num_eps"])
         self._size = int(state_dict["size"])
         self._idx = int(state_dict["idx"])
-        self._obs = state_dict["obs"]
-        self._next_obs = state_dict["next_obs"]
+        self._obs = observations
+        self._next_obs = next_observations
         self._action = state_dict["action"]
         self._reward = state_dict["reward"]
         self._terminated = state_dict["terminated"]
@@ -317,17 +351,24 @@ class GNNBuffer:
         multitask = bool(getattr(cfg, "multitask", False))
         backend = str(getattr(cfg, "mujoco_backend", "mujoco")).lower()
         topologies = getattr(cfg, "truss_topologies", None)
+        num_envs = int(getattr(cfg, "num_envs", 1))
         if backend == "mjx" and topologies and len(topologies) > 1:
             base_task = str(getattr(cfg, "task", "truss-graph")).split(":", 1)[0]
             candidates = [f"{base_task}:{topology}" for topology in topologies]
+            # See tensor_gnn_buffer._task_names: MjxTopologyBucketEnv splits
+            # num_envs evenly across topologies, so the actual per-task slot
+            # count is the bucket size, not the aggregate num_envs.
+            slots_per_task = num_envs // len(topologies)
         elif multitask:
             candidates = [str(task) for task in getattr(cfg, "tasks", [])]
+            slots_per_task = 1
         else:
             candidates = [str(getattr(cfg, "task", "task"))]
+            slots_per_task = num_envs
         task_names = list(dict.fromkeys(candidates))
         if not task_names:
             raise ValueError("Task-balanced replay requires at least one task.")
-        return task_names
+        return fan_out_broken_regime_tasks(task_names, cfg, slots_per_task)
 
     @property
     def capacity(self):
@@ -359,6 +400,15 @@ class GNNBuffer:
             raise KeyError(f"Unknown replay task {task!r}; expected one of {self.task_names!r}.")
         self._buffers[task].add(td, count_episode=count_episode)
         return self.num_eps
+
+    def set_task_graph_signatures(self, signatures):
+        """Validate future inserts and loaded replay against per-task topology contracts."""
+        if set(signatures) != set(self.task_names):
+            raise ValueError(
+                f"Replay signature tasks {list(signatures)!r} do not match {self.task_names!r}."
+            )
+        for task, signature in signatures.items():
+            self._buffers[task].set_graph_signature(signature)
 
     supports_replay_profiling = True
 
@@ -474,14 +524,18 @@ class GNNBuffer:
         terminated = torch.cat([batch[3] for batch in batches], dim=0)
         return observations, actions, rewards, terminated, next_observations
 
-    def sample_with_tasks(self, performance_profiler=None):
+    def sample_with_tasks(self, performance_profiler=None, *, combine=True):
         raw_by_task = self._sample_raw_by_task(
             performance_profiler=performance_profiler
         )
-        combined = self._collate_raw_samples(
-            raw_by_task.values(),
-            performance_profiler=performance_profiler,
-            subphase_name="combined_collation_transfer",
+        combined = (
+            self._collate_raw_samples(
+                raw_by_task.values(),
+                performance_profiler=performance_profiler,
+                subphase_name="combined_collation_transfer",
+            )
+            if combine
+            else None
         )
         by_task = {
             task: self._collate_raw_samples(
@@ -491,7 +545,14 @@ class GNNBuffer:
             )
             for task, sample in raw_by_task.items()
         }
-        return ReplayBatch(combined=combined, by_task=by_task)
+        return ReplayBatch(
+            combined=combined,
+            by_task=by_task,
+            raw_observations_by_task={
+                task: list(sample.raw_observations)
+                for task, sample in raw_by_task.items()
+            },
+        )
 
     def sample(self, performance_profiler=None):
         raw_by_task = self._sample_raw_by_task(

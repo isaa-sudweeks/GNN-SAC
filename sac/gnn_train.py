@@ -38,7 +38,7 @@ if sys.version_info >= (3, 14):
 
 from common.parser import capture_launch_command, parse_cfg
 from common.seed import set_seed
-from common.gnn_buffer import GNNBuffer
+from common.tensor_gnn_buffer import make_gnn_buffer
 from env import make_env
 from gnn_sac import GNNSAC
 from trainer.online_trainer import OnlineTrainer
@@ -76,7 +76,7 @@ def run_training(cfg, trial=None):
 
         agent = PaddedMLPSAC(cfg)
 
-    buffer = GNNBuffer(cfg)
+    buffer = make_gnn_buffer(cfg)
     logger = Logger(cfg)
     trainer = OnlineTrainer(
         cfg = cfg,

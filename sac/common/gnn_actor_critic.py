@@ -2,6 +2,7 @@ from copy import deepcopy
 
 import torch 
 import torch.nn as nn 
+from torch_geometric.data import Data
 from torch_geometric.nn import global_add_pool, global_mean_pool
 
 from common import math 
@@ -113,6 +114,28 @@ class GNNActorCritic(nn.Module):
         for param, target_param in zip(self._Qs.parameters(), self._target_Qs.parameters()):
             target_param.data.lerp_(param.data, self.cfg.tau)
 
+    def policy_distribution(
+        self, obs: Data, *, deterministic: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return pre-tanh Gaussian parameters in active-node action order.
+
+        The public default disables actor dropout without disabling gradients.
+        SAC sampling opts into the actor's existing train/eval mode.
+        """
+        modes = self._pi.training, self._action_head.training
+        try:
+            if deterministic:
+                self._pi.eval()
+                self._action_head.eval()
+            action_mask = policy_action_mask(obs)
+            embeddings = self._pi(obs.x, obs.edge_index, getattr(obs, "edge_attr", None))
+            mean, log_std = self._action_head(embeddings[action_mask]).chunk(2, dim=-1)
+            return mean, math.log_std(log_std, self.log_std_min, self.log_std_dif)
+        finally:
+            if deterministic:
+                self._pi.train(modes[0])
+                self._action_head.train(modes[1])
+
     def pi(self, obs):
         """
         Compute the action, entropy and log probability. 
@@ -121,9 +144,7 @@ class GNNActorCritic(nn.Module):
             obs:Observation data of a graph in the torch geometric Data format
         """
         action_mask = policy_action_mask(obs)
-        embeddings = self._pi(obs.x, obs.edge_index, getattr(obs, "edge_attr", None))
-        mean, log_std = self._action_head(embeddings[action_mask]).chunk(2, dim=-1)
-        log_std = math.log_std(log_std, self.log_std_min, self.log_std_dif)
+        mean, log_std = self.policy_distribution(obs, deterministic=False)
         
         eps = torch.randn_like(mean)
         log_prob = math.gaussian_logprob(eps, log_std)

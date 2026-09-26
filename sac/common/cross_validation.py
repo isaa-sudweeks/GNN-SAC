@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -154,3 +155,36 @@ def resolve_cross_validation(cfg: Any) -> Any:
             cfg.cross_validation.training_topologies = training_topologies
             cfg.cross_validation.heldout_topologies = heldout_topologies
     return cfg
+
+
+def random_partition(
+    topologies: Sequence[str],
+    num_folds: int,
+    seed: int,
+    prefix: str = "fold",
+) -> dict[str, list[str]]:
+    """Randomly partition topologies into near-equal folds named ``<prefix>_<i>``.
+
+    The partition is a deterministic function of ``(topologies, num_folds, seed)``;
+    input order does not matter. Fold sizes differ by at most one.
+    """
+    topologies = [str(topology).strip() for topology in topologies]
+    if any(not topology for topology in topologies):
+        raise ValueError("random_partition cannot contain empty topology identifiers.")
+    if len(set(topologies)) != len(topologies):
+        raise ValueError("random_partition requires unique topology identifiers.")
+    if not 2 <= int(num_folds) <= len(topologies):
+        raise ValueError(
+            f"num_folds must be between 2 and {len(topologies)}; got {num_folds}."
+        )
+    if not _SAFE_GROUP_NAME.fullmatch(prefix):
+        raise ValueError(
+            "Fold prefix must contain only letters, numbers, underscores, or hyphens."
+        )
+
+    shuffled = sorted(topologies)
+    random.Random(int(seed)).shuffle(shuffled)
+    folds: list[list[str]] = [[] for _ in range(int(num_folds))]
+    for index, topology in enumerate(shuffled):
+        folds[index % len(folds)].append(topology)
+    return {f"{prefix}_{index}": sorted(fold) for index, fold in enumerate(folds)}

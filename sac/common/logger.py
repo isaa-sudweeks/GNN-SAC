@@ -45,6 +45,8 @@ CONSOLE_FORMAT = [
     ("episode_distance", "Dist", "float"),
     ("buffer_size", "Buf", "int"),
     ("optimizer_updates", "Upd", "int"),
+    ("offline_updates", "DUpd", "int"),
+    ("kl", "KL", "float"),
     ("elapsed_time", "T", "time"),
     ("steps_per_sec", "SPS", "float"),
 ]
@@ -55,6 +57,7 @@ CAT_TO_COLOR = {
     "training_rewards": "magenta",
     "gradient_diagnostics": "cyan",
     "profiling": "yellow",
+    "distillation": "cyan",
 }
 
 
@@ -84,6 +87,23 @@ def _to_plain_value(value: Any) -> Any:
     if isinstance(value, np.generic):
         return value.item()
     return value
+
+
+def _wandb_step(cfg: Any, metrics: Mapping[str, Any], category: str) -> Any:
+    """Return a monotonic W&B step across offline and online training."""
+    step = metrics.get("step")
+    distillation = _cfg_get(cfg, "distillation", {})
+    if not _cfg_get(distillation, "enabled", False):
+        return step
+
+    pretrain_updates = int(_cfg_get(distillation, "pretrain_updates", 0))
+    if category == "distillation" and metrics.get("stage") != "online":
+        offline_updates = metrics.get("offline_updates")
+        if offline_updates is not None:
+            return int(offline_updates)
+    if step is None:
+        return None
+    return pretrain_updates + int(step)
 
 
 def cfg_to_dict(cfg: Any) -> dict[str, Any]:
@@ -252,7 +272,11 @@ class VideoRecorder:
             return
         frames = np.stack(self.frames)
         video = self._wandb.Video(frames.transpose(0, 3, 1, 2), fps=self.fps, format="mp4")
-        self._wandb.log({key: video}, step=step)
+        wandb_step = _wandb_step(self.cfg, {"step": step}, "eval")
+        metrics = {key: video}
+        if _cfg_get(_cfg_get(self.cfg, "distillation", {}), "enabled", False):
+            metrics.update({"global_step": wandb_step, "eval/step": step})
+        self._wandb.log(metrics, step=wandb_step)
 
 
 class NullVideoRecorder:
@@ -458,11 +482,13 @@ class Logger:
         }
 
         if self._wandb:
-            step = clean_metrics.get("step")
+            step = _wandb_step(self.cfg, clean_metrics, category)
             wandb_metrics = {
                 f"{category}/{key}": value
                 for key, value in clean_metrics.items()
             }
+            if _cfg_get(_cfg_get(self.cfg, "distillation", {}), "enabled", False):
+                wandb_metrics["global_step"] = step
             self._wandb.log(wandb_metrics, step=step)
 
         if category == "eval":
