@@ -1,0 +1,6 @@
+defaults:
+  - disabled
+  - _self_
+
+enabled: true
+pretrain_updates: 10000

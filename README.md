@@ -70,4 +70,5 @@ See [docs/README.md](docs/README.md) for the full index. Common starting points:
 - [Configuration and topologies](docs/usage/configuration.md)
 - [Training: backends, MJX, and update scheduling](docs/usage/training.md)
 - [Checkpoints, resuming, and cluster runs](docs/usage/cluster_and_resume.md)
+- [Distillation](docs/usage/distillation.md)
 - [Architecture](docs/design/architecture.md)

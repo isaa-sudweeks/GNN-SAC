@@ -275,6 +275,33 @@ def agent_cfg(**overrides):
 
 
 class TaskBalancedReplayTest(unittest.TestCase):
+    def test_task_names_registers_broken_regime_sibling_for_interleaved_repeated_envs(self):
+        # The legacy GNNBuffer must stay consistent with TensorGNNBuffer's
+        # task registry: an interleaved multi-env run tags broken-slot
+        # transitions with a "<task>__broken" key (see
+        # OnlineTrainer._buffer_task), and GNNBuffer.add() raises KeyError
+        # for any task it doesn't already know about.
+        single_task_cfg = cfg(
+            task="truss-graph", tasks=None, multitask=False, num_envs=4,
+            domain_randomization=True,
+            domain_randomization_params={
+                "broken_nodes": {
+                    "enabled": True, "probability": 0.2, "regime_fraction": 0.5,
+                },
+            },
+            graph_features={"node_roles": True}, use_control_graph=True,
+        )
+        self.assertEqual(
+            GNNBuffer._task_names(single_task_cfg),
+            ["truss-graph", "truss-graph__broken"],
+        )
+        # A single env slot cannot represent both regimes and must fall back
+        # to the legacy (unsuffixed) task registry.
+        self.assertEqual(
+            GNNBuffer._task_names(SimpleNamespace(**{**vars(single_task_cfg), "num_envs": 1})),
+            ["truss-graph"],
+        )
+
     def test_routes_and_samples_equally(self):
         buffer = GNNBuffer(cfg())
         for marker in (1, 2, 3):
@@ -287,6 +314,14 @@ class TaskBalancedReplayTest(unittest.TestCase):
         self.assertEqual(buffer.sizes_by_task, {"truss-graph:a": 3, "truss-graph:b": 2})
         replay_batch = buffer.sample_with_tasks()
         self.assertEqual(list(replay_batch.by_task), ["truss-graph:a", "truss-graph:b"])
+        self.assertEqual(
+            list(replay_batch.raw_observations_by_task),
+            ["truss-graph:a", "truss-graph:b"],
+        )
+        self.assertEqual(
+            [len(graphs) for graphs in replay_batch.raw_observations_by_task.values()],
+            [2, 2],
+        )
         self.assertEqual([batch[2].shape[0] for batch in replay_batch.by_task.values()], [2, 2])
         self.assertEqual(replay_batch.combined[2].shape[0], 4)
         self.assertEqual(

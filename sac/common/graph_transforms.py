@@ -192,3 +192,40 @@ def policy_action_mask(graph: Data) -> torch.Tensor:
     if mask is None:
         return physical_node_mask(graph)
     return mask.bool()
+
+
+def graph_structure_signature(graph: Data) -> dict:
+    """Return the topology and policy action-order contract for one graph."""
+    mask = policy_action_mask(graph)
+    if mask.ndim != 1 or mask.numel() != graph.x.size(0) or not mask.any():
+        raise ValueError("Invalid teacher action mask.")
+    return {
+        "shape": list(graph.x.shape),
+        "edges": graph.edge_index.detach().cpu().tolist(),
+        "mask": mask.detach().cpu().tolist(),
+    }
+
+
+def graph_signature_compatible(
+    candidate: dict,
+    reference: dict,
+    *,
+    allow_action_subset: bool = False,
+) -> bool:
+    """Return whether a graph signature preserves a reference action contract.
+
+    Broken-node randomization may turn base-active nodes off without changing
+    topology or action row ordering. It must never turn a reference-passive
+    node on.
+    """
+    if candidate.get("shape") != reference.get("shape"):
+        return False
+    if candidate.get("edges") != reference.get("edges"):
+        return False
+    candidate_mask = torch.as_tensor(candidate.get("mask", ()), dtype=torch.bool)
+    reference_mask = torch.as_tensor(reference.get("mask", ()), dtype=torch.bool)
+    if candidate_mask.shape != reference_mask.shape or not bool(candidate_mask.any()):
+        return False
+    if allow_action_subset:
+        return not bool((candidate_mask & ~reference_mask).any())
+    return torch.equal(candidate_mask, reference_mask)

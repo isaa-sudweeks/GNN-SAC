@@ -17,8 +17,12 @@
   Submitit/Slurm runs
 - [domain_randomization.md](usage/domain_randomization.md): physical parameters
   and randomization families
-- [cross_validation.md](usage/cross_validation.md): leave-one-group-out topology
-  cross-validation
+- [cross_validation.md](usage/cross_validation.md): leave-one-group-out and
+  random-fold topology cross-validation
+- [distillation.md](usage/distillation.md): multi-teacher Gaussian KL
+  distillation into one GNN student
+- [replay.md](usage/replay.md): tensor vs legacy replay, storage placement,
+  checkpoint conversion
 - [padded_mlp_baseline.md](usage/padded_mlp_baseline.md): fixed-width MLP
   comparison baseline
 - [scripts.md](usage/scripts.md): launch, validation, benchmark, and figure scripts
@@ -29,6 +33,8 @@
   routing, reward, replay
 - [performance.md](design/performance.md): what has been optimized and what is
   still open
+- [replay_benchmark_results.md](design/replay_benchmark_results.md): September
+  2026 A100 evidence for the tensor replay default
 
 ## Plans
 

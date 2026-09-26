@@ -27,7 +27,8 @@ uv run python scripts/launch_cross_validation.py cross_validation=node_count_los
   --seeds 1,2,3,4,5 --shuffle-seed 17 platform=local
 ```
 
-Use `platform=supercomputer` to submit the same matrix through Submitit. Add
+The launcher starts each Hydra multirun with `uv run python`, so jobs use the
+locked project environment. Use `platform=supercomputer` to submit the same matrix through Submitit. Add
 `--dry-run` to write and inspect the launch manifest without starting jobs. A
 custom manifest path can be selected with `--manifest PATH`.
 
@@ -46,3 +47,29 @@ The optional `final_test` list is recorded and checked for overlap, but the
 launcher never trains on or evaluates it. Cross-validation is development
 evidence; run final-test evaluation separately only after freezing the method,
 hyperparameters, checkpoint-selection rule, and metrics.
+
+## Random-configuration folds
+
+`node_count_loso` holds out an entire node count, so every fold measures
+extrapolation to an unseen size. To separate that from ordinary interpolation
+between seen morphologies, `random_5fold` pools the same ten development
+topologies and partitions them randomly into five folds of two, ignoring node
+count. The `final_test` set is copied from the source and stays excluded.
+
+The split is generated once and committed so every seed and relaunch uses the
+same folds:
+
+```bash
+uv run python scripts/make_random_cross_validation.py \
+  --source node_count_loso --num-folds 5 --split-seed 0 --name random_5fold
+```
+
+The generated YAML records `cross_validation.split` (source, fold count, seed),
+which reaches the W&B config; `tests/test_cross_validation.py` fails if the
+committed file drifts from what the generator produces. Launch it like any other
+definition, e.g. `uv run python scripts/launch_cross_validation.py cross_validation=random_5fold`.
+
+Some node counts have a single development topology (4, 5, and 9 nodes), so a
+random fold that holds one of them out is still an unseen-size fold. Compare
+per-topology `eval/<topology>_episode_reward` against the matching
+`node_count_loso` run rather than only the fold aggregate.

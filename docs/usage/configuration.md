@@ -10,6 +10,7 @@ defaults:
   - physics/domain_randomization       # see domain_randomization.md
   - cross_validation: disabled         # see cross_validation.md
   - training                           # schedule, evaluation, checkpoints, W&B
+  - distillation: disabled             # see distillation.md
   - sac_backend: mlp
   - sim_backend: mujoco
   - platform: local
@@ -27,6 +28,7 @@ full list. This page covers the settings that are not obvious from those comment
 | `sac_backend=padded_mlp` | `config/sac_backend/padded_mlp.yaml` | Fixed-width MLP on the same graph environment. See [padded_mlp_baseline.md](padded_mlp_baseline.md). |
 | `sim_backend=mujoco` | `config/sim_backend/mujoco.yaml` | Native Gymnasium environments. |
 | `sim_backend=mjx` | `config/sim_backend/mjx.yaml` | Batch-native MJX training. See [training.md](training.md#mjx). |
+| `distillation=disabled`, `distillation=kl` | `config/distillation/` | Multi-teacher policy distillation. See [distillation.md](distillation.md). |
 | `platform=local` | `config/platform/local.yaml` | Default. |
 | `platform=supercomputer` | `config/platform/supercomputer.yaml` | Submitit/Slurm. See [cluster_and_resume.md](cluster_and_resume.md). |
 | `inference/gnn`, `inference/gnn_mjx` | `config/inference/` | Configs selected with `--config-name` for `sac/gnn_infer.py`. |
@@ -85,7 +87,7 @@ uv run python sac/train.py sac_backend=gnn 'truss_topologies=[octahedron,octahed
 *per topology*. For multi-topology runs the parser multiplies them by the number
 of topologies and records the original values as `per_topology_<name>`. Replay
 is task-balanced: each topology gets an equal share of both capacity and every
-batch.
+batch. See [replay.md](replay.md) for replay backends and storage placement.
 
 **Evaluation topologies.**
 

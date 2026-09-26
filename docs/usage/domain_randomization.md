@@ -18,6 +18,7 @@ actuator gains, and so on). Training and inference both use them. Set
 | Fixed-shape runtime ranges | `body_mass_multiplier`, `abstract_node_mass_multiplier`, `body_inertia_multiplier`, `dof_*`, `actuator_*`, `geom_friction_{slide,torsional,rolling}`, `tendon_*`, `gravity_z`, `hinge_position_kp` | Native MuJoCo and MJX |
 | Initial pose | `initial_translation_x`, `initial_translation_y`, `initial_yaw` | Native MuJoCo and MJX |
 | Model-rebuilding | `length_scale`, `physical_parameters.*` | Native MuJoCo only |
+| Broken nodes | `broken_nodes` | Graph backends with the control graph |
 | Rollout noise | `action_noise`, `observation_noise` | Training rollouts only |
 
 Notes:
@@ -28,6 +29,13 @@ Notes:
 - `hinge_position_kp` sets the absolute servo gain for the internal connector
   hinges in realistic models. `physical_parameters.hinge_position_kp` is a
   deprecated alias for it.
+- `broken_nodes` disables each originally active control node with
+  `probability` for one episode. It requires `use_control_graph=true` and
+  `graph_features.node_roles=true`. By default (`schedule: interleaved`), a
+  `regime_fraction` share of the parallel environments is reserved for
+  broken-node episodes and the rest stay nominal, so distillation always sees
+  teacher-compatible data. `schedule: staged` keeps broken nodes off until the
+  distillation KL weight reaches zero.
 - Model-rebuilding randomization recompiles the MuJoCo model at every reset. The
   MJX backend rejects it.
 - Observation noise is applied only to graph node features (`x`). Executed noisy

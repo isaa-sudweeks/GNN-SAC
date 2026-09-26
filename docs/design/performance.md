@@ -18,7 +18,11 @@ in [archive/gpu_optimization_audit.md](../archive/gpu_optimization_audit.md).
   This replaces one optimizer update per transition.
 - **Per-step replay insertion.** Transitions enter replay after every vector
   step instead of at episode end.
-- **Direct-collation replay sampling** (`scripts/benchmark_gnn_replay.py`).
+- **Tensor replay** (`replay_backend=torchrl_tensor`, the default). Static
+  graph data is stored once per topology, placement across CPU and GPU is
+  bounded, and sampling was 33x faster in matched MJX training. Full-checkpoint
+  writes went from about 7 s to about 37 ms. See
+  [replay_benchmark_results.md](replay_benchmark_results.md).
 - **Checkpoints.** Writes are asynchronous and atomic (temporary file then
   rename), and a small `latest.metadata.json` sidecar lets the Slurm launcher
   skip completed jobs without loading replay.
@@ -39,20 +43,17 @@ These are ordered roughly by expected impact.
    `ThreadPoolExecutor`, which scaled poorly in local measurements. Candidates
    are process-based actors with shared-memory transfer, or MJX wherever it
    supports the model.
-4. **Replay storage.** Each topology's buffer holds Python lists of PyG objects
-   on the CPU. Current and next graphs are stored separately, and the host
-   memory is not pinned. Contiguous tensor storage with static `edge_index`
-   stored once per topology would reduce memory use and sampling time.
-5. **Checkpoint size.** Each checkpoint serializes the full replay buffer, and
-   then writes the same data a second time to `latest.pt`. Saving weights frequently and replay
-   snapshots rarely (or in segments) would reduce pauses and filesystem traffic.
-6. **Evaluation cost.** Evaluation is synchronous (`eval_freq=20_000`,
+4. **Checkpoint size.** Each checkpoint still serializes the full replay
+   buffer, and then writes the same data a second time to `latest.pt`. Tensor
+   replay made this fast, but the files remain large (about 4 GB for a
+   nine-topology run at 70% occupancy).
+5. **Evaluation cost.** Evaluation is synchronous (`eval_freq=20_000`,
    `eval_episodes=5` by default). Asynchronous or post-hoc evaluation would
    remove it from the training critical path.
-7. **Learner-side GPU work.** Candidates are mixed precision, fused optimizers,
+6. **Learner-side GPU work.** Candidates are mixed precision, fused optimizers,
    `torch.compile`, and CUDA graphs. Only pursue these once profiling shows the
    learner is the bottleneck; dynamic PyG shapes complicate compilation.
-8. **Multiple GPUs.** Until a single GPU is saturated, use extra GPUs for
+7. **Multiple GPUs.** Until a single GPU is saturated, use extra GPUs for
    independent seeds, folds, or sweeps rather than a distributed learner.
 
 ## Measuring
