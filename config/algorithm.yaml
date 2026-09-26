@@ -26,9 +26,10 @@ entropy_coef: 0.2 # Weight on policy entropy in the actor objective.
 target_entropy: auto # SAC entropy target; auto uses -action_dim.
 tau: 0.005 # Polyak averaging rate for target critic updates and running value scale.
 rho: 0.5 # Temporal weighting factor for multi-step policy losses.
-discount_denom: 500 # Episode-length denominator used to derive the discount heuristic.
-discount_min: 0.95 # Lower bound for the derived discount factor.
-discount_max: 0.995 # Upper bound for the derived discount factor; MuJoCo wrapper may lower this.
+discount: 0.995 # SAC discount factor (gamma); null derives it from episode_length using the heuristic below.
+discount_denom: 500 # Episode-length denominator for the discount heuristic (used only when discount is null).
+discount_min: 0.95 # Lower bound for the derived discount factor (used only when discount is null).
+discount_max: 0.995 # Upper bound for the derived discount factor; MuJoCo wrapper may lower this (used only when discount is null).
 
 # Actor-critic architecture
 mlp_dim: 256 # Hidden width for the MLP actor and critic networks.
