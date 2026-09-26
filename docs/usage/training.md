@@ -31,6 +31,15 @@ spent. The defaults (`config/algorithm.yaml`) are `replay_ratio=10` and
 `iterations` is deprecated. Set it only to reproduce the legacy schedule of one
 optimizer update per collected transition.
 
+## Discount factor
+
+`discount` defaults to `0.995` (`config/algorithm.yaml`). Set `discount=null` to
+derive it from `episode_length` instead: `(frac - 1) / frac` with
+`frac = episode_length / discount_denom`, clipped to
+`[discount_min, discount_max]`. With the default `max_steps=1000` that gives
+`0.95`, and the MuJoCo wrapper lowers `discount_max` to `0.99`. Reward
+normalization uses the same discount unless `reward_norm_gamma` is set.
+
 ## Multiple topologies and `num_envs`
 
 `num_envs` is the **total** number of vector environments, and it must divide

@@ -38,7 +38,7 @@ class SAC(torch.nn.Module):
         self.target_entropy = -float(cfg.action_dim) if target_entropy == "auto" else float(target_entropy)
 
         self.model.eval()
-        self.discount = float(getattr(cfg, "discount", self._get_discount(cfg.episode_length)))
+        self.discount = self._resolve_discount()
 
         print("Episode length:", cfg.episode_length)
         print("Discount factor:", self.discount)
@@ -75,6 +75,13 @@ class SAC(torch.nn.Module):
             require_finite("policy action", action)
             return action.clamp(-1, 1)
         return torch.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0).clamp(-1, 1)
+
+    def _resolve_discount(self):
+        """Return the configured discount, or derive it from episode length when unset."""
+        discount = getattr(self.cfg, "discount", None)
+        if discount is None:
+            return float(self._get_discount(self.cfg.episode_length))
+        return float(discount)
 
     def _get_discount(self, episode_length):
         frac = episode_length / self.cfg.discount_denom

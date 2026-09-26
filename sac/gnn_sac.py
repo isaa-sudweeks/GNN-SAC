@@ -67,7 +67,7 @@ class GNNSAC(torch.nn.Module):
             self.target_entropy = float(target_entropy)
 
         self.model.eval()
-        self.discount = float(getattr(self.cfg, "discount", self._get_discount(self.cfg.episode_length)))
+        self.discount = self._resolve_discount()
 
         print("Episode length:", cfg.episode_length)
         print("Discount factor:", self.discount)
@@ -147,6 +147,13 @@ class GNNSAC(torch.nn.Module):
         projected = torch.as_tensor(action).clone()
         projected[~mask.cpu()] = 0
         return projected.numpy()
+
+    def _resolve_discount(self):
+        """Return the configured discount, or derive it from episode length when unset."""
+        discount = getattr(self.cfg, "discount", None)
+        if discount is None:
+            return float(self._get_discount(self.cfg.episode_length))
+        return float(discount)
 
     def _get_discount(self, episode_length):
         frac = episode_length / self.cfg.discount_denom
