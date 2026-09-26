@@ -132,19 +132,19 @@ class RunMetadataTest(unittest.TestCase):
         self.assertEqual(cfg.wandb_dir, ROOT)
 
     def test_records_shell_safe_original_launch_command(self):
-        argv = [".venv/bin/python", "sac/gnn_train.py", "exp_name=my run", "steps=1000"]
+        argv = [".venv/bin/python", "sac/train.py", "exp_name=my run", "steps=1000"]
         with patch.dict(os.environ, {}, clear=True), patch("common.parser.sys.orig_argv", argv):
             cfg = parse_cfg(topology_cfg())
 
         self.assertEqual(
             cfg.launch_command,
-            ".venv/bin/python sac/gnn_train.py 'exp_name=my run' steps=1000",
+            ".venv/bin/python sac/train.py 'exp_name=my run' steps=1000",
         )
 
     def test_captured_sweep_command_survives_submitit_worker_argv(self):
         sweep_argv = [
             ".venv/bin/python",
-            "sac/gnn_train.py",
+            "sac/train.py",
             "-m",
             "platform=supercomputer",
             "seed=1,2,3",
@@ -164,13 +164,13 @@ class RunMetadataTest(unittest.TestCase):
 
         self.assertEqual(
             expected,
-            ".venv/bin/python sac/gnn_train.py -m platform=supercomputer seed=1,2,3 "
+            ".venv/bin/python sac/train.py -m platform=supercomputer seed=1,2,3 "
             "exp_name=everything",
         )
         self.assertEqual(cfg.launch_command, expected)
 
     def test_submitit_import_does_not_overwrite_captured_sweep_command(self):
-        sweep_command = ".venv/bin/python sac/gnn_train.py -m seed=1,2,3"
+        sweep_command = ".venv/bin/python sac/train.py -m seed=1,2,3"
         worker_argv = [
             ".venv/bin/python",
             "-m",

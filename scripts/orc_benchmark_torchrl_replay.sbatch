@@ -58,7 +58,7 @@ run_training_case() {
   local storage=$3
   local case_dir=$RESULTS/training_${name}
   mkdir -p "$case_dir"
-  if uv run --offline --no-sync python sac/gnn_train.py \
+  if uv run --offline --no-sync python sac/train.py \
       platform=supercomputer sim_backend=mjx sac_backend=gnn mjx_impl=warp \
       warp_graph_mode=warp_staged \
       'truss_topologies=[tetrahedron,octahedron,henneberg_n6_1tube_2]' \

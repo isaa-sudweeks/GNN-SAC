@@ -29,7 +29,7 @@ def main() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     rows = []
     common = [
-        "device=cpu", "steps=40", "max_steps=10", "seed_steps=4", "batch_size=4", "replay_ratio=1",
+        "sac_backend=gnn", "device=cpu", "steps=40", "max_steps=10", "seed_steps=4", "batch_size=4", "replay_ratio=1",
         "pretrain_steps=0", "num_envs=1", "enable_wandb=false", "save_video=false",
         "save_agent=false", "save_csv=true", "checkpoint_freq=0", "eval_freq=1000",
         "eval_episodes=1", "progress_freq=40", "eval_at_end=true",
@@ -45,7 +45,7 @@ def main() -> None:
                 overrides.extend(f"domain_randomization_params.{field}.enabled=true" for field in fields)
             started = time.perf_counter()
             completed = subprocess.run(
-                [str(PYTHON), "sac/gnn_train.py", *overrides],
+                [str(PYTHON), "sac/train.py", *overrides],
                 cwd=ROOT,
                 text=True,
                 stdout=subprocess.PIPE,
