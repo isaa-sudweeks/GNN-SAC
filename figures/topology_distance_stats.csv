@@ -1,0 +1,5 @@
+space,n_heldout_topologies,folds,n_above_floor,spearman_rho,permutation_p,rho_ci_low,rho_ci_high
+hand_full,10,"node_4,node_5,node_6,node_8,node_9",1,0.0303030303030303,0.9457054294570543,-0.309090909090909,0.39424242424242256
+hand_deduplicated,10,"node_4,node_5,node_6,node_8,node_9",1,0.006060606060606061,1.0,-0.32121212121212117,0.3578787878787862
+hand_size_controlled,10,"node_4,node_5,node_6,node_8,node_9",1,-0.2121212121212121,0.55994400559944,-0.4666666666666666,0.1515151515151515
+gnn,3,"node_4,node_5,node_9",1,,,,

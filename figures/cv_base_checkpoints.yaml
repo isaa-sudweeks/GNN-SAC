@@ -1,0 +1,63 @@
+# Per-fold checkpoints for the CV-BASE node_count_loso experiment
+# (W&B project i-suds/CV, group truss-graph-CV-BASE).
+#
+# Consumed by figures/topology_gnn_embeddings.py. Each fold's embeddings are
+# produced ONLY from that fold's own checkpoints, so every topology held out
+# in the fold was genuinely unseen by the model that embeds it. Never point a
+# fold at another fold's checkpoint.
+#
+# Fields per entry:
+#   seed:            training seed of the run.
+#   wandb_run:       entity/project/run_id; its config.yaml is downloaded (and
+#                    cached under figures/checkpoints/configs/) to rebuild the
+#                    exact training architecture, and its
+#                    cross_validation.held_out_group is checked against the fold.
+#   checkpoint:      local agent checkpoint path (relative to the repo root), or
+#                    null if not yet copied down from the cluster. W&B has no
+#                    model artifacts for these runs.
+#   training_config: optional local W&B-exported config.yaml; overrides the
+#                    download.
+#
+# Checkpoints live in figures/checkpoints/ (gitignored). The runs are listed as
+# "failed" in W&B because they were cut off by the Slurm time limit; the
+# aborted short duplicates (node_4: vvk9pq1m, node_5: vi0jll8c) are
+# deliberately not used.
+
+experiment: CV-BASE
+wandb_group: truss-graph-CV-BASE
+
+folds:
+  node_4:
+    - seed: 2
+      wandb_run: i-suds/CV/qb4c0r24
+      checkpoint: figures/checkpoints/CV-BASE_seed2_node4heldout_latest.agent.pt
+  node_5:
+    - seed: 1
+      wandb_run: i-suds/CV/txplev9b
+      checkpoint: figures/checkpoints/CV-BASE_seed1_node5heldout_latest.agent.pt
+  node_6:
+    # TODO: copy these down from the cluster and fill in the paths.
+    - seed: 1
+      wandb_run: i-suds/CV/ntko3xrb
+      checkpoint: null
+    - seed: 2
+      wandb_run: i-suds/CV/0bmkfahw
+      checkpoint: null
+    - seed: 3
+      wandb_run: i-suds/CV/5lwc0n9k
+      checkpoint: null
+  node_8:
+    # TODO: copy these down from the cluster and fill in the paths.
+    - seed: 1
+      wandb_run: i-suds/CV/coc46mk2
+      checkpoint: null
+    - seed: 2
+      wandb_run: i-suds/CV/w8rsz490
+      checkpoint: null
+    - seed: 3
+      wandb_run: i-suds/CV/ifoo4cti
+      checkpoint: null
+  node_9:
+    - seed: 2
+      wandb_run: i-suds/CV/khk5fafw
+      checkpoint: figures/checkpoints/CV-BASE_seed2_node9heldout_latest.agent.pt

@@ -1,21 +1,46 @@
-"""Plot the training-topology distribution and held-out performance vs. distance.
+"""Test whether held-out generalization tracks distance from the training distribution.
 
-Combines the outputs of ``topology_hand_features.py``,
-``topology_gnn_embeddings.py`` (optional -- skipped if not yet generated),
-and ``topology_performance.py`` into:
+Inputs (each produced by its own script in this directory):
 
-- Plot A: hand-feature PCA scatter (train vs. held-out, colored by performance)
-- Plot B: GNN-embedding PCA scatter (same), if embeddings are available
-- Plot C: performance vs. hand-feature k-NN distance
-- Plot D: performance vs. GNN-embedding k-NN distance, if embeddings are available
-- Bonus: per-hand-feature small multiples, and a distance-vs-training-performance
-  confound-check panel
+- ``topology_hand_features.csv`` (``topology_hand_features.py``)
+- ``topology_gnn_embeddings/{fold}.npz`` (``topology_gnn_embeddings.py``), one
+  file per fold, each from that fold's own checkpoint; folds without a file
+  are skipped for the GNN space, never filled from another fold
+- ``topology_performance_by_fold.csv`` (``topology_performance.py``), one row
+  per (fold, seed, topology), with checkpoint selection on training
+  topologies only and an untrained (step-0) baseline
 
-k-NN distance is computed in the standardized full-dimensional feature space
-(never in the 2D PCA projection), per fold: a held-out topology's distance is
-to its own fold's training set only, and a training topology gets a
-leave-one-out distance against the rest of that fold's training set, since
-different folds train on different topology subsets.
+Analysis unit. Every CV topology is held out in exactly one fold, so the
+held-out analysis has exactly one row per topology (n = 10 for the hand
+spaces, fewer for the GNN space). Training rows are never pooled into the
+held-out correlation, and no topology is counted more than once.
+
+Distance. For each fold and each feature space, k-NN distance is computed in
+a space fit on that fold's training topologies only (standardization and, for
+``size_controlled``, the n_nodes regression; see ``_feature_space.py``).
+Because each fold has its own scale, distances are divided by the median
+leave-one-out k-NN distance among that fold's training topologies
+(``knn_distance_rel``): 1.0 means "as far from the training set as a typical
+training topology is from the others." Only the relative distance is
+compared across folds. GNN embeddings are used as-is (Euclidean in the raw
+embedding space of the fold's own model), then normalized the same way.
+
+Outcome. ``heldout_gain_m``: per seed, the held-out topology's eval distance
+at the train-selected checkpoint minus that run's own step-0 distance for
+the same topology, averaged over seeds. 0 = no better than untrained.
+
+Statistics (per feature space):
+
+- Spearman rho between ``knn_distance_rel`` and ``heldout_gain_m``.
+- Permutation p-value (two-sided, outcomes permuted across topologies).
+- 95% seed-bootstrap CI for rho: resample each fold's seeds with replacement,
+  recompute every topology's gain, recompute rho.
+- A signal check: how many held-out topologies beat their untrained noise
+  floor at all. If none do, a distance/performance correlation is fitting
+  noise, and the figures say so in their titles.
+
+Topologies held out together in one fold share a training set, so the n
+rows are not fully independent; with n = 10 treat every p-value as a screen.
 """
 
 from __future__ import annotations
@@ -29,6 +54,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from scipy.stats import spearmanr
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
@@ -37,333 +63,420 @@ FIGURES_ROOT = Path(__file__).resolve().parent
 if str(FIGURES_ROOT) not in sys.path:
     sys.path.insert(0, str(FIGURES_ROOT))
 
+import _feature_space
 import _topology_catalog
 
-HAND_FEATURES_CSV = Path(__file__).with_name("topology_hand_features.csv")
-GNN_EMBEDDINGS_NPZ = Path(__file__).with_name("topology_gnn_embeddings.npz")
-PERFORMANCE_CSV = Path(__file__).with_name("topology_performance_by_fold.csv")
+HAND_FEATURES_CSV = FIGURES_ROOT / "topology_hand_features.csv"
+GNN_EMBEDDINGS_DIR = FIGURES_ROOT / "topology_gnn_embeddings"
+PERFORMANCE_CSV = FIGURES_ROOT / "topology_performance_by_fold.csv"
 
-NON_FEATURE_COLUMNS = {"topology", "family"}
+ID_COLUMNS = ("topology", "family")
+HAND_SPACES = tuple(f"hand_{variant}" for variant in _feature_space.FEATURE_SPACES)
+GNN_SPACE = "gnn"
+PRIMARY_HAND_SPACE = "hand_deduplicated"
 DEFAULT_K = 3
+DEFAULT_N_PERMUTATIONS = 10_000
+DEFAULT_N_BOOTSTRAP = 2_000
+MIN_ROWS_FOR_STATS = 5
+SIGNAL_Z = 2.0
+TRAIN_COLOR = "#636EFA"
+HELDOUT_COLOR = "#EF553B"
 
 
-def _pca_projection(matrix: np.ndarray) -> np.ndarray:
-    standardized = StandardScaler().fit_transform(matrix)
-    return PCA(n_components=2, random_state=0).fit_transform(standardized)
+# ---------------------------------------------------------------------------
+# Distances
+# ---------------------------------------------------------------------------
 
 
-def _tsne_projection(matrix: np.ndarray) -> np.ndarray:
-    """t-SNE projection, with perplexity clamped down for tiny sample counts.
-
-    At n=13 topologies this is on shaky ground: t-SNE is built to preserve
-    local neighborhoods within a perplexity-sized crowd, and needs many more
-    points than that to produce a *stable* global layout -- distances between
-    far-apart clusters aren't meaningful, and results can shift noticeably
-    with the random seed. Included because it was asked for, not because
-    it's the recommended default here; PCA remains that (see the module
-    docstring / --projection help).
-    """
-    standardized = StandardScaler().fit_transform(matrix)
-    perplexity = max(2, min(5, (len(matrix) - 1) // 3))
-    return TSNE(
-        n_components=2, perplexity=perplexity, init="pca", random_state=0, learning_rate="auto",
-    ).fit_transform(standardized)
+def _feature_columns(hand_features: pd.DataFrame) -> list[str]:
+    return [column for column in hand_features.columns if column not in ID_COLUMNS]
 
 
-def _projection(matrix: np.ndarray, method: str) -> np.ndarray:
-    if method == "pca":
-        return _pca_projection(matrix)
-    if method == "tsne":
-        return _tsne_projection(matrix)
-    raise ValueError(f"Unknown projection method: {method!r}")
-
-
-def _knn_distance_per_fold(
-    topologies: list[str], feature_matrix: np.ndarray, fold_membership: dict, k: int = DEFAULT_K
+def _gnn_knn_distances(
+    topologies: list[str], embeddings: np.ndarray, membership: dict, k: int
 ) -> pd.DataFrame:
-    """Fold-conditional k-NN distance: standardize and fit neighbors on each
-    fold's training topologies only, so held-out topologies never leak into
-    the scale/neighbor set used to judge how far they are."""
-    index_by_topology = {name: i for i, name in enumerate(topologies)}
+    """k-NN distance in one fold's raw embedding space (train rows leave-one-out)."""
+    index = {name: i for i, name in enumerate(topologies)}
+    train_names = [name for name in membership["train"] if name in index]
+    if len(train_names) <= k:
+        raise ValueError(f"Need more than k={k} training topologies, got {len(train_names)}")
+    train = embeddings[[index[name] for name in train_names]]
     rows = []
-    for fold, membership in fold_membership.items():
-        train_names = [name for name in membership["train"] if name in index_by_topology]
-        if len(train_names) <= k:
-            continue
-        train_idx = [index_by_topology[name] for name in train_names]
-        scaler = StandardScaler().fit(feature_matrix[train_idx])
-        train_scaled = scaler.transform(feature_matrix[train_idx])
-
-        def _knn_distance(point: np.ndarray, exclude_self_idx: int | None) -> float:
-            distances = np.linalg.norm(train_scaled - point, axis=1)
-            if exclude_self_idx is not None:
-                distances = np.delete(distances, exclude_self_idx)
-            return float(np.mean(np.sort(distances)[:k]))
-
-        for local_idx, name in enumerate(train_names):
-            point = train_scaled[local_idx]
-            rows.append(
-                {
-                    "fold": fold,
-                    "topology": name,
-                    "role": "train",
-                    "knn_distance": _knn_distance(point, local_idx),
-                }
-            )
-        for name in membership["held_out"]:
-            if name not in index_by_topology:
-                continue
-            point = scaler.transform(feature_matrix[[index_by_topology[name]]])[0]
-            rows.append(
-                {
-                    "fold": fold,
-                    "topology": name,
-                    "role": "heldout",
-                    "knn_distance": _knn_distance(point, None),
-                }
-            )
+    for position, name in enumerate(train_names):
+        distances = np.delete(np.linalg.norm(train - train[position], axis=1), position)
+        rows.append({"topology": name, "role": "train", "knn_distance": float(np.sort(distances)[:k].mean())})
+    for name in membership["held_out"]:
+        distances = np.linalg.norm(train - embeddings[index[name]], axis=1)
+        rows.append({"topology": name, "role": "heldout", "knn_distance": float(np.sort(distances)[:k].mean())})
     return pd.DataFrame(rows)
 
 
-def _load_gnn_embeddings(path: Path, topologies: list[str]) -> np.ndarray | None:
-    if not path.exists():
-        return None
-    archive = np.load(path)
-    missing = [name for name in topologies if name not in archive]
-    if missing:
-        raise ValueError(f"{path} is missing topologies: {missing}")
-    return np.stack([archive[name] for name in topologies])
+def _normalize_by_train_spacing(distances: pd.DataFrame) -> pd.DataFrame:
+    """Divide by the median leave-one-out train k-NN distance of the same fold/space."""
+    scale = distances[distances["role"] == "train"]["knn_distance"].median()
+    return distances.assign(train_spacing=scale, knn_distance_rel=distances["knn_distance"] / scale)
 
 
-def _load_performance(path: Path) -> pd.DataFrame:
-    seed_results = pd.read_csv(path)
-    return (
-        seed_results.groupby(["fold", "topology", "role"], as_index=False)
-        .agg(distance_m=("distance_m", "mean"), distance_std_m=("distance_m", "std"), n_seeds=("seed", "nunique"))
-        .fillna({"distance_std_m": 0.0})
-    )
-
-
-def build_joined_table(
+def compute_distances(
     hand_features: pd.DataFrame,
-    gnn_embeddings: np.ndarray | None,
-    performance: pd.DataFrame,
+    gnn_embeddings: dict[str, np.ndarray],
     fold_membership: dict,
     *,
     k: int = DEFAULT_K,
 ) -> pd.DataFrame:
+    """One row per (fold, space, topology in that fold): train LOO or held-out distance."""
     topologies = hand_features["topology"].tolist()
-    feature_matrix = hand_features.drop(columns=list(NON_FEATURE_COLUMNS)).to_numpy(dtype=float)
+    feature_columns = _feature_columns(hand_features)
+    frames = []
+    for fold, membership in fold_membership.items():
+        for variant in _feature_space.FEATURE_SPACES:
+            space = _feature_space.build_feature_space(
+                hand_features, variant, membership["train"], membership["held_out"],
+                feature_columns=feature_columns,
+            )
+            distances = _feature_space.knn_distances(space, k)
+            extrapolated = set(space.extrapolated_topologies)
+            distances["extrapolated"] = distances["topology"].isin(extrapolated)
+            frames.append(_normalize_by_train_spacing(distances).assign(fold=fold, space=f"hand_{variant}"))
+        if fold in gnn_embeddings:
+            distances = _gnn_knn_distances(topologies, gnn_embeddings[fold], membership, k)
+            distances["extrapolated"] = False
+            frames.append(_normalize_by_train_spacing(distances).assign(fold=fold, space=GNN_SPACE))
+    columns = ["fold", "space", "topology", "role", "knn_distance", "train_spacing", "knn_distance_rel", "extrapolated"]
+    return pd.concat(frames, ignore_index=True)[columns]
 
-    hand_knn = _knn_distance_per_fold(topologies, feature_matrix, fold_membership, k=k)
-    hand_knn = hand_knn.rename(columns={"knn_distance": "hand_feature_knn_distance"})
 
-    if gnn_embeddings is not None:
-        gnn_knn = _knn_distance_per_fold(topologies, gnn_embeddings, fold_membership, k=k)
-        gnn_knn = gnn_knn.rename(columns={"knn_distance": "gnn_embedding_knn_distance"})
-    else:
-        gnn_knn = pd.DataFrame(columns=["fold", "topology", "role", "gnn_embedding_knn_distance"])
-
-    joined = performance.merge(hand_knn, on=["fold", "topology", "role"], how="left")
-    joined = joined.merge(gnn_knn, on=["fold", "topology", "role"], how="left")
-    joined = joined.merge(hand_features, on="topology", how="left")
-    return joined
+# ---------------------------------------------------------------------------
+# Performance
+# ---------------------------------------------------------------------------
 
 
-def _reference_fold_performance(
-    joined: pd.DataFrame, fold_membership: dict, reference_fold: str
-) -> pd.DataFrame:
-    """One performance value per topology, for the PCA plots.
+def seed_gains(seed_results: pd.DataFrame) -> pd.DataFrame:
+    """Per (fold, seed, topology): distance at the train-selected checkpoint minus step 0."""
+    return seed_results.assign(gain_m=seed_results["distance_m"] - seed_results["baseline_distance_m"])
 
-    Pooling "held out in *any* fold" doesn't work here: node_count_loso runs
-    5 folds, each holding out a different node-count group, so across all 5
-    folds combined every topology is held out in exactly one of them -- that
-    made the old version of this plot mark literally everything "heldout,"
-    which is technically true per-fold but not what a single checkpoint's
-    train/held-out split actually looks like. A topology's PCA position
-    doesn't change across folds anyway, so plotting every (fold, topology)
-    row would draw overlapping markers at the same point regardless. Instead
-    this picks ONE reference fold -- the one whose held-out group matches
-    the checkpoint that produced the GNN embeddings -- and reports each
-    topology's role and performance within just that fold.
+
+def topology_performance(seed_results: pd.DataFrame) -> pd.DataFrame:
+    """One row per (fold, topology, role) with seed-averaged performance and gain."""
+    gains = seed_gains(seed_results)
+    return (
+        gains.groupby(["fold", "topology", "role"], as_index=False)
+        .agg(
+            distance_m=("distance_m", "mean"),
+            distance_std_m=("distance_m", "std"),
+            gain_m=("gain_m", "mean"),
+            gain_std_m=("gain_m", "std"),
+            n_seeds=("seed", "nunique"),
+        )
+        .fillna({"distance_std_m": 0.0, "gain_std_m": 0.0})
+    )
+
+
+def noise_floor(seed_results: pd.DataFrame) -> pd.DataFrame:
+    """Untrained (step-0) spread per topology, with seeds as the independent unit.
+
+    Runs sharing a seed start from the same initialization, so the step-0
+    evals are first averaged per seed, then summarized across seeds.
     """
-    membership = fold_membership[reference_fold]
-    role_by_topology = {name: "heldout" for name in membership["held_out"]}
-    role_by_topology.update({name: "train" for name in membership["train"]})
+    per_seed = seed_results.groupby(["topology", "seed"], as_index=False)["baseline_distance_m"].mean()
+    return per_seed.groupby("topology", as_index=False).agg(
+        floor_mean_m=("baseline_distance_m", "mean"),
+        floor_std_m=("baseline_distance_m", "std"),
+        n_floor_seeds=("seed", "nunique"),
+    )
 
-    fold_rows = joined[joined["fold"] == reference_fold]
-    performance_by_topology = dict(zip(fold_rows["topology"], fold_rows["distance_m"]))
 
-    rows = [
-        {
-            "topology": topology,
-            "role": role,
-            "fold": reference_fold,
-            "distance_m": performance_by_topology.get(topology, float("nan")),
+def heldout_table(distances: pd.DataFrame, performance: pd.DataFrame, floor: pd.DataFrame) -> pd.DataFrame:
+    """One row per (space, held-out topology): distance, gain, and noise-floor check."""
+    heldout = distances[distances["role"] == "heldout"]
+    table = heldout.merge(performance, on=["fold", "topology", "role"], how="left")
+    table = table.merge(floor, on="topology", how="left")
+    # Welch-style: held-out gain vs. the untrained seed-to-seed spread.
+    standard_error = np.sqrt(
+        table["floor_std_m"] ** 2 / table["n_floor_seeds"] + table["gain_std_m"] ** 2 / table["n_seeds"]
+    )
+    table["gain_z"] = table["gain_m"] / standard_error.replace(0.0, np.nan)
+    table["above_floor"] = table["gain_z"] > SIGNAL_Z
+    return table
+
+
+# ---------------------------------------------------------------------------
+# Statistics
+# ---------------------------------------------------------------------------
+
+
+def _spearman(x: np.ndarray, y: np.ndarray) -> float:
+    if len(x) < 3 or np.ptp(x) == 0 or np.ptp(y) == 0:
+        return float("nan")
+    return float(spearmanr(x, y).statistic)
+
+
+def permutation_p_value(x: np.ndarray, y: np.ndarray, *, n_permutations: int, rng: np.random.Generator) -> float:
+    """Two-sided permutation p-value for Spearman rho (with the +1 correction)."""
+    observed = _spearman(x, y)
+    if np.isnan(observed):
+        return float("nan")
+    null = np.array([_spearman(x, rng.permutation(y)) for _ in range(n_permutations)])
+    return float((np.sum(np.abs(null) >= abs(observed) - 1e-12) + 1) / (n_permutations + 1))
+
+
+def seed_bootstrap_ci(
+    table: pd.DataFrame,
+    gains: pd.DataFrame,
+    *,
+    n_bootstrap: int,
+    rng: np.random.Generator,
+) -> tuple[float, float]:
+    """95% CI for rho, resampling each fold's seeds with replacement.
+
+    Distances are held fixed; only the held-out gains are re-estimated.
+    """
+    heldout_gains = gains[gains["role"] == "heldout"]
+    by_fold = {
+        fold: group.pivot(index="seed", columns="topology", values="gain_m")
+        for fold, group in heldout_gains.groupby("fold")
+    }
+    topologies = table["topology"].tolist()
+    x = table["knn_distance_rel"].to_numpy()
+    rhos = []
+    for _ in range(n_bootstrap):
+        resampled = {}
+        for fold, seed_by_topology in by_fold.items():
+            rows = rng.integers(0, len(seed_by_topology), size=len(seed_by_topology))
+            resampled.update(seed_by_topology.iloc[rows].mean(axis=0).to_dict())
+        y = np.array([resampled[name] for name in topologies])
+        rhos.append(_spearman(x, y))
+    rhos = np.array(rhos)
+    rhos = rhos[~np.isnan(rhos)]
+    if len(rhos) == 0:
+        return float("nan"), float("nan")
+    low, high = np.percentile(rhos, [2.5, 97.5])
+    return float(low), float(high)
+
+
+def distance_statistics(
+    heldout: pd.DataFrame,
+    gains: pd.DataFrame,
+    *,
+    n_permutations: int = DEFAULT_N_PERMUTATIONS,
+    n_bootstrap: int = DEFAULT_N_BOOTSTRAP,
+    seed: int = 0,
+) -> pd.DataFrame:
+    """Per-space Spearman rho, permutation p, and seed-bootstrap CI (held-out rows only)."""
+    rows = []
+    for space, table in heldout.groupby("space", sort=False):
+        table = table.dropna(subset=["knn_distance_rel", "gain_m"])
+        n = len(table)
+        row = {
+            "space": space,
+            "n_heldout_topologies": n,
+            "folds": ",".join(sorted(table["fold"].unique())),
+            "n_above_floor": int(table["above_floor"].sum()),
+            "spearman_rho": float("nan"),
+            "permutation_p": float("nan"),
+            "rho_ci_low": float("nan"),
+            "rho_ci_high": float("nan"),
         }
-        for topology, role in role_by_topology.items()
-    ]
+        if n >= MIN_ROWS_FOR_STATS:
+            rng = np.random.default_rng(seed)
+            x = table["knn_distance_rel"].to_numpy()
+            y = table["gain_m"].to_numpy()
+            row["spearman_rho"] = _spearman(x, y)
+            row["permutation_p"] = permutation_p_value(x, y, n_permutations=n_permutations, rng=rng)
+            row["rho_ci_low"], row["rho_ci_high"] = seed_bootstrap_ci(
+                table, gains, n_bootstrap=n_bootstrap, rng=rng
+            )
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
-def build_pca_table(
+def _stats_label(stats_row: pd.Series) -> str:
+    if np.isnan(stats_row["spearman_rho"]):
+        return f"n={stats_row['n_heldout_topologies']} (< {MIN_ROWS_FOR_STATS}: no statistics)"
+    return (
+        f"ρ={stats_row['spearman_rho']:.2f} [{stats_row['rho_ci_low']:.2f}, {stats_row['rho_ci_high']:.2f}], "
+        f"perm p={stats_row['permutation_p']:.3f}, n={stats_row['n_heldout_topologies']}"
+    )
+
+
+def _signal_warning(heldout: pd.DataFrame) -> str:
+    primary = heldout[heldout["space"] == PRIMARY_HAND_SPACE]
+    n_above = int(primary["above_floor"].sum())
+    if n_above == 0:
+        return "⚠ No held-out topology beats its untrained floor: any correlation here is fitting noise."
+    return f"{n_above}/{len(primary)} held-out topologies beat their untrained floor (z > {SIGNAL_Z:g})."
+
+
+# ---------------------------------------------------------------------------
+# Figures
+# ---------------------------------------------------------------------------
+
+
+def _layout(fig, **kwargs):
+    fig.update_layout(font_family="Arial", plot_bgcolor="white", paper_bgcolor="white", **kwargs)
+    return fig
+
+
+def _projection(matrix: np.ndarray, method: str) -> np.ndarray:
+    """2D layout for visualization only (fit on all topologies; no labels used)."""
+    standardized = StandardScaler().fit_transform(matrix)
+    if method == "pca":
+        return PCA(n_components=2, random_state=0).fit_transform(standardized)
+    if method == "tsne":
+        # n=13 is far below what t-SNE needs for a stable global layout;
+        # perplexity is clamped down, and PCA remains the default.
+        perplexity = max(2, min(5, (len(matrix) - 1) // 3))
+        return TSNE(n_components=2, perplexity=perplexity, init="pca", random_state=0,
+                    learning_rate="auto").fit_transform(standardized)
+    raise ValueError(f"Unknown projection method: {method!r}")
+
+
+def fold_projection_table(
     hand_features: pd.DataFrame,
-    gnn_embeddings: np.ndarray | None,
-    joined: pd.DataFrame,
-    fold_membership: dict,
+    gnn_embeddings: dict[str, np.ndarray],
+    performance: pd.DataFrame,
+    fold: str,
+    membership: dict,
     *,
-    reference_fold: str,
-    projection: str = "pca",
+    projection: str,
 ) -> pd.DataFrame:
-    """One row per topology (2D projection coordinates + performance within
-    ``reference_fold``, the single fold whose held-out group the plot's
-    train/held-out split reflects)."""
-    topologies = hand_features["topology"].tolist()
-    feature_matrix = hand_features.drop(columns=list(NON_FEATURE_COLUMNS)).to_numpy(dtype=float)
-    hand_xy = _projection(feature_matrix, projection)
+    """One row per topology in ``fold`` (plus final-test ones), with 2D coordinates."""
+    columns, _ = _feature_space.select_distance_features(hand_features, _feature_columns(hand_features))
+    table = hand_features[list(ID_COLUMNS)].copy()
+    hand_xy = _projection(hand_features[columns].to_numpy(dtype=float), projection)
+    table["hand_x"], table["hand_y"] = hand_xy[:, 0], hand_xy[:, 1]
+    if fold in gnn_embeddings:
+        gnn_xy = _projection(gnn_embeddings[fold], projection)
+        table["gnn_x"], table["gnn_y"] = gnn_xy[:, 0], gnn_xy[:, 1]
 
-    pca_df = hand_features[["topology", "family"]].copy()
-    pca_df["hand_pca_x"] = hand_xy[:, 0]
-    pca_df["hand_pca_y"] = hand_xy[:, 1]
-    if gnn_embeddings is not None:
-        gnn_xy = _projection(gnn_embeddings, projection)
-        pca_df["gnn_pca_x"] = gnn_xy[:, 0]
-        pca_df["gnn_pca_y"] = gnn_xy[:, 1]
-
-    reference_performance = _reference_fold_performance(joined, fold_membership, reference_fold)
-    return reference_performance.merge(pca_df, on="topology", how="left")
+    roles = {name: "train" for name in membership["train"]}
+    roles.update({name: "heldout" for name in membership["held_out"]})
+    table["role"] = table["topology"].map(roles).fillna("final_test")
+    fold_performance = performance[performance["fold"] == fold][["topology", "distance_m", "gain_m"]]
+    return table.merge(fold_performance, on="topology", how="left").assign(fold=fold)
 
 
-def make_pca_figure(pca_table: pd.DataFrame, *, x_col: str, y_col: str, title: str, subtitle: str = ""):
-    # Held-out points need to read as held-out at a glance, not just on hover:
-    # a big red-ringed star with its name labeled beats a same-size diamond
-    # in the same color scale as everything else. Every point gets a label
-    # now (not just held-out), so train labels sit *below* their marker and
-    # held-out labels sit *above*, to cut down on the two sets colliding.
-    plot_table = pca_table.copy()
-    plot_table["label"] = plot_table["topology"]
-
-    fig = px.scatter(
-        plot_table,
-        x=x_col,
-        y=y_col,
-        color="distance_m",
-        symbol="role",
-        symbol_map={"train": "circle", "heldout": "star"},
-        text="label",
-        hover_data=["topology", "fold", "family", "distance_m"],
-        color_continuous_scale="Viridis",
-        title=f"{title}<br><sup>{subtitle}</sup>" if subtitle else title,
-        labels={"distance_m": "Eval distance (m)"},
+def make_projection_figure(table: pd.DataFrame, *, x_col: str, y_col: str, title: str, subtitle: str):
+    """Train points colored by in-fold performance; held-out and final-test marked by symbol."""
+    fig = go.Figure()
+    train = table[table["role"] == "train"]
+    fig.add_trace(go.Scatter(
+        x=train[x_col], y=train[y_col], mode="markers+text", name="train",
+        text=train["topology"], textposition="bottom center", textfont=dict(size=10),
+        marker=dict(size=13, color=train["distance_m"], colorscale="Viridis", showscale=True,
+                    colorbar=dict(title="Train eval<br>distance (m)"), line=dict(width=1, color="DarkSlateGrey")),
+        customdata=np.stack([train["distance_m"], train["gain_m"]], axis=1),
+        hovertemplate="%{text}<br>distance %{customdata[0]:.2f} m<br>gain %{customdata[1]:.2f} m<extra>train</extra>",
+    ))
+    heldout = table[table["role"] == "heldout"]
+    fig.add_trace(go.Scatter(
+        x=heldout[x_col], y=heldout[y_col], mode="markers+text", name="held out",
+        text=[f"{name}<br>gain {gain:+.2f} m" for name, gain in zip(heldout["topology"], heldout["gain_m"])],
+        textposition="top center", textfont=dict(size=12, color="red"),
+        marker=dict(symbol="star", size=24, color="white", line=dict(width=3, color="red")),
+        hovertemplate="%{text}<extra>held out</extra>",
+    ))
+    final_test = table[table["role"] == "final_test"]
+    fig.add_trace(go.Scatter(
+        x=final_test[x_col], y=final_test[y_col], mode="markers+text", name="final test (not in CV)",
+        text=final_test["topology"], textposition="bottom center", textfont=dict(size=10, color="grey"),
+        marker=dict(symbol="x", size=11, color="grey"),
+        hovertemplate="%{text}<extra>final test</extra>",
+    ))
+    for trace in fig.data:
+        trace.cliponaxis = False
+    return _layout(
+        fig, title=f"{title}<br><sup>{subtitle}</sup>", width=950, height=780,
+        legend=dict(orientation="h", yanchor="top", y=-0.1, xanchor="center", x=0.5),
+        margin=dict(t=110, r=140),
     )
-    fig.update_traces(marker=dict(size=12, line=dict(width=1, color="DarkSlateGrey")))
-    fig.for_each_trace(
-        lambda trace: trace.update(
-            marker=dict(size=26, line=dict(width=3, color="red")),
-            textposition="top center",
-            textfont=dict(size=13, color="red", family="Arial Black"),
-            cliponaxis=False,
-        )
-        if trace.name == "heldout"
-        else trace.update(
-            textposition="bottom center",
-            textfont=dict(size=11, color="black"),
-            cliponaxis=False,
-        )
+
+
+def make_distance_gain_figure(heldout: pd.DataFrame, stats: pd.DataFrame, *, warning: str):
+    """One panel per feature space: held-out gain vs. relative k-NN distance."""
+    spaces = [space for space in (*HAND_SPACES, GNN_SPACE) if space in set(heldout["space"])]
+    stats_by_space = stats.set_index("space")
+    fig = make_subplots(
+        rows=1, cols=len(spaces), shared_yaxes=True, horizontal_spacing=0.04,
+        subplot_titles=[f"{space}<br><sup>{_stats_label(stats_by_space.loc[space])}</sup>" for space in spaces],
     )
-    fig.update_layout(
-        font_family="Arial", plot_bgcolor="white", paper_bgcolor="white",
-        width=900, height=750,
-        # The discrete "role" legend and the continuous distance colorbar
-        # both default to the right edge and overlap; push the legend below
-        # the plot instead of stacking them.
-        legend=dict(orientation="h", yanchor="top", y=-0.12, xanchor="center", x=0.5),
-        coloraxis_colorbar=dict(x=1.02),
-        margin=dict(r=120, t=110),
+    for col, space in enumerate(spaces, start=1):
+        table = heldout[heldout["space"] == space]
+        fig.add_trace(go.Scatter(
+            x=table["knn_distance_rel"], y=table["gain_m"], mode="markers",
+            error_y=dict(type="data", array=table["gain_std_m"], visible=True),
+            marker=dict(size=11, color=np.where(table["extrapolated"], "orange", HELDOUT_COLOR),
+                        line=dict(width=1, color="black")),
+            text=table["topology"] + " (" + table["fold"] + ")",
+            hovertemplate="%{text}<br>rel. distance %{x:.2f}<br>gain %{y:.2f} m<extra></extra>",
+            showlegend=False,
+        ), row=1, col=col)
+        # Shapes after the trace: plotly skips shapes on still-empty subplots.
+        floor_band = table["floor_std_m"].median()
+        fig.add_hrect(y0=-floor_band, y1=floor_band, fillcolor="lightgrey", opacity=0.4, line_width=0,
+                      layer="below", row=1, col=col)
+        fig.add_hline(y=0, line=dict(color="black", dash="dot"), row=1, col=col)
+        fig.update_xaxes(title_text="k-NN distance / train spacing", row=1, col=col)
+    fig.update_yaxes(title_text="Held-out gain over step 0 (m)", row=1, col=1)
+    return _layout(
+        fig, width=420 * len(spaces), height=560, margin=dict(t=140),
+        title=("Held-out gain vs. distance from the fold's training set (one point per topology)"
+               f"<br><sup>{warning} Grey band: median untrained seed spread. Orange: size-extrapolated.</sup>"),
     )
-    return fig
 
 
-def _add_trend_and_spearman(fig, x: np.ndarray, y: np.ndarray, *, title: str):
-    """Annotate a scatter with a linear fit line and Spearman r (no statsmodels dependency)."""
-    from scipy.stats import spearmanr
-
-    if len(x) >= 2:
-        slope, intercept = np.polyfit(x, y, 1)
-        x_line = np.linspace(x.min(), x.max(), 2)
-        fig.add_trace(
-            go.Scatter(
-                x=x_line, y=slope * x_line + intercept, mode="lines",
-                line=dict(color="black", dash="dash"), name="linear fit",
-            )
-        )
-        correlation, p_value = spearmanr(x, y)
-        title = f"{title}<br><sup>Spearman r={correlation:.2f}, p={p_value:.3f}, n={len(x)}</sup>"
-    fig.update_layout(title=title)
-    return fig
-
-
-def make_distance_performance_figure(joined: pd.DataFrame, *, distance_col: str, title: str):
-    plot_data = joined.dropna(subset=[distance_col, "distance_m"])
-    fig = px.scatter(
-        plot_data,
-        x=distance_col,
-        y="distance_m",
-        color="role",
-        color_discrete_map={"train": "#636EFA", "heldout": "#EF553B"},
-        error_y="distance_std_m",
-        hover_data=["topology", "fold"],
-        labels={distance_col: "k-NN distance (standardized feature space)", "distance_m": "Eval distance (m)"},
-    )
-    fig.for_each_trace(
-        lambda trace: trace.update(marker=dict(size=13, line=dict(width=2, color="black")))
-        if trace.name == "heldout"
-        else trace.update(marker=dict(size=8))
-    )
-    _add_trend_and_spearman(
-        fig, plot_data[distance_col].to_numpy(), plot_data["distance_m"].to_numpy(), title=title
-    )
-    fig.update_layout(font_family="Arial", plot_bgcolor="white", paper_bgcolor="white", width=800, height=650)
-    return fig
-
-
-def make_per_feature_small_multiples(joined: pd.DataFrame, feature_columns: list[str]):
+def make_per_feature_figure(heldout: pd.DataFrame, hand_features: pd.DataFrame, columns: list[str], *, warning: str):
+    """Held-out gain vs. each selected hand feature (one point per held-out topology)."""
+    primary = heldout[heldout["space"] == PRIMARY_HAND_SPACE][["topology", "gain_m", "gain_std_m"]]
+    table = primary.merge(hand_features, on="topology")
     n_cols = 3
-    n_rows = -(-len(feature_columns) // n_cols)
-    fig = make_subplots(rows=n_rows, cols=n_cols, subplot_titles=feature_columns)
-    for i, feature in enumerate(feature_columns):
+    n_rows = -(-len(columns) // n_cols)
+    titles = []
+    for feature in columns:
+        rho = _spearman(table[feature].to_numpy(), table["gain_m"].to_numpy())
+        titles.append(f"{feature} (ρ={rho:.2f})" if not np.isnan(rho) else feature)
+    fig = make_subplots(rows=n_rows, cols=n_cols, subplot_titles=titles, vertical_spacing=0.06)
+    for i, feature in enumerate(columns):
         row, col = divmod(i, n_cols)
-        for role, color in (("train", "#636EFA"), ("heldout", "#EF553B")):
-            subset = joined[joined["role"] == role]
-            fig.add_trace(
-                go.Scatter(
-                    x=subset[feature], y=subset["distance_m"], mode="markers",
-                    name=role, marker=dict(color=color), showlegend=(i == 0),
-                ),
-                row=row + 1, col=col + 1,
-            )
-    fig.update_layout(
-        font_family="Arial", plot_bgcolor="white", paper_bgcolor="white",
-        width=1100, height=350 * n_rows, title="Performance vs. individual hand-crafted features",
+        fig.add_trace(go.Scatter(
+            x=table[feature], y=table["gain_m"], mode="markers",
+            error_y=dict(type="data", array=table["gain_std_m"], visible=True),
+            marker=dict(color=HELDOUT_COLOR), text=table["topology"], showlegend=False,
+            hovertemplate="%{text}<br>%{x}<br>gain %{y:.2f} m<extra></extra>",
+        ), row=row + 1, col=col + 1)
+    return _layout(
+        fig, width=1100, height=300 * n_rows + 120,
+        title=("Held-out gain vs. individual (deduplicated) hand features, n=10, uncorrected"
+               f"<br><sup>{warning}</sup>"),
     )
-    return fig
 
 
-def make_confound_figure(joined: pd.DataFrame, *, distance_col: str):
-    train_only = joined[joined["role"] == "train"].dropna(subset=[distance_col, "distance_m"])
+def make_confound_figure(distances: pd.DataFrame, performance: pd.DataFrame, *, n_permutations: int, seed: int):
+    """Training topologies: in-training performance vs. leave-one-out distance.
+
+    Each topology is a training topology in 4 folds; its distance and
+    performance are averaged over those folds so it appears once.
+    """
+    train = distances[(distances["role"] == "train") & (distances["space"] == PRIMARY_HAND_SPACE)]
+    train = train.merge(performance, on=["fold", "topology", "role"], how="left")
+    per_topology = train.groupby("topology", as_index=False).agg(
+        knn_distance_rel=("knn_distance_rel", "mean"), distance_m=("distance_m", "mean"),
+    )
+    x = per_topology["knn_distance_rel"].to_numpy()
+    y = per_topology["distance_m"].to_numpy()
+    rho = _spearman(x, y)
+    p_value = permutation_p_value(x, y, n_permutations=n_permutations, rng=np.random.default_rng(seed))
     fig = px.scatter(
-        train_only,
-        x=distance_col,
-        y="distance_m",
-        hover_data=["topology", "fold"],
-        labels={distance_col: "Leave-one-out k-NN distance", "distance_m": "Eval distance (m)"},
+        per_topology, x="knn_distance_rel", y="distance_m", text="topology",
+        labels={"knn_distance_rel": "Leave-one-out k-NN distance / train spacing (mean over folds)",
+                "distance_m": "In-training eval distance (m, mean over folds and seeds)"},
     )
-    _add_trend_and_spearman(
-        fig, train_only[distance_col].to_numpy(), train_only["distance_m"].to_numpy(),
-        title="Confound check: training-topology performance vs. leave-one-out distance",
+    fig.update_traces(textposition="top center", marker=dict(size=11, color=TRAIN_COLOR))
+    return _layout(
+        fig, width=850, height=650,
+        title=("Confound check: do atypical training topologies also train worse?"
+               f"<br><sup>{PRIMARY_HAND_SPACE}; ρ={rho:.2f}, perm p={p_value:.3f}, n={len(per_topology)}</sup>"),
     )
-    fig.update_layout(font_family="Arial", plot_bgcolor="white", paper_bgcolor="white", width=800, height=650)
-    return fig
 
 
 def _write_figure(fig, output_dir: Path, name: str) -> None:
@@ -371,40 +484,24 @@ def _write_figure(fig, output_dir: Path, name: str) -> None:
     fig.write_html(output_dir / f"{name}.html", include_plotlyjs="cdn")
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--hand-features-csv", type=Path, default=HAND_FEATURES_CSV)
-    parser.add_argument("--gnn-embeddings-npz", type=Path, default=GNN_EMBEDDINGS_NPZ)
+    parser.add_argument("--gnn-embeddings-dir", type=Path, default=GNN_EMBEDDINGS_DIR)
     parser.add_argument("--performance-csv", type=Path, default=PERFORMANCE_CSV)
-    parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent)
+    parser.add_argument("--output-dir", type=Path, default=FIGURES_ROOT)
     parser.add_argument("--k", type=int, default=DEFAULT_K)
-    parser.add_argument(
-        "--reference-fold", default="node_8",
-        help=(
-            "Which node_count_loso fold's held-out group the PCA plots' train/held-out "
-            "split reflects -- pick the fold matching whatever checkpoint produced "
-            "--gnn-embeddings-npz (default node_8, matching this repo's current checkpoint). "
-            "Every topology is held out in exactly one of the 5 folds, so without picking "
-            "one fold as the reference, pooling across all of them marks everything "
-            "'heldout'. Run with --list-folds to see each fold's held-out group."
-        ),
-    )
-    parser.add_argument(
-        "--list-folds", action="store_true",
-        help="Print each node_count_loso fold's held-out group and exit.",
-    )
+    parser.add_argument("--n-permutations", type=int, default=DEFAULT_N_PERMUTATIONS)
+    parser.add_argument("--n-bootstrap", type=int, default=DEFAULT_N_BOOTSTRAP)
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--projection", choices=["pca", "tsne"], default="pca",
-        help=(
-            "2D layout for the distribution scatter plots. PCA (default) is the safer "
-            "choice at n=13 topologies; t-SNE's perplexity is auto-clamped down for this "
-            "sample size but its global layout is still less trustworthy here than PCA's."
-        ),
-    )
-    parser.add_argument(
-        "--gnn-run-url", default="https://wandb.ai/i-suds/CV/runs/w5sigp4m",
-        help="W&B run URL for the checkpoint used to produce --gnn-embeddings-npz, printed "
-        "as a subtitle on the GNN-embedding plot so it's traceable back to its source run.",
+        help="2D layout for the per-fold distribution scatter plots (PCA is the safer choice at n=13).",
     )
     return parser.parse_args()
 
@@ -413,81 +510,75 @@ def main() -> None:
     args = parse_args()
     fold_membership = _topology_catalog.fold_membership()
 
-    if args.list_folds:
-        for fold, membership in fold_membership.items():
-            print(f"{fold}: held_out={membership['held_out']}")
-        return
-
-    if args.reference_fold not in fold_membership:
-        raise ValueError(
-            f"--reference-fold {args.reference_fold!r} is not a node_count_loso fold; "
-            f"choices are {sorted(fold_membership)} (see --list-folds)."
-        )
-    print(
-        f"Using fold {args.reference_fold!r} as the PCA plots' train/held-out reference "
-        f"-- held out: {fold_membership[args.reference_fold]['held_out']}"
-    )
-
     hand_features = pd.read_csv(args.hand_features_csv)
-    performance = _load_performance(args.performance_csv)
-    gnn_embeddings = _load_gnn_embeddings(args.gnn_embeddings_npz, hand_features["topology"].tolist())
+    topologies = hand_features["topology"].tolist()
+    seed_results = pd.read_csv(args.performance_csv)
+    gnn_embeddings = (
+        _load_fold_embeddings(args.gnn_embeddings_dir, topologies) if args.gnn_embeddings_dir.exists() else {}
+    )
+    missing_gnn = sorted(set(fold_membership) - set(gnn_embeddings))
+    if missing_gnn:
+        print(f"No GNN embeddings for folds {missing_gnn}; the GNN space covers {sorted(gnn_embeddings)} only.")
 
-    joined = build_joined_table(hand_features, gnn_embeddings, performance, fold_membership, k=args.k)
-    pca_table = build_pca_table(
-        hand_features, gnn_embeddings, joined, fold_membership,
-        reference_fold=args.reference_fold, projection=args.projection,
+    distances = compute_distances(hand_features, gnn_embeddings, fold_membership, k=args.k)
+    performance = topology_performance(seed_results)
+    gains = seed_gains(seed_results)
+    floor = noise_floor(seed_results)
+    heldout = heldout_table(distances, performance, floor)
+    stats = distance_statistics(
+        heldout, gains, n_permutations=args.n_permutations, n_bootstrap=args.n_bootstrap, seed=args.seed,
     )
+    warning = _signal_warning(heldout)
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    joined.to_csv(args.output_dir / "topology_distribution_joined.csv", index=False)
-    pca_table.to_csv(args.output_dir / "topology_pca_table.csv", index=False)
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    distances.merge(performance, on=["fold", "topology", "role"], how="left").to_csv(
+        output_dir / "topology_distribution_joined.csv", index=False
+    )
+    heldout.to_csv(output_dir / "topology_heldout_distance_analysis.csv", index=False)
+    stats.to_csv(output_dir / "topology_distance_stats.csv", index=False)
+    selected, report = _feature_space.select_distance_features(hand_features, _feature_columns(hand_features))
+    report.to_frame().to_csv(output_dir / "topology_feature_selection.csv", index=False)
 
-    method_label = args.projection.upper() if args.projection == "pca" else "t-SNE"
-    _write_figure(
-        make_pca_figure(
-            pca_table, x_col="hand_pca_x", y_col="hand_pca_y", title=f"Hand-feature {method_label}",
-        ),
-        args.output_dir, "topology_pca_hand_features",
-    )
-    _write_figure(
-        make_distance_performance_figure(
-            joined, distance_col="hand_feature_knn_distance",
-            title="Performance vs. hand-feature k-NN distance",
-        ),
-        args.output_dir, "topology_performance_vs_hand_feature_distance",
-    )
-    feature_columns = [c for c in hand_features.columns if c not in NON_FEATURE_COLUMNS]
-    _write_figure(
-        make_per_feature_small_multiples(joined, feature_columns),
-        args.output_dir, "topology_performance_vs_individual_features",
-    )
-    _write_figure(
-        make_confound_figure(joined, distance_col="hand_feature_knn_distance"),
-        args.output_dir, "topology_confound_training_distance",
-    )
+    _write_figure(make_distance_gain_figure(heldout, stats, warning=warning), output_dir,
+                  "topology_heldout_gain_vs_distance")
+    _write_figure(make_per_feature_figure(heldout, hand_features, selected, warning=warning), output_dir,
+                  "topology_heldout_gain_vs_individual_features")
+    _write_figure(make_confound_figure(distances, performance, n_permutations=args.n_permutations, seed=args.seed),
+                  output_dir, "topology_confound_training_distance")
 
-    if gnn_embeddings is not None:
+    method_label = "PCA" if args.projection == "pca" else "t-SNE"
+    for fold, membership in fold_membership.items():
+        fold_dir = output_dir / fold
+        fold_dir.mkdir(exist_ok=True)
+        table = fold_projection_table(
+            hand_features, gnn_embeddings, performance, fold, membership, projection=args.projection,
+        )
+        table.to_csv(fold_dir / "topology_projection_table.csv", index=False)
+        subtitle = f"fold {fold}: held out {', '.join(membership['held_out'])}<br>{warning}"
         _write_figure(
-            make_pca_figure(
-                pca_table, x_col="gnn_pca_x", y_col="gnn_pca_y", title=f"GNN-embedding {method_label}",
-                subtitle=f"checkpoint run: {args.gnn_run_url}",
-            ),
-            args.output_dir, "topology_pca_gnn_embeddings",
+            make_projection_figure(table, x_col="hand_x", y_col="hand_y",
+                                   title=f"Hand-feature {method_label} (deduplicated features)", subtitle=subtitle),
+            fold_dir, "topology_projection_hand_features",
         )
-        _write_figure(
-            make_distance_performance_figure(
-                joined, distance_col="gnn_embedding_knn_distance",
-                title="Performance vs. GNN-embedding k-NN distance",
-            ),
-            args.output_dir, "topology_performance_vs_gnn_embedding_distance",
-        )
-    else:
-        print(
-            f"{args.gnn_embeddings_npz} not found -- skipping GNN-embedding plots. "
-            "Run topology_gnn_embeddings.py with a checkpoint reference to generate them."
-        )
+        if fold in gnn_embeddings:
+            _write_figure(
+                make_projection_figure(table, x_col="gnn_x", y_col="gnn_y",
+                                       title=f"GNN-embedding {method_label} ({fold}'s own checkpoint)",
+                                       subtitle=subtitle),
+                fold_dir, "topology_projection_gnn_embeddings",
+            )
 
-    print(f"Wrote plots and joined CSV to {args.output_dir}")
+    print(warning)
+    print(stats.to_string(index=False))
+    print(f"Wrote plots and CSVs to {output_dir}")
+
+
+def _load_fold_embeddings(directory: Path, topologies: list[str]) -> dict[str, np.ndarray]:
+    # Imported lazily: topology_gnn_embeddings pulls in torch/Hydra/the env stack.
+    from topology_gnn_embeddings import load_fold_embeddings
+
+    return load_fold_embeddings(directory, topologies)
 
 
 if __name__ == "__main__":
