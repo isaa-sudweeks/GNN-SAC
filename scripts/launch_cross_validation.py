@@ -15,6 +15,7 @@ from typing import Sequence
 
 from omegaconf import OmegaConf
 
+UV_PYTHON = ("uv", "run", "python")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SAC_ROOT = PROJECT_ROOT / "sac"
@@ -83,13 +84,13 @@ def build_launch(
     seeds: Sequence[int],
     shuffle_seed: int,
     overrides: Sequence[str],
-    python_executable: str = sys.executable,
+    python_command: Sequence[str] = UV_PYTHON,
 ) -> tuple[list[str], list[dict]]:
     """Build the Hydra command and its explicit fold-by-seed manifest rows."""
     validate_overrides(overrides)
     folds = ordered_folds(spec, shuffle_seed)
     command = [
-        python_executable,
+        *python_command,
         str(PROJECT_ROOT / "sac" / "gnn_train.py"),
         "-m",
         f"cross_validation={config_name}",
