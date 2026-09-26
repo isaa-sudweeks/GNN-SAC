@@ -310,6 +310,92 @@ class MjxVectorGraphEnv(gym.Env):
             )
         return results
 
+    supports_batched_tensors = True
+
+    @property
+    def edge_index(self) -> torch.Tensor:
+        return self._edge_index
+
+    @property
+    def edge_role(self) -> torch.Tensor | None:
+        return self._edge_role
+
+    def batched_groups(self) -> list[tuple["MjxVectorGraphEnv", torch.Tensor]]:
+        """Return ``(env, global_indices)`` pairs for tensor-batched collection."""
+        return [(self, torch.arange(self.num_envs, dtype=torch.long))]
+
+    def slot_tasks(self) -> list[str]:
+        """Return the replay task key of every batch slot, including broken regimes."""
+        from env.mujoco_gen.topology_envs import regime_task_name
+
+        if self._broken_regime_slots is None:
+            return [self.task] * self.num_envs
+        return [
+            regime_task_name(self.task, "broken" if is_broken else "standard")
+            for is_broken in self._broken_regime_slots
+        ]
+
+    def reset_batch(self, env_indices: Sequence[int] | None = None) -> dict[str, torch.Tensor]:
+        """Reset selected slots and return dense observations for the whole batch.
+
+        Rows outside ``env_indices`` are not meaningful after a partial reset;
+        callers should merge only the reset rows into their cached observations.
+        """
+        indices = self._normalize_indices(env_indices)
+        keys = self._next_keys()
+        if self._state is None or len(indices) == self.num_envs:
+            flat_obs, self._state = self._reset_compiled(keys)
+        else:
+            mask = self._index_mask(indices)
+            flat_obs, self._state = self._reset_where_compiled(keys, self._state, mask)
+        self._sample_broken_nodes(indices)
+        rigidity = self._rigidity_compiled(self._state.data)
+        return self._dense_observations(flat_obs, rigidity)
+
+    def step_batch(self, actions: torch.Tensor):
+        """Step every slot with a dense ``[num_envs, nodes, 1]`` action tensor.
+
+        Returns ``(observations, reward, done, info)`` where every value is a
+        tensor with leading dimension ``num_envs`` and stays on the accelerator.
+        """
+        if self._state is None:
+            raise RuntimeError("reset_batch must be called before step_batch.")
+        normalized_actions = (
+            actions.to(device=self.action_device, dtype=torch.float32)
+            .reshape(self.num_envs, self._core.action_size)
+            .clamp(-1.0, 1.0)
+            .masked_fill(self._broken_node_masks, 0.0)
+        )
+        physical_actions = normalized_actions * self.speed
+        jax_actions = self._jnp.from_dlpack(physical_actions.contiguous())
+        flat_obs, self._state, reward, done, info = self._step_compiled(
+            self._next_keys(), self._state, jax_actions
+        )
+        observations = self._dense_observations(flat_obs, info["critical_eig"])
+        torch_info = {key: self._to_torch(value) for key, value in info.items()}
+        if self._broken_node_probability is not None:
+            torch_info["broken_node_count"] = self._broken_node_masks.sum(dim=-1)
+        return (
+            observations,
+            self._to_torch(reward).float(),
+            self._to_torch(done).bool(),
+            torch_info,
+        )
+
+    def _dense_observations(self, flat_obs, rigidity) -> dict[str, torch.Tensor]:
+        obs = self._to_torch(flat_obs)
+        node_count = self._core.action_size
+        positions = obs[:, : 3 * node_count].reshape(self.num_envs, node_count, 3)
+        velocities = obs[:, 3 * node_count : 6 * node_count].reshape(
+            self.num_envs, node_count, 3
+        )
+        device = self._broken_node_masks.device
+        return {
+            "x": torch.cat((positions, velocities), dim=-1).float(),
+            "rigidity": self._to_torch(rigidity).float().reshape(self.num_envs, 1),
+            "action_mask": self._action_mask.to(device) & ~self._broken_node_masks,
+        }
+
     def _step_masked(self, keys, state, actions, mask):
         flat_obs, stepped_state, reward, done, info = self._step_with_actuator_energy(
             keys, state, actions

@@ -569,6 +569,94 @@ class TensorGNNBufferTest(unittest.TestCase):
         self.assertEqual(_task_names(all_broken), ["graph__broken"])
 
 
+def dense_transitions(markers, nodes, *, masks=None):
+    """Stack ``transition(..., metadata=True)`` fixtures into add_dense inputs."""
+    pairs = [transition(marker, nodes, metadata=True) for marker in markers]
+    if masks is not None:
+        for (current, following), mask in zip(pairs, masks):
+            current["obs"].action_mask = mask.clone()
+            following["obs"].action_mask = mask.clone()
+    stacked = {
+        "obs_x": torch.stack([current["obs"].x for current, _ in pairs]),
+        "next_obs_x": torch.stack([following["obs"].x for _, following in pairs]),
+        "obs_rigidity": torch.stack([current["obs"].rigidity for current, _ in pairs]),
+        "next_obs_rigidity": torch.stack([following["obs"].rigidity for _, following in pairs]),
+        "obs_action_mask": torch.stack([current["obs"].action_mask for current, _ in pairs]),
+        "next_obs_action_mask": torch.stack([following["obs"].action_mask for _, following in pairs]),
+        "action": torch.stack([following["action"].squeeze(0) for _, following in pairs]),
+        "reward": torch.stack([following["reward"].squeeze(0) for _, following in pairs]),
+        "terminated": torch.stack([following["terminated"].squeeze(0) for _, following in pairs]),
+    }
+    return pairs, stacked
+
+
+class DenseReplayTest(unittest.TestCase):
+    FEATURES = {"node_roles": True, "edge_roles": True, "edge_distance": True}
+
+    def test_dense_graph_batch_matches_prepared_data_list(self):
+        from torch_geometric.data import Batch
+        from common.graph_transforms import prepare_graph
+        from common.tensor_gnn_buffer import DenseGraphGroup, build_graph_static, dense_graph_batch
+
+        cfg = config(use_virtual_node=True, graph_features=self.FEATURES)
+        graphs, groups = [], []
+        for nodes, markers in ((3, (0, 1)), (5, (10, 11, 12))):
+            topology = [graph(marker, nodes, metadata=True) for marker in markers]
+            topology[-1].action_mask = torch.zeros(nodes, dtype=torch.bool)
+            topology[-1].action_mask[1] = True
+            graphs.extend(topology)
+            static = build_graph_static(cfg, topology[0], torch.zeros(nodes, 1))
+            groups.append(DenseGraphGroup(
+                static=static,
+                x=torch.stack([item.x for item in topology]),
+                rigidity=torch.stack([item.rigidity for item in topology]),
+                action_mask=torch.stack([item.action_mask for item in topology]),
+            ))
+        expected = Batch.from_data_list([
+            prepare_graph(item, use_virtual_node=True, use_node_roles=True,
+                          use_edge_roles=True, use_edge_distance=True)
+            for item in graphs
+        ])
+        actual = dense_graph_batch(cfg, groups, "cpu")
+        self.assertEqual(actual.num_graphs, expected.num_graphs)
+        for key in ("x", "edge_index", "batch", "ptr", "action_mask", "physical_node_mask",
+                    "edge_attr", "edge_type", "rigidity"):
+            torch.testing.assert_close(actual[key], expected[key], rtol=0, atol=0, msg=key)
+
+    def test_add_dense_matches_per_transition_add(self):
+        cfg = config(use_virtual_node=True, graph_features=self.FEATURES)
+        expected, actual = TensorGNNBuffer(cfg), TensorGNNBuffer(config(
+            use_virtual_node=True, graph_features=self.FEATURES,
+        ))
+        for task, nodes, markers in (("graph:a", 3, range(0, 6)), ("graph:b", 5, range(10, 16))):
+            masks = [torch.arange(nodes).remainder(2).eq(offset % 2) for offset in range(6)]
+            pairs, stacked = dense_transitions(markers, nodes, masks=masks)
+            for pair in pairs:
+                expected.add(pair, task=task)
+            first = pairs[0][0]["obs"]
+            for start in (0, 4):
+                chunk = {key: value[start:start + 4] for key, value in stacked.items()}
+                actual.add_dense(
+                    task, chunk, completed_episodes=int(chunk["obs_x"].size(0)),
+                    edge_index=first.edge_index, edge_role=first.edge_role,
+                )
+        for task in expected.task_names:
+            assert_tensor_task_state_equal(
+                self, expected._buffers[task].state_dict(), actual._buffers[task].state_dict()
+            )
+        torch.manual_seed(3)
+        expected_batch = expected.sample()
+        torch.manual_seed(3)
+        assert_batch_equal(self, expected_batch, actual.sample())
+
+    def test_add_dense_rejects_rows_without_active_nodes(self):
+        buffer = TensorGNNBuffer(config())
+        pairs, stacked = dense_transitions((0, 1), 3)
+        stacked["next_obs_action_mask"] = torch.zeros_like(stacked["next_obs_action_mask"])
+        with self.assertRaisesRegex(ValueError, "invalid action mask"):
+            buffer.add_dense("graph:a", stacked, edge_index=pairs[0][0]["obs"].edge_index)
+
+
 class TensorGNNBufferFiniteChecksTest(unittest.TestCase):
     @staticmethod
     def poisoned_transition(field):

@@ -77,6 +77,24 @@ Constraints:
 - Use `sim_backend=mujoco` if you need training-time rendering or
   model-rebuilding randomization.
 
+**Vectorized collection.** With MJX, the GNN or padded-MLP backend, and tensor
+replay, training collects through a tensor-batched loop
+(`vectorized_collection=auto`, the default). Each topology bucket is stepped,
+acted on, and inserted into replay as whole-batch tensors, so the cost of a
+vector step does not grow with Python work per environment. Behavior matches the
+per-environment loop with three small differences:
+
+- Reward normalization merges each bucket's returns into the task statistics
+  once per step, so all rewards in that step share one scale.
+- `training_rewards` logs omit the index bookkeeping keys (`env_idx`,
+  `topology_idx`, `bucket_env_idx`) that the per-environment loop summed into
+  reward components.
+- On the final partial vector step every slot is simulated, but only the slots
+  within `steps` are stored and counted.
+
+Set `vectorized_collection=false` to force the per-environment loop, or `true`
+to fail instead of falling back when the setup is unsupported.
+
 **Evaluation.** Evaluation uses a separate native MuJoCo environment by default
 (`eval_backend=mujoco`). This avoids slow single-environment MJX evaluation and
 means `save_video=true` still works while training stays on the accelerator.
