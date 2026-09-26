@@ -58,8 +58,8 @@ JAX and PyTorch through DLPack (`mjx_zero_copy=true`).
 
 Constraints:
 
-- MJX requires `mujoco-truss-gen==0.12.5` (pinned in `pyproject.toml`) and
-  training-time rendering must be disabled.
+- MJX requires `mujoco-truss-gen[warp]==0.12.5` (pinned in `pyproject.toml`)
+  and training-time rendering must be disabled.
 - MJX always uses the control graph (`graph_view="control"`), so it applies only
   to the graph backends.
 - Realistic models and fixed-shape runtime domain randomization are supported.
@@ -73,7 +73,9 @@ Constraints:
 means `save_video=true` still works while training stays on the accelerator.
 
 **Warp.** JAX is the default MJX physics implementation. On NVIDIA CUDA hosts
-you can select Warp instead (`platform=supercomputer` already does this):
+you can select Warp instead (`platform=supercomputer` already does this). The
+locked environment includes Warp through the `mujoco-truss-gen[warp]` extra
+(`warp-lang` in `uv.lock`), so `uv sync --frozen` is enough:
 
 ```bash
 uv run python sac/train.py sac_backend=gnn sim_backend=mjx mjx_impl=warp device=cuda
