@@ -464,7 +464,7 @@ class WandbInitTest(unittest.TestCase):
                 wandb_dir=str(work_dir / "shared-wandb-parent"),
                 wandb_entity=None,
                 wandb_name="run-name",
-                launch_command="python sac/gnn_train.py steps=10",
+                launch_command="python sac/train.py steps=10",
                 multirun_id="job_0002_deadbeefcafe",
                 wandb_silent=True,
                 enable_wandb=True,
@@ -485,7 +485,7 @@ class WandbInitTest(unittest.TestCase):
             self.assertEqual(init_calls[0]["dir"], str(work_dir / "shared-wandb-parent"))
             self.assertEqual(
                 init_calls[0]["config"]["launch_command"],
-                "python sac/gnn_train.py steps=10",
+                "python sac/train.py steps=10",
             )
             self.assertEqual(
                 artifact_names,

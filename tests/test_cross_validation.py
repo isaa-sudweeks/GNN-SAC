@@ -143,7 +143,22 @@ class CrossValidationLauncherTest(unittest.TestCase):
             overrides=[],
         )
         self.assertEqual(command[:3], ["uv", "run", "python"])
-        self.assertTrue(command[3].endswith("sac/gnn_train.py"))
+        self.assertTrue(command[3].endswith("sac/train.py"))
+        self.assertIn("sac_backend=gnn", command)
+
+    def test_respects_caller_sac_backend(self):
+        for override in ("sac_backend=padded_mlp", "+sac_backend=padded_mlp"):
+            command, _ = build_launch(
+                config_name="node_groups",
+                spec=self.spec,
+                seeds=[1],
+                shuffle_seed=0,
+                overrides=[override],
+            )
+            self.assertEqual(
+                [arg for arg in command if "sac_backend=" in arg],
+                [override],
+            )
 
     def test_rejects_launcher_owned_overrides(self):
         with self.assertRaisesRegex(ValueError, "owned"):
