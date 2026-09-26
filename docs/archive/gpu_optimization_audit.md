@@ -1,3 +1,5 @@
+> **Archived (2026-09-25).** Performance audit from July 2026. Several statements (for example, that MJX is not integrated) are out of date. See [design/performance.md](../design/performance.md) for the current state and open items.
+
 # GNN-SAC Performance Audit and GPU Optimization Plan
 
 ## Scope

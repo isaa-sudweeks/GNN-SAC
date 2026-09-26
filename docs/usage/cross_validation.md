@@ -67,7 +67,7 @@ uv run python scripts/make_random_cross_validation.py \
 The generated YAML records `cross_validation.split` (source, fold count, seed),
 which reaches the W&B config; `tests/test_cross_validation.py` fails if the
 committed file drifts from what the generator produces. Launch it like any other
-definition, e.g. `scripts/launch_cross_validation.py cross_validation=random_5fold`.
+definition, e.g. `uv run python scripts/launch_cross_validation.py cross_validation=random_5fold`.
 
 Some node counts have a single development topology (4, 5, and 9 nodes), so a
 random fold that holds one of them out is still an unseen-size fold. Compare

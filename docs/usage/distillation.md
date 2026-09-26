@@ -16,7 +16,7 @@ in the resolved training split. Missing training teachers are errors. Extra
 mapping entries, including held-out teachers, are never opened.
 
 ```bash
-python sac/gnn_train.py distillation=kl \
+uv run python sac/train.py sac_backend=gnn distillation=kl \
   'truss_topologies=[tetrahedron,octahedron]' \
   '+distillation.teachers={tetrahedron:/path/to/tetrahedron/checkpoints/latest.pt,octahedron:/path/to/octahedron/checkpoints/latest.pt}' \
   distillation.cache_dir=/path/to/target-cache
@@ -145,7 +145,7 @@ For example, specialists trained without node identification can supervise a
 student that appends actuated/passive node roles:
 
 ```bash
-python sac/gnn_train.py distillation=kl \
+uv run python sac/train.py sac_backend=gnn distillation=kl \
   graph_features.node_roles=true \
   '+distillation.teachers={tetrahedron:/path/to/teacher.pt}'
 ```
@@ -177,8 +177,8 @@ metrics remain available, and runs with distillation disabled keep their
 existing environment-step behavior.
 
 ```bash
-python -m unittest tests.test_distillation -v
-python -m unittest discover -s tests -v
+uv run python -m unittest tests.test_distillation -v
+uv run python -m unittest discover -s tests -v
 ```
 
 Coverage includes analytic KL, gradients and masks, teacher compatibility,

@@ -40,7 +40,7 @@ coordinator.
 Run a CPU smoke benchmark with:
 
 ```bash
-python scripts/benchmark_gnn_replay.py --device cpu --prototype \
+uv run python scripts/benchmark_gnn_replay.py --device cpu --prototype \
   --storage cpu_pinned --node-counts 4,6,8 --batch-size 255 \
   --entries-per-task 10000 --output replay-cpu.json
 ```
@@ -59,7 +59,7 @@ one isolated CPU snapshot before dispatching background serialization.
 Convert an old replay checkpoint non-destructively:
 
 ```bash
-python scripts/convert_gnn_replay_checkpoint.py old.pt converted.pt
+uv run python scripts/convert_gnn_replay_checkpoint.py old.pt converted.pt
 ```
 
 The converter refuses to overwrite either input or an existing destination,

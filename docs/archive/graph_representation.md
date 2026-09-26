@@ -1,3 +1,5 @@
+> **Archived (2026-09-25).** Early (April 2026) graph contract proposal with edge features and an edge-action decoder. It does not describe the current implementation; see [design/architecture.md](../design/architecture.md).
+
 # Graph Representation
 
 This document defines the planned graph data contract for GNN-SAC. The first implementation should keep the representation explicit and testable.
