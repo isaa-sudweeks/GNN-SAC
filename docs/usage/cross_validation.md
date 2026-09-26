@@ -23,7 +23,7 @@ cross_validation:
 Launch all folds and seeds locally with:
 
 ```bash
-python scripts/launch_cross_validation.py cross_validation=node_count_loso \
+uv run python scripts/launch_cross_validation.py cross_validation=node_count_loso \
   --seeds 1,2,3,4,5 --shuffle-seed 17 platform=local
 ```
 

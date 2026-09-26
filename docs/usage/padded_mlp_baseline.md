@@ -17,13 +17,13 @@ criticism, and entropy calculation.
 Validate the upstream topology contract after changing `mujoco-truss-gen`:
 
 ```bash
-python scripts/validate_padded_mlp_topologies.py
+uv run python scripts/validate_padded_mlp_topologies.py
 ```
 
 Run a short native two-topology smoke test:
 
 ```bash
-python sac/train.py sac_backend=padded_mlp device=cpu enable_wandb=false \
+uv run python sac/train.py sac_backend=padded_mlp device=cpu enable_wandb=false \
   save_csv=false save_agent=false checkpoint_freq=0 eval_at_end=false \
   domain_randomization=false 'truss_topologies=[tetrahedron,octahedron]' \
   max_steps=2 nsubsteps=1 steps=1000 batch_size=256 buffer_size=1024

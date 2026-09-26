@@ -2,31 +2,30 @@
 
 ## Project Structure & Module Organization
 
-- `sac/` contains the SAC implementations, graph and MLP actor-critic layers, replay buffers, trainers, and the `gnn_train.py`/`gnn_infer.py` entry points.
+- `sac/` contains the SAC implementations, graph and MLP actor-critic layers, replay buffers, trainers, and the `train.py` (all backends) and `gnn_infer.py` entry points. `gnn_train.py` is legacy (equivalent to `train.py sac_backend=gnn`); do not use it in new commands or docs.
 - `env/` defines MuJoCo environments and wrappers. Generated-topology adapters are under `env/mujoco_gen/`; XML assets for hand-authored trusses live in `env/truss/assets/`.
 - `config/` holds composable Hydra YAML for algorithms, environments, GNNs, physical parameters, domain randomization, inference, and cluster runs.
-- `tests/` contains checkpoint, inference, and MuJoCo smoke tests. `scripts/` contains performance benchmarks; `docs/` records design and experiment decisions.
+- `tests/` contains checkpoint, inference, and MuJoCo smoke tests. `scripts/` contains launchers, validators, and benchmarks.
+- `docs/` is indexed in `docs/README.md`: `usage/` and `design/` must match the code, `plans/` holds pending plans, and `archive/` is frozen history. When a change alters documented behavior, update the matching `docs/usage/` or `docs/design/` page in the same change.
 - Treat `outputs/`, `logs/`, `checkpoints/`, and W&B data as generated artifacts; do not commit them.
 
 ## Setup, Test, and Development Commands
 
-Create an isolated environment and install dependencies:
+Dependencies are managed only with uv (`pyproject.toml` + `uv.lock`); there is no `requirements.txt`. Add or change dependencies with `uv add`/`uv lock`, never by hand-editing the lock file.
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
+uv sync --frozen
 ```
 
-Run the full test suite with `python -m unittest discover -s tests -v`, or target one module with `python -m unittest tests.test_checkpointing -v`. Tests involving MuJoCo require a working rendering backend and `mujoco-truss-gen`.
+Run the full test suite with `uv run python -m unittest discover -s tests -v`, or target one module with `uv run python -m unittest tests.test_checkpointing -v`. Tests involving MuJoCo require a working rendering backend and `mujoco-truss-gen`.
 
 Start a short local training run with:
 
 ```bash
-python sac/gnn_train.py device=cpu steps=1000 enable_wandb=false
+uv run python sac/train.py sac_backend=gnn device=cpu steps=1000 enable_wandb=false
 ```
 
-Hydra accepts command-line overrides. Quote list values in zsh, for example `'truss_topologies=[octahedron,tetrahedron]'`. Run backend benchmarks with `python scripts/benchmark_mujoco_backends.py`.
+Hydra accepts command-line overrides. Quote list values in zsh, for example `'truss_topologies=[octahedron,tetrahedron]'`. Select the simulator with `sim_backend=mujoco|mjx` (not the lower-level `mujoco_backend` key). Run backend benchmarks with `uv run python scripts/benchmark_mujoco_backends.py`.
 
 ## Coding Style & Naming Conventions
 

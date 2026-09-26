@@ -1,3 +1,5 @@
+> **Archived (2026-09-25).** Early (April 2026) problem framing. It proposes per-tendon edge actions and SB3 baseline stages; the implementation instead uses per-node actions routed through the control graph. See [design/architecture.md](../design/architecture.md) for the current design.
+
 # Problem Definition
 
 This document defines the first version of the control problem. Its job is to keep the implementation tied to a defensible thesis claim instead of drifting into a general reinforcement learning framework.
