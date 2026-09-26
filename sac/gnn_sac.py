@@ -342,6 +342,8 @@ class GNNSAC(torch.nn.Module):
             if distillation.weight > 0:
                 if task_batches is None:
                     raise ValueError("Distillation requires replay grouped by topology.")
+                # Broken-node regime tasks (see tensor_gnn_buffer._task_names)
+                # have no teacher and must never receive the KL term.
                 losses = [
                     self._teacher_loss(
                         task,
@@ -351,8 +353,10 @@ class GNNSAC(torch.nn.Module):
                         performance_profiler=performance_profiler,
                     )
                     for task, batch in task_batches.items()
+                    if task in distillation.teachers
                 ]
-                pi_loss = pi_loss + distillation.weight * torch.stack(losses).mean()
+                if losses:
+                    pi_loss = pi_loss + distillation.weight * torch.stack(losses).mean()
         log_prob = info["log_prob"]
         self._require_finite("actor loss", pi_loss)
         self._require_finite("actor distribution statistics", info)
@@ -410,7 +414,9 @@ class GNNSAC(torch.nn.Module):
         distillation = getattr(self, "distillation", None)
         if distillation is not None:
             distillation.metrics[f"sac_actor_loss/{task}"] = loss.detach()
-            if distillation.weight > 0:
+            # Broken-node regime tasks have no teacher and must never receive
+            # the KL term, unconditionally (not just while weight is decaying).
+            if distillation.weight > 0 and task in distillation.teachers:
                 loss = loss + distillation.weight * self._teacher_loss(
                     task,
                     obs,

@@ -15,7 +15,8 @@ sys.path.insert(0, str(ROOT / "sac"))
 
 from common.distillation import (
     TARGET_CACHE_FORMAT, Distillation, ObservationShards, _validate_action_alignment,
-    gaussian_forward_kl, graph_mean_kl, graph_signature, replay_observations,
+    gaussian_forward_kl, graph_mean_kl, graph_signature,
+    replay_contract_observation, replay_observations,
 )
 from common.gnn_actor_critic import GNNActorCritic
 from common.gnn_buffer import GNNBuffer
@@ -209,7 +210,7 @@ class TeacherReplayTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             list(replay_observations(dict(full, size=0)))
 
-    def test_tensor_v3_replay_observations_preserve_ring_order(self):
+    def test_tensor_v3_and_v4_replay_observations_preserve_ring_order_and_masks(self):
         cfg = config("/tmp", replay_backend="torchrl_tensor", replay_storage="cpu_pinned", buffer_size=8,
                      node_counts=[3, 5], obs_dim=6, action_dim=1, graph_features={})
         replay = TensorGNNBuffer(cfg)
@@ -218,16 +219,125 @@ class TeacherReplayTest(unittest.TestCase):
             obs.x.fill_(marker)
             following = raw_graph(3)
             following.x.fill_(marker + .5)
+            if marker % 2:
+                obs.action_mask[1] = False
+            if not marker % 2:
+                following.action_mask[1] = False
             item = lambda graph: dict(
                 obs=graph, action=torch.zeros(1, 3, 1), reward=torch.zeros(1),
                 terminated=torch.zeros(1),
             )
             replay.add([item(obs), item(following)], task=cfg.tasks[0])
-        task_state = replay.state_dict()["buffers"][cfg.tasks[0]]
-        self.assertEqual(
-            [int(graph.x[0, 0]) for graph in replay_observations(task_state)],
-            [2, 3, 4, 5],
-        )
+        v4 = replay.state_dict()["buffers"][cfg.tasks[0]]
+        v3 = deepcopy(v4)
+        v3["format_version"] = 3
+        storage = v3["replay_buffer"]["_storage"]["_storage"]
+        del storage["obs_action_mask"]
+        del storage["next_obs_action_mask"]
+
+        for version, task_state in ((3, v3), (4, v4)):
+            with self.subTest(version=version):
+                observations = list(replay_observations(task_state))
+                self.assertEqual([int(graph.x[0, 0]) for graph in observations], [2, 3, 4, 5])
+                expected_masks = (
+                    [task_state["static"]["action_mask"]] * 4
+                    if version == 3
+                    else [
+                        torch.tensor([True, True, False]),
+                        torch.tensor([True, False, False]),
+                        torch.tensor([True, True, False]),
+                        torch.tensor([True, False, False]),
+                    ]
+                )
+                for graph, expected_mask in zip(observations, expected_masks):
+                    torch.testing.assert_close(graph.action_mask, expected_mask)
+
+        broken_first = list(replay_observations(v4))[1]
+        self.assertFalse(broken_first.action_mask[1])
+        contract = replay_contract_observation(v4, broken_first)
+        torch.testing.assert_close(contract.action_mask, v4["static"]["action_mask"])
+        self.assertTrue(contract.action_mask[1])
+
+    def test_target_shards_preserve_variable_broken_node_masks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = config(tmp, graph_features={"node_roles": True})
+            teacher = GNNSAC(cfg).model.eval()
+            values = [raw_graph(3) for _ in range(3)]
+            values[1].action_mask[1] = False
+            prepare = lambda value: prepare_graph(
+                value, use_virtual_node=True, use_node_roles=True
+            )
+            base = prepare(values[0])
+            contract = {
+                "format": TARGET_CACHE_FORMAT,
+                "replay_signature": graph_signature(values[0]),
+                "prepared_signature": graph_signature(base),
+            }
+            dataset = ObservationShards.prepare(
+                Path(tmp) / "variable-mask-targets", iter(values), 3, contract,
+                teacher, prepare, torch.device("cpu"), 3, prefetch=False,
+            )
+            batch, cached_mean, cached_log_std = dataset.resolve(
+                {"shard": 0, "indices": [0, 1, 2]}, torch.device("cpu")
+            )
+            torch.testing.assert_close(
+                batch.action_mask.reshape(3, -1),
+                torch.stack([prepare(value).action_mask for value in values]),
+            )
+            with torch.no_grad():
+                live_mean, live_log_std = teacher.policy_distribution(batch)
+            torch.testing.assert_close(cached_mean, live_mean)
+            torch.testing.assert_close(cached_log_std, live_log_std)
+
+    def test_distillation_uses_tensor_replay_base_mask_as_online_contract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            teacher_cfg = config(
+                tmp, truss_topology="a", truss_topologies=None,
+                multitask=False, tasks=["truss-graph"], pretrain_updates=0,
+                replay_backend="torchrl_tensor", replay_storage="cpu_pinned",
+                buffer_size=4, node_counts=[3], graph_features={},
+            )
+            teacher_agent = GNNSAC(teacher_cfg)
+            replay = TensorGNNBuffer(teacher_cfg)
+            for marker in range(6):
+                obs, following = raw_graph(3), raw_graph(3)
+                if marker in {2, 4}:
+                    obs.action_mask[1] = False
+                item = lambda value: dict(
+                    obs=value, action=torch.zeros(1, 3, 1), reward=torch.zeros(1),
+                    terminated=torch.zeros(1),
+                )
+                replay.add([item(obs), item(following)], task="truss-graph")
+            replay_state = replay.state_dict()
+            task_state = replay_state["buffers"]["truss-graph"]
+            oldest = next(replay_observations(task_state))
+            self.assertFalse(oldest.action_mask[1])
+            self.assertTrue(task_state["static"]["action_mask"][1])
+
+            path = Path(tmp) / "tensor-teacher.pt"
+            torch.save(dict(
+                config=vars(teacher_cfg), agent=teacher_agent.training_state_dict(),
+                buffer=replay_state,
+            ), path)
+            student_cfg = config(
+                tmp, truss_topologies=["a"], tasks=["truss-graph:a"],
+                graph_features={},
+            )
+            student_cfg.distillation.update(
+                teachers={"a": str(path)}, pretrain_updates=0
+            )
+            distill = Distillation(student_cfg, student_cfg.tasks)
+            signature = distill.replay_signatures[student_cfg.tasks[0]]
+            self.assertTrue(signature["mask"][1])
+
+            online = TensorGNNBuffer(student_cfg)
+            distill.bind_replay(online)
+            intact = raw_graph(3)
+            item = lambda value: dict(
+                obs=value, action=torch.zeros(1, 3, 1), reward=torch.zeros(1),
+                terminated=torch.zeros(1),
+            )
+            online.add([item(intact), item(intact)], task=student_cfg.tasks[0])
 
     def test_frozen_teachers_routing_and_split_exclusion(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -443,6 +553,85 @@ class DistillationTrainingTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "schemas changed"):
                 distill.load_state_dict(changed)
 
+    @staticmethod
+    def _schedule_cfg(schedule):
+        return SimpleNamespace(
+            domain_randomization_params=SimpleNamespace(
+                broken_nodes=SimpleNamespace(schedule=schedule)
+            )
+        )
+
+    class _ScheduledDistillation:
+        def __init__(self, initial_weight=1.0, decay_steps=10):
+            self.initial_weight = initial_weight
+            self.decay_steps = decay_steps
+            self.step = -1
+
+        @property
+        def weight(self):
+            return self.initial_weight * max(
+                0.0, 1.0 - self.step / self.decay_steps
+            )
+
+    class _GateTarget:
+        def __init__(self):
+            self.enabled = None
+            self.calls = []
+
+        def set_broken_nodes_sampling_enabled(self, enabled):
+            self.enabled = bool(enabled)
+            self.calls.append(self.enabled)
+
+    def test_broken_node_curriculum_staged_waits_for_zero_weight_and_propagates(self):
+        # schedule="staged" reproduces the legacy behavior exactly: broken-node
+        # sampling stays off for every env until the distillation KL weight has
+        # fully decayed to zero.
+        cfg = self._schedule_cfg("staged")
+        first, second, bucket = self._GateTarget(), self._GateTarget(), self._GateTarget()
+        nested_env = SimpleNamespace(
+            env=first,
+            envs=[first, second],
+            buckets=[bucket],
+        )
+        distillation = self._ScheduledDistillation()
+        trainer = SimpleNamespace(cfg=cfg, env=nested_env, distillation=distillation, _step=9)
+
+        self.assertFalse(OnlineTrainer._sync_broken_nodes_curriculum(trainer))
+        self.assertEqual(distillation.step, 9)
+        self.assertEqual([first.enabled, second.enabled, bucket.enabled], [False] * 3)
+        self.assertEqual(first.calls, [False])
+
+        # A resumed run at the boundary must enable sampling before its next reset,
+        # even if the loaded distillation object's prior step was stale.
+        trainer._step = 10
+        distillation.step = 0
+        self.assertTrue(OnlineTrainer._sync_broken_nodes_curriculum(trainer))
+        self.assertEqual(distillation.step, 10)
+        self.assertEqual([first.enabled, second.enabled, bucket.enabled], [True] * 3)
+
+        zero_weight = self._ScheduledDistillation(initial_weight=0.0)
+        immediate = SimpleNamespace(cfg=cfg, env=self._GateTarget(), distillation=zero_weight, _step=0)
+        self.assertTrue(OnlineTrainer._sync_broken_nodes_curriculum(immediate))
+        self.assertTrue(immediate.env.enabled)
+
+        ordinary = SimpleNamespace(cfg=cfg, env=self._GateTarget(), distillation=None, _step=0)
+        self.assertTrue(OnlineTrainer._sync_broken_nodes_curriculum(ordinary))
+        self.assertTrue(ordinary.env.enabled)
+
+    def test_broken_node_curriculum_interleaved_ignores_distillation_weight(self):
+        # schedule="interleaved" (also the default when unspecified) keeps
+        # sampling enabled from step zero regardless of distillation weight,
+        # since each env slot's regime was already fixed at construction time.
+        for cfg in (self._schedule_cfg("interleaved"), SimpleNamespace()):
+            distillation = self._ScheduledDistillation()
+            trainer = SimpleNamespace(cfg=cfg, env=self._GateTarget(), distillation=distillation, _step=0)
+            self.assertTrue(OnlineTrainer._sync_broken_nodes_curriculum(trainer))
+            self.assertTrue(trainer.env.enabled)
+
+            trainer._step = 9
+            self.assertTrue(OnlineTrainer._sync_broken_nodes_curriculum(trainer))
+            self.assertTrue(trainer.env.enabled)
+
     def test_cached_targets_match_live_teacher_with_all_graph_features(self):
         with tempfile.TemporaryDirectory() as tmp:
             features = dict(node_roles=True, edge_roles=True, edge_distance=True)
@@ -638,6 +827,39 @@ class DistillationTrainingTest(unittest.TestCase):
                 deferred.prepare_offline_datasets()
             self.assertEqual(deferred.stage, "online")
             self.assertFalse(deferred.datasets)
+
+    def test_broken_regime_task_skips_teacher_loss_unconditionally(self):
+        # Broken-node regime tasks (see tensor_gnn_buffer._task_names, the
+        # "<task>__broken" suffix) have no teacher and must never receive the
+        # KL term, independent of the distillation.weight decay schedule.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg, distill = setup(tmp)
+            agent = GNNSAC(cfg)
+            agent.distillation = distill
+            standard_task = cfg.tasks[0]
+            broken_task = standard_task + "__broken"
+            self.assertNotIn(broken_task, distill.teachers)
+            obs = Batch.from_data_list([distill.prepare(raw_graph(3))])
+
+            rng = torch.random.get_rng_state()
+            with patch.object(
+                distill, "loss",
+                side_effect=AssertionError("teacher called for broken-regime task"),
+            ):
+                loss, _ = agent._task_pi_loss(broken_task, obs)
+            torch.random.set_rng_state(rng)
+            expected, _ = agent._pi_loss(obs)
+            torch.testing.assert_close(loss, expected)
+            self.assertNotIn(f"kl/{broken_task}", distill.metrics)
+            self.assertIn(f"sac_actor_loss/{broken_task}", distill.metrics)
+
+            distill.metrics = {}
+            with patch.object(distill, "loss", wraps=distill.loss) as loss_spy:
+                agent.update_pi_and_alpha(
+                    obs, task_batches={standard_task: (obs,), broken_task: (obs,)}
+                )
+            self.assertEqual(loss_spy.call_count, 1)
+            self.assertEqual(loss_spy.call_args.args[1], standard_task)
 
     def test_online_ordinary_and_pcgrad_and_zero_weight_equivalence(self):
         for pcgrad in (False, True):

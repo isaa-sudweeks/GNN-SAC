@@ -1,14 +1,15 @@
 import inspect
 from time import time 
 
-import numpy as np 
+import numpy as np
 import re
-import torch 
-from tensordict.tensordict import TensorDict 
+import torch
+from tensordict.tensordict import TensorDict
 from common.finite_checks import NonFiniteTrainingError
+from env.mujoco_gen.topology_envs import broken_node_schedule, is_broken_regime_task, regime_task_name
 from common.reward_normalizer import TaskRewardNormalizer
 from common.training_profiler import TrainingProfiler
-from trainer.base import Trainer 
+from trainer.base import Trainer
 
 try:
     from torch_geometric.data import Data
@@ -135,13 +136,22 @@ class OnlineTrainer(Trainer):
 
         self.distillation = None
         if enabled(self.cfg):
+            # Broken-node regime tasks (see tensor_gnn_buffer._task_names) have
+            # no teacher-compatible episodes and must never be visible to
+            # Distillation: this is what makes skipping the KL term for them
+            # an unconditional structural guarantee rather than a schedule-
+            # dependent one (see the actor-loss gating in gnn_sac.py).
+            standard_task_names = [
+                task for task in self.buffer.task_names if not is_broken_regime_task(task)
+            ]
             self.distillation = Distillation(
-                self.cfg, self.buffer.task_names, device=self.agent.device,
+                self.cfg, standard_task_names, device=self.agent.device,
                 defer_target_cache=True,
             )
             self.distillation.bind_replay(self.buffer)
             self.agent.distillation = self.distillation
         self.maybe_load_checkpoint()
+        self._sync_broken_nodes_curriculum()
         if self.distillation is not None:
             self.distillation.prepare_offline_datasets()
 
@@ -162,6 +172,56 @@ class OnlineTrainer(Trainer):
         if distillation.checkpoint_freq:
             self.save_checkpoint(identifier="distillation")
 
+    def _buffer_task(self, info):
+        """Replay/reward-normalization task key for a transition's info dict.
+
+        Folds the env's per-slot ``regime`` (see RepeatedEnvWrapper and
+        MjxVectorGraphEnv) into the task name so broken-node and standard
+        transitions land in separate buffers (tensor_gnn_buffer._task_names).
+        A transition without a ``regime`` key (regime splitting disabled, or
+        single-env runs) is unaffected.
+        """
+        return regime_task_name(info.get("task"), info.get("regime"))
+
+    def _sync_broken_nodes_curriculum(self) -> bool:
+        """Gate broken-node sampling per `broken_node_schedule`.
+
+        "staged" (legacy): broken-node sampling stays off for every env until
+        the online KL coefficient has fully decayed to zero.
+        "interleaved" (default): each env slot's regime was already fixed at
+        construction time (see RepeatedEnvWrapper/MjxVectorGraphEnv), so this
+        just keeps sampling enabled from step zero.
+
+        Environment setters deliberately affect only future resets, so episodes
+        already in progress keep the mask with which they started.
+        """
+        distillation = getattr(self, "distillation", None)
+        if distillation is not None:
+            distillation.step = int(self._step)
+        if broken_node_schedule(self.cfg) == "staged":
+            enabled = distillation is None or distillation.weight == 0.0
+        else:
+            enabled = True
+
+        pending = [self.env]
+        visited = set()
+        while pending:
+            current = pending.pop()
+            if current is None or id(current) in visited:
+                continue
+            visited.add(id(current))
+            setter = getattr(current, "set_broken_nodes_sampling_enabled", None)
+            if callable(setter):
+                setter(enabled)
+            nested = getattr(current, "env", None)
+            if nested is not None:
+                pending.append(nested)
+            for attribute in ("envs", "buckets"):
+                children = getattr(current, attribute, None)
+                if children is not None:
+                    pending.extend(children)
+        return enabled
+
     def _make_reward_normalizer(self):
         if not bool(getattr(self.cfg, "normalize_rewards", False)):
             return None
@@ -180,7 +240,7 @@ class OnlineTrainer(Trainer):
     def _normalization_task(self, info):
         task = info.get("task")
         if task is not None:
-            return str(task)
+            return str(self._buffer_task(info))
         task_names = getattr(self.buffer, "task_names", None)
         if task_names is not None and len(task_names) == 1:
             return str(task_names[0])
@@ -800,6 +860,7 @@ class OnlineTrainer(Trainer):
                             reward_metrics.update(self._episode_reward_components)
                             self.logger.log(reward_metrics, 'training_rewards')
                     self._reset_reward_normalizer_streams([0])
+                    self._sync_broken_nodes_curriculum()
                     obs = self._apply_observation_noise(self.env.reset())
                     self._tds = [self.to_td(obs)]
                     self._episode_reward_components = {}
@@ -835,7 +896,7 @@ class OnlineTrainer(Trainer):
                     previous_td,
                     current_td,
                     completed=bool(done),
-                    task=info.get("task"),
+                    task=self._buffer_task(info),
                 )
             self._queue_collected_transitions(inserted_transitions)
 
@@ -924,6 +985,7 @@ class OnlineTrainer(Trainer):
                     self._episode_reward_components = previous_components
 
                     self._reset_reward_normalizer_streams(done_indices)
+                    self._sync_broken_nodes_curriculum()
                     reset_obs = [
                         self._apply_observation_noise(obs)
                         for obs in self.env.reset_many(env_indices=done_indices)
@@ -975,7 +1037,7 @@ class OnlineTrainer(Trainer):
                     )
                     episode_tds[env_idx].append(current_td)
                     pending_insertions.append(
-                        (previous_td, current_td, bool(is_done), info.get("task"))
+                        (previous_td, current_td, bool(is_done), self._buffer_task(info))
                     )
             with self.performance_profiler.phase("replay_insertion"):
                 for previous_td, current_td, is_done, task in pending_insertions:

@@ -17,7 +17,9 @@ for path in (ROOT, SAC_ROOT):
         sys.path.insert(0, str(path))
 
 from common.gnn_buffer import GNNBuffer
-from common.tensor_gnn_buffer import TensorGNNBuffer, make_gnn_buffer
+from common.graph_transforms import graph_structure_signature
+from common.tensor_gnn_buffer import TensorGNNBuffer, _task_names, make_gnn_buffer
+from common.distillation import replay_observations
 from gnn_sac import GNNSAC
 from tests.test_task_balanced_replay import (
     agent_cfg as legacy_agent_cfg,
@@ -60,6 +62,16 @@ def transition(marker, nodes, *, metadata=False):
         dict(obs=graph(marker, nodes, metadata=metadata), action=action, reward=reward, terminated=terminated),
         dict(obs=graph(marker + .5, nodes, metadata=metadata), action=action, reward=reward, terminated=terminated),
     ]
+
+
+def masked_transition(marker, current_mask, next_mask=None):
+    current_mask = torch.as_tensor(current_mask, dtype=torch.bool)
+    next_mask = current_mask if next_mask is None else torch.as_tensor(next_mask, dtype=torch.bool)
+    nodes = int(current_mask.numel())
+    values = transition(marker, nodes, metadata=True)
+    values[0]["obs"].action_mask = current_mask.clone()
+    values[1]["obs"].action_mask = next_mask.clone()
+    return values
 
 
 def populate(buffer, *, metadata=False, count=6):
@@ -157,6 +169,119 @@ class TensorGNNBufferTest(unittest.TestCase):
         torch.manual_seed(12)
         actual = tensor.sample()
         assert_batch_equal(self, expected, actual)
+
+    def test_dynamic_action_masks_are_stored_and_reconstructed_per_transition(self):
+        cfg = config(
+            multitask=False, task="graph", tasks=[], node_counts=[3], num_nodes=3,
+            buffer_size=4, batch_size=2, graph_features={"node_roles": True},
+        )
+        tensor = TensorGNNBuffer(cfg)
+        first_current = torch.tensor([True, True, False])
+        first_next = torch.tensor([True, False, False])
+        second_current = torch.tensor([False, True, True])
+        second_next = torch.tensor([False, True, False])
+        tensor.add(masked_transition(1, first_current, first_next))
+        tensor.add(masked_transition(2, second_current, second_next))
+
+        state = tensor.state_dict()
+        self.assertEqual(state["format_version"], 4)
+        task_state = state["buffers"]["graph"]
+        fields = task_state["replay_buffer"]["_storage"]["_storage"]
+        torch.testing.assert_close(
+            fields["obs_action_mask"][:2], torch.stack((first_current, second_current))
+        )
+        torch.testing.assert_close(
+            fields["next_obs_action_mask"][:2], torch.stack((first_next, second_next))
+        )
+
+        with patch("torch.randint", return_value=torch.tensor([0, 1])):
+            observations, _, _, _, next_observations = tensor.sample()
+        torch.testing.assert_close(
+            observations.action_mask.reshape(2, 3),
+            torch.stack((first_current, second_current)),
+        )
+        torch.testing.assert_close(
+            next_observations.action_mask.reshape(2, 3),
+            torch.stack((first_next, second_next)),
+        )
+        torch.testing.assert_close(
+            observations.x.reshape(2, 3, -1)[:, :, 6:8],
+            torch.stack((
+                torch.stack((first_current, ~first_current), dim=-1),
+                torch.stack((second_current, ~second_current), dim=-1),
+            )).float(),
+        )
+        self.assertEqual(observations._policy_action_count_cache, 4)
+        self.assertEqual(next_observations._policy_action_count_cache, 2)
+
+        with patch("torch.randint", return_value=torch.tensor([0, 1])):
+            raw = tensor.sample_with_tasks(combine=False).raw_observations_by_task["graph"]
+        torch.testing.assert_close(raw[0].action_mask, first_current)
+        torch.testing.assert_close(raw[1].action_mask, second_current)
+
+    def test_teacher_signature_accepts_only_dynamic_active_subsets(self):
+        cfg = config(
+            multitask=False, task="graph", tasks=[], node_counts=[3], num_nodes=3,
+            buffer_size=4, batch_size=1, graph_features={"node_roles": True},
+        )
+        tensor = TensorGNNBuffer(cfg)
+        base = masked_transition(0, [True, True, False])[0]["obs"]
+        tensor.set_task_graph_signatures({"graph": graph_structure_signature(base)})
+        tensor.add(masked_transition(1, [True, False, False]))
+        with self.assertRaisesRegex(ValueError, "differs from teacher"):
+            tensor.add(masked_transition(2, [True, False, True]))
+        with self.assertRaisesRegex(ValueError, "Invalid teacher action mask"):
+            tensor.add(masked_transition(3, [False, False, False]))
+        changed_edges = masked_transition(4, [True, False, False])
+        changed_edges[0]["obs"].edge_index = changed_edges[0]["obs"].edge_index.roll(1, 1)
+        with self.assertRaisesRegex(ValueError, "topology or action ordering"):
+            tensor.add(changed_edges)
+
+    def test_v3_checkpoint_upgrades_masks_and_accepts_dynamic_writes(self):
+        cfg = config(
+            multitask=False, task="graph", tasks=[], node_counts=[3], num_nodes=3,
+            buffer_size=4, batch_size=2, graph_features={"node_roles": True},
+        )
+        original = TensorGNNBuffer(cfg)
+        base_mask = torch.tensor([True, True, False])
+        original.add(masked_transition(1, base_mask))
+        original.add(masked_transition(2, base_mask))
+        v3 = original.state_dict()
+        v3["format_version"] = 3
+        for task_state in v3["buffers"].values():
+            task_state["format_version"] = 3
+            storage = task_state["replay_buffer"]["_storage"]["_storage"]
+            del storage["obs_action_mask"]
+            del storage["next_obs_action_mask"]
+
+        restored = TensorGNNBuffer(config(
+            multitask=False, task="graph", tasks=[], node_counts=[3], num_nodes=3,
+            buffer_size=4, batch_size=2, graph_features={"node_roles": True},
+        ))
+        restored.load_state_dict(v3)
+        upgraded = restored.state_dict()
+        self.assertEqual(upgraded["format_version"], 4)
+        upgraded_fields = upgraded["buffers"]["graph"]["replay_buffer"]["_storage"]["_storage"]
+        torch.testing.assert_close(
+            upgraded_fields["obs_action_mask"][:2], base_mask.repeat(2, 1)
+        )
+        torch.testing.assert_close(
+            upgraded_fields["next_obs_action_mask"][:2], base_mask.repeat(2, 1)
+        )
+
+        dynamic_mask = torch.tensor([True, False, False])
+        restored.add(masked_transition(3, dynamic_mask))
+        v4 = restored.state_dict()
+        reloaded = TensorGNNBuffer(config(
+            multitask=False, task="graph", tasks=[], node_counts=[3], num_nodes=3,
+            buffer_size=4, batch_size=2, graph_features={"node_roles": True},
+        ))
+        reloaded.load_state_dict(v4)
+        assert_tensor_task_state_equal(
+            self, v4["buffers"]["graph"], reloaded.state_dict()["buffers"]["graph"]
+        )
+        replayed = list(replay_observations(v4["buffers"]["graph"]))
+        torch.testing.assert_close(replayed[-1].action_mask, dynamic_mask)
 
     def test_full_ring_nonzero_cursor_round_trip_preserves_future_overwrites(self):
         tensor = TensorGNNBuffer(config(buffer_size=8))
@@ -400,6 +525,47 @@ class TensorGNNBufferTest(unittest.TestCase):
         torch.manual_seed(27)
         actual = tensor.sample()
         assert_batch_equal(self, expected, actual)
+
+    def test_task_names_fans_out_broken_regime_sibling_when_interleaved(self):
+        base_cfg = config(
+            task="graph", tasks=None, multitask=False, mujoco_backend="mujoco",
+            truss_topologies=None, num_envs=4,
+            domain_randomization=True,
+            domain_randomization_params={
+                "broken_nodes": {
+                    "enabled": True, "probability": 0.2, "regime_fraction": 0.5,
+                },
+            },
+            graph_features={"node_roles": True}, use_control_graph=True,
+        )
+        self.assertEqual(_task_names(base_cfg), ["graph", "graph__broken"])
+
+        # Disabling either the fraction, the schedule, or num_envs>1 must
+        # leave today's task registry untouched.
+        self.assertEqual(
+            _task_names(SimpleNamespace(**{**vars(base_cfg), "num_envs": 1})),
+            ["graph"],
+        )
+        staged = SimpleNamespace(**{**vars(base_cfg)})
+        staged.domain_randomization_params = dict(base_cfg.domain_randomization_params)
+        staged.domain_randomization_params["broken_nodes"] = {
+            **base_cfg.domain_randomization_params["broken_nodes"], "schedule": "staged",
+        }
+        self.assertEqual(_task_names(staged), ["graph"])
+        self.assertEqual(
+            _task_names(config(task="graph", tasks=None, multitask=False, num_envs=4)),
+            ["graph"],
+        )
+
+        # regime_fraction=1.0 makes every slot broken-eligible, so a standard
+        # sibling task would never receive transitions and stall replay
+        # readiness forever -- only the broken task should be registered.
+        all_broken = SimpleNamespace(**{**vars(base_cfg)})
+        all_broken.domain_randomization_params = dict(base_cfg.domain_randomization_params)
+        all_broken.domain_randomization_params["broken_nodes"] = {
+            **base_cfg.domain_randomization_params["broken_nodes"], "regime_fraction": 1.0,
+        }
+        self.assertEqual(_task_names(all_broken), ["graph__broken"])
 
 
 if __name__ == "__main__":
