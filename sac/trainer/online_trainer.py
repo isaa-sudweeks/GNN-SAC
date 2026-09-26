@@ -964,6 +964,8 @@ class OnlineTrainer(Trainer):
             ]
         else:
             actions = self.agent.act_dense([bucket.policy_group(self.cfg) for bucket in buckets])
+            # The learner device may differ from the simulator device (device=cpu with MJX on CUDA).
+            actions = [action.to(bucket.device) for bucket, action in zip(buckets, actions)]
         if self._should_apply_action_noise(seed_action=using_seed_actions):
             actions = [self._apply_action_noise(action) for action in actions]
         if callable(getattr(type(self.agent), "project_action", None)):
@@ -997,16 +999,20 @@ class OnlineTrainer(Trainer):
                     )
                     self.logger.log(reward_metrics, 'training_rewards')
 
-    def _normalize_vector_rewards(self, bucket, reward):
+    def _normalize_vector_rewards(self, bucket, reward, keep=None):
+        """Normalize one bucket's rewards, updating statistics only from kept slots.
+
+        On the final partial vector step, slots beyond the step budget are
+        simulated but never stored, so they must not affect normalization.
+        """
         if getattr(self, "reward_normalizer", None) is None:
             return reward
-        normalized = torch.empty_like(reward)
-        for task, slots in bucket.task_slots.items():
+        normalized = reward.clone()
+        for task, slots in bucket.task_groups(keep):
             if slots is None:
-                normalized = self.reward_normalizer.normalize_batch(
+                return self.reward_normalizer.normalize_batch(
                     reward, bucket.normalizer_returns, task=task
                 )
-                continue
             returns = bucket.normalizer_returns.index_select(0, slots)
             normalized[slots] = self.reward_normalizer.normalize_batch(
                 reward.index_select(0, slots), returns, task=task
@@ -1069,20 +1075,20 @@ class OnlineTrainer(Trainer):
             with self.performance_profiler.phase("transition_processing"):
                 pending = []
                 for bucket, action, (next_obs, reward, done, info) in zip(buckets, actions, results):
+                    keep = None if keep_count >= num_envs else bucket.global_indices < keep_count
                     next_obs["x"] = observation_noise(next_obs["x"])
                     terminated = (
                         info["terminated"].float() if episodic and "terminated" in info
                         else torch.zeros_like(reward)
                     )
-                    normalized_reward = self._normalize_vector_rewards(bucket, reward)
+                    normalized_reward = self._normalize_vector_rewards(bucket, reward, keep)
                     bucket.normalizer_returns.masked_fill_(done, 0.0)
                     bucket.record_step(reward, done, info)
-                    pending.append((bucket, action, next_obs, normalized_reward, terminated))
+                    pending.append((bucket, keep, action, next_obs, normalized_reward, terminated))
                 done_flags = [done.cpu().numpy() for _, _, done, _ in results]
 
             with self.performance_profiler.phase("replay_insertion"):
-                for (bucket, action, next_obs, reward, terminated), done in zip(pending, done_flags):
-                    keep = None if keep_count >= num_envs else bucket.global_indices < keep_count
+                for (bucket, keep, action, next_obs, reward, terminated), done in zip(pending, done_flags):
                     for task, slots in bucket.task_groups(keep):
                         transitions = {
                             "obs_x": bucket.obs["x"],

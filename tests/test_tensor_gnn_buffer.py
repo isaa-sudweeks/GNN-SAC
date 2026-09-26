@@ -623,6 +623,33 @@ class DenseReplayTest(unittest.TestCase):
                     "edge_attr", "edge_type", "rigidity"):
             torch.testing.assert_close(actual[key], expected[key], rtol=0, atol=0, msg=key)
 
+    def test_dense_graph_batch_moves_rollout_tensors_to_the_learner_device(self):
+        from common.tensor_gnn_buffer import DenseGraphGroup, build_graph_static, dense_graph_batch
+
+        if torch.cuda.is_available():
+            rollout_device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            rollout_device = torch.device("mps")
+        else:
+            self.skipTest("needs an accelerator distinct from the CPU learner")
+        cfg = config(use_virtual_node=True, graph_features=self.FEATURES)
+        topology = [graph(marker, 4, metadata=True) for marker in (0, 1)]
+        static = build_graph_static(cfg, topology[0], torch.zeros(4, 1))
+
+        def group(device):
+            return DenseGraphGroup(
+                static=static,
+                x=torch.stack([item.x for item in topology]).to(device),
+                rigidity=torch.stack([item.rigidity for item in topology]).to(device),
+                action_mask=torch.stack([item.action_mask for item in topology]).to(device),
+            )
+
+        expected = dense_graph_batch(cfg, [group("cpu")], "cpu")
+        actual = dense_graph_batch(cfg, [group(rollout_device)], "cpu")
+        for key in expected.keys():
+            self.assertEqual(actual[key].device.type, "cpu", msg=key)
+            torch.testing.assert_close(actual[key], expected[key], rtol=0, atol=0, msg=key)
+
     def test_add_dense_matches_per_transition_add(self):
         cfg = config(use_virtual_node=True, graph_features=self.FEATURES)
         expected, actual = TensorGNNBuffer(cfg), TensorGNNBuffer(config(

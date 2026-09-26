@@ -134,7 +134,8 @@ class VectorizedCollectionTest(unittest.TestCase):
 
     def _train(self, mode):
         work_dir = Path(self._tmp.name) / mode
-        cfg = training_cfg(work_dir, vectorized_collection=mode, seed=3)
+        # 15 steps per topology x 2 topologies = 30, so the last 4-env vector step is partial.
+        cfg = training_cfg(work_dir, vectorized_collection=mode, seed=3, steps=15)
         env = make_env(cfg)
         agent = GNNSAC(cfg)
         buffer = make_gnn_buffer(cfg)
@@ -148,15 +149,21 @@ class VectorizedCollectionTest(unittest.TestCase):
     def test_vectorized_training_matches_per_environment_bookkeeping(self):
         vectorized = self._train("true")
         per_env = self._train("false")
+        self.assertEqual(vectorized._step, 30)
         self.assertEqual(vectorized._step, per_env._step)
         self.assertEqual(vectorized._ep_idx, per_env._ep_idx)
         self.assertEqual(vectorized._optimizer_updates, per_env._optimizer_updates)
         self.assertEqual(vectorized.buffer.sizes_by_task, per_env.buffer.sizes_by_task)
-        stats = vectorized.reward_normalizer.metrics()
+        counts = {
+            task: values["count"] for task, values in vectorized.reward_normalizer.metrics().items()
+        }
         self.assertEqual(
-            {task: values["count"] for task, values in stats.items()},
+            counts,
             {task: values["count"] for task, values in per_env.reward_normalizer.metrics().items()},
         )
+        # Slots simulated past the step budget on the partial final step must not
+        # enter the normalization statistics.
+        self.assertEqual(counts, vectorized.buffer.sizes_by_task)
 
     def test_forced_vectorized_collection_rejects_unsupported_setups(self):
         trainer = SimpleNamespace(

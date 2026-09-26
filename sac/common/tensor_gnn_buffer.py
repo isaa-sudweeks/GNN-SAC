@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import torch
 from tensordict import TensorDict
 from torch_geometric.data import Batch, Data
@@ -186,6 +186,14 @@ def dense_graph_batch(cfg, groups, device) -> Batch:
     ptr_parts.append(torch.zeros(1, dtype=torch.long, device=device))
     graph_offset = node_offset = 0
     for group in groups:
+        # Rollout tensors may live on the simulator device (e.g. MJX on CUDA)
+        # while the learner runs elsewhere; build the whole batch on `device`.
+        group = replace(
+            group,
+            x=group.x.to(device),
+            rigidity=None if group.rigidity is None else group.rigidity.to(device),
+            action_mask=None if group.action_mask is None else group.action_mask.to(device),
+        )
         static = group.static
         x, edge_attr = _dense_prepared_features(cfg, group, device)
         count, nodes = int(x.size(0)), int(x.size(1))
