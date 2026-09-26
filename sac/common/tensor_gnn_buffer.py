@@ -13,6 +13,7 @@ from torchrl.data import LazyTensorStorage, ReplayBufferEnsemble, TensorDictRepl
 from env.mujoco_gen.topology_envs import fan_out_broken_regime_tasks
 
 from common.config_utils import round_to_nearest_multiple
+from common.finite_checks import require_finite
 from common.gnn_buffer import ReplayBatch
 from common.graph_transforms import (
     graph_feature_flags,
@@ -219,6 +220,10 @@ class _TensorTaskBuffer:
         if role is not None and not torch.equal(role.detach().cpu().long(), saved_role):
             raise ValueError("Replay observation edge roles changed within a task.")
 
+    def _require_finite(self, label, values) -> None:
+        if bool(getattr(self.cfg, "finite_checks", True)):
+            require_finite(label, values)
+
     def add(self, td, count_episode=True):
         if isinstance(td, list):
             observations = [step["obs"] for step in td]
@@ -246,6 +251,7 @@ class _TensorTaskBuffer:
         for graph in (*current, *following):
             self._validate_graph(graph)
         values = self._build_values(current, following, actions, rewards, terminated)
+        self._require_finite("replay insertion", values)
         self._buffer.extend(values)
         self._idx = (self._idx + count) % self._capacity
         self._size = min(self._size + count, self._capacity)
@@ -308,6 +314,7 @@ class _TensorTaskBuffer:
                 current, following, state["action"][start:stop],
                 state["reward"][start:stop], state["terminated"][start:stop],
             )
+            self._require_finite("loaded legacy replay checkpoint", values)
             self._buffer.extend(values)
         self._num_eps, self._size, self._idx = int(state["num_eps"]), size, index
         self._buffer.writer._cursor_value.value = index
@@ -387,7 +394,9 @@ class _TensorTaskBuffer:
                 fields["next_obs_action_mask"] = saved_mask.unsqueeze(0).expand(
                     self._size, -1
                 ).clone()
-            self._buffer.extend(TensorDict(fields, batch_size=[self._size], device=self._storage_device))
+            values = TensorDict(fields, batch_size=[self._size], device=self._storage_device)
+            self._require_finite("loaded replay checkpoint", values)
+            self._buffer.extend(values)
             # A full ring may have a cursor other than zero. TorchRL owns the
             # circular writer, but this compatibility cursor is checkpointed by
             # GNN-SAC and must be restored exactly.

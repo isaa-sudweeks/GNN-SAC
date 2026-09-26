@@ -16,6 +16,7 @@ for path in (ROOT, SAC_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from common.finite_checks import NonFiniteTrainingError
 from common.gnn_buffer import GNNBuffer
 from common.graph_transforms import graph_structure_signature
 from common.tensor_gnn_buffer import TensorGNNBuffer, _task_names, make_gnn_buffer
@@ -566,6 +567,61 @@ class TensorGNNBufferTest(unittest.TestCase):
             **base_cfg.domain_randomization_params["broken_nodes"], "regime_fraction": 1.0,
         }
         self.assertEqual(_task_names(all_broken), ["graph__broken"])
+
+
+class TensorGNNBufferFiniteChecksTest(unittest.TestCase):
+    @staticmethod
+    def poisoned_transition(field):
+        values = transition(1, 3, metadata=True)
+        if field == "obs_x":
+            values[0]["obs"].x[0, 0] = float("nan")
+        elif field == "next_obs_rigidity":
+            values[1]["obs"].rigidity = torch.tensor([float("inf")])
+        else:
+            key = field
+            values[1][key] = torch.full_like(values[1][key], float("nan"))
+        return values
+
+    def test_nonfinite_insertion_is_rejected_like_legacy(self):
+        for field in ("obs_x", "next_obs_rigidity", "action", "reward", "terminated"):
+            with self.subTest(field=field):
+                legacy = GNNBuffer(config(tasks=["graph"], multitask=False, node_counts=[3], num_nodes=3))
+                tensor = TensorGNNBuffer(config(tasks=["graph"], multitask=False, node_counts=[3], num_nodes=3))
+                with self.assertRaises(NonFiniteTrainingError):
+                    legacy.add(self.poisoned_transition(field))
+                with self.assertRaisesRegex(NonFiniteTrainingError, rf"replay insertion\.{field}"):
+                    tensor.add(self.poisoned_transition(field))
+                self.assertEqual((legacy.size, tensor.size), (0, 0))
+                self.assertEqual(tensor.num_eps, 0)
+
+    def test_disabled_finite_checks_store_nonfinite_insertion(self):
+        cfg = config(tasks=["graph"], multitask=False, node_counts=[3], num_nodes=3, finite_checks=False)
+        tensor = TensorGNNBuffer(cfg)
+        tensor.add(self.poisoned_transition("reward"))
+        self.assertEqual(tensor.size, 1)
+
+    def test_nonfinite_checkpoint_load_is_rejected(self):
+        tensor = TensorGNNBuffer(config())
+        populate(tensor)
+        state = tensor.state_dict()
+        fields = state["buffers"]["graph:b"]["replay_buffer"]["_storage"]["_storage"]
+        fields["reward"][2] = float("nan")
+        with self.assertRaisesRegex(
+            NonFiniteTrainingError, r"loaded replay checkpoint\.reward contains 1 non-finite"
+        ):
+            TensorGNNBuffer(config()).load_state_dict(state)
+
+    def test_nonfinite_legacy_checkpoint_conversion_is_rejected(self):
+        legacy = GNNBuffer(config())
+        populate(legacy)
+        state = legacy.state_dict()
+        state["buffers"]["graph:a"]["action"][1] = torch.full_like(
+            torch.as_tensor(state["buffers"]["graph:a"]["action"][1]), float("inf")
+        )
+        with self.assertRaisesRegex(
+            NonFiniteTrainingError, r"loaded legacy replay checkpoint\.action"
+        ):
+            TensorGNNBuffer(config()).load_legacy_state_dict(state)
 
 
 if __name__ == "__main__":
