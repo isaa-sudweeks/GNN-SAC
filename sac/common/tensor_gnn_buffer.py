@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import torch
 from tensordict import TensorDict
 from torch_geometric.data import Batch, Data
@@ -63,6 +63,188 @@ def _task_names(cfg) -> list[str]:
     if not result:
         raise ValueError("Task-balanced replay requires at least one task.")
     return fan_out_broken_regime_tasks(result, cfg, slots_per_task)
+
+
+@dataclass(frozen=True)
+class DenseGraphGroup:
+    """Same-topology graphs stored as dense tensors plus their replay static metadata."""
+
+    static: dict
+    x: torch.Tensor
+    rigidity: torch.Tensor | None = None
+    action_mask: torch.Tensor | None = None
+
+
+def build_graph_static(cfg, graph: Data, action: torch.Tensor) -> dict:
+    """Return the per-topology template used to rebuild prepared graphs from dense rows."""
+    extra = set(graph.keys()) - _SUPPORTED_GRAPH_FIELDS
+    if extra:
+        raise ValueError(f"Tensor replay does not support graph fields: {sorted(extra)!r}.")
+    mask = getattr(graph, "action_mask", None)
+    role = getattr(graph, "edge_role", None)
+    rigidity = getattr(graph, "rigidity", None)
+    template = Data(x=torch.zeros_like(graph.x), edge_index=graph.edge_index.detach().clone())
+    if mask is not None:
+        template.action_mask = mask.detach().clone().bool()
+    if role is not None:
+        template.edge_role = role.detach().clone().long()
+    if rigidity is not None:
+        template.rigidity = torch.zeros_like(torch.as_tensor(rigidity).reshape(1)).float()
+    prepared = prepare_graph(
+        template,
+        use_virtual_node=bool(getattr(cfg, "use_virtual_node", False)),
+        **graph_feature_flags(cfg),
+    )
+    return {
+        "raw_node_count": int(graph.x.size(0)),
+        "raw_feature_dim": int(graph.x.size(1)),
+        "action_shape": list(action.shape),
+        "edge_index": graph.edge_index.detach().cpu().long().contiguous(),
+        "action_mask": None if mask is None else mask.detach().cpu().bool().contiguous(),
+        "edge_role": None if role is None else role.detach().cpu().long().contiguous(),
+        "has_rigidity": rigidity is not None,
+        "prepared_edge_index": prepared.edge_index.detach().cpu().long().contiguous(),
+        "prepared_action_mask": (
+            prepared.action_mask.detach().cpu().bool().contiguous()
+            if "action_mask" in prepared else None
+        ),
+        "prepared_physical_node_mask": (
+            prepared.physical_node_mask.detach().cpu().bool().contiguous()
+            if "physical_node_mask" in prepared else None
+        ),
+        "prepared_x_template": prepared.x.detach().cpu().contiguous(),
+        "prepared_edge_attr_template": (
+            prepared.edge_attr.detach().cpu().contiguous() if "edge_attr" in prepared else None
+        ),
+        "prepared_edge_role": (
+            prepared.edge_role.detach().cpu().long().contiguous() if "edge_role" in prepared else None
+        ),
+        "prepared_edge_type": (
+            prepared.edge_type.detach().cpu().long().contiguous() if "edge_type" in prepared else None
+        ),
+        "raw_edge_count": int(graph.edge_index.size(1)),
+        "signature": graph_structure_signature(graph),
+    }
+
+
+def _dense_prepared_features(cfg, group: DenseGraphGroup, device):
+    """Apply ``prepare_graph`` feature augmentation to every dense row at once."""
+    static, raw_x = group.static, group.x
+    count, raw_nodes, raw_features = raw_x.shape
+    flags = graph_feature_flags(cfg)
+    template_x = static["prepared_x_template"].to(device)
+    x = template_x.unsqueeze(0).expand(count, -1, -1).clone()
+    x[:, :raw_nodes, :raw_features] = raw_x
+    if flags["use_node_roles"]:
+        if group.action_mask is not None:
+            action_mask = group.action_mask.bool()
+        else:
+            action_mask = static["prepared_action_mask"].to(device)[:raw_nodes]
+            action_mask = action_mask.unsqueeze(0).expand(count, -1)
+        node_roles = torch.stack((action_mask, ~action_mask), dim=-1).to(x.dtype)
+        x[:, :raw_nodes, raw_features:raw_features + 2] = node_roles
+    if bool(getattr(cfg, "use_virtual_node", False)):
+        rigidity = (
+            torch.zeros(count, device=device, dtype=x.dtype)
+            if group.rigidity is None else group.rigidity.reshape(-1)
+        )
+        x[:, -1, -1] = rigidity
+    template_edge_attr = static["prepared_edge_attr_template"]
+    edge_attr = None
+    if template_edge_attr is not None:
+        edge_attr = template_edge_attr.to(device).unsqueeze(0).expand(count, -1, -1).clone()
+        if flags["use_edge_distance"]:
+            edge_index = static["edge_index"].to(device)
+            distance = torch.linalg.vector_norm(
+                raw_x[:, edge_index[0], :3] - raw_x[:, edge_index[1], :3], dim=-1
+            )
+            edge_attr[:, :static["raw_edge_count"], -1] = distance
+    return x, edge_attr
+
+
+def _dense_prepared_action_mask(group: DenseGraphGroup, device):
+    prepared = group.static["prepared_action_mask"]
+    if prepared is None:
+        return None
+    count = int(group.x.size(0))
+    result = prepared.to(device).unsqueeze(0).expand(count, -1).clone()
+    if group.action_mask is not None:
+        result[:, :group.static["raw_node_count"]] = group.action_mask.bool()
+    return result
+
+
+def dense_graph_batch(cfg, groups, device) -> Batch:
+    """Build one prepared PyG ``Batch`` from dense same-topology graph groups.
+
+    This is equivalent to ``Batch.from_data_list([prepare_graph(g) for g in graphs])``
+    but costs a fixed number of tensor operations per topology instead of Python
+    work per graph.
+    """
+    device = torch.device(device)
+    x_parts, edge_parts, attr_parts, mask_parts, physical_parts = [], [], [], [], []
+    role_parts, type_parts, rigidity_parts, graph_ids, ptr_parts = [], [], [], [], []
+    ptr_parts.append(torch.zeros(1, dtype=torch.long, device=device))
+    graph_offset = node_offset = 0
+    for group in groups:
+        # Rollout tensors may live on the simulator device (e.g. MJX on CUDA)
+        # while the learner runs elsewhere; build the whole batch on `device`.
+        group = replace(
+            group,
+            x=group.x.to(device),
+            rigidity=None if group.rigidity is None else group.rigidity.to(device),
+            action_mask=None if group.action_mask is None else group.action_mask.to(device),
+        )
+        static = group.static
+        x, edge_attr = _dense_prepared_features(cfg, group, device)
+        count, nodes = int(x.size(0)), int(x.size(1))
+        static_edge = static["prepared_edge_index"].to(device)
+        edges = int(static_edge.size(1))
+        offsets = torch.arange(count, device=device).view(-1, 1, 1) * nodes + node_offset
+        edge_parts.append((static_edge.view(1, 2, edges) + offsets).permute(1, 0, 2).reshape(2, -1))
+        x_parts.append(x.flatten(0, 1))
+        mask = _dense_prepared_action_mask(group, device)
+        if mask is not None:
+            mask_parts.append(mask.flatten())
+        physical = static["prepared_physical_node_mask"]
+        if physical is not None:
+            physical_parts.append(physical.to(device).repeat(count))
+        graph_ids.append(
+            torch.arange(graph_offset, graph_offset + count, device=device).repeat_interleave(nodes)
+        )
+        ptr_parts.append(node_offset + torch.arange(1, count + 1, device=device) * nodes)
+        if edge_attr is not None:
+            attr_parts.append(edge_attr.flatten(0, 1))
+        if static["prepared_edge_role"] is not None:
+            role_parts.append(static["prepared_edge_role"].to(device).repeat(count))
+        if static["prepared_edge_type"] is not None:
+            type_parts.append(static["prepared_edge_type"].to(device).repeat(count))
+        if static["has_rigidity"]:
+            rigidity_parts.append(group.rigidity.reshape(-1))
+        graph_offset += count
+        node_offset += count * nodes
+    kwargs = {
+        "x": torch.cat(x_parts),
+        "edge_index": torch.cat(edge_parts, dim=1),
+        "batch": torch.cat(graph_ids),
+        "ptr": torch.cat(ptr_parts),
+    }
+    if mask_parts:
+        kwargs["action_mask"] = torch.cat(mask_parts)
+    if physical_parts:
+        kwargs["physical_node_mask"] = torch.cat(physical_parts)
+    if attr_parts:
+        kwargs["edge_attr"] = torch.cat(attr_parts)
+    if role_parts:
+        kwargs["edge_role"] = torch.cat(role_parts)
+    if type_parts:
+        kwargs["edge_type"] = torch.cat(type_parts)
+    if rigidity_parts:
+        kwargs["rigidity"] = torch.cat(rigidity_parts)
+    batch = Batch(**kwargs)
+    batch._num_graphs = graph_offset
+    object.__setattr__(batch, "_physical_node_count_cache", int(physical_node_mask(batch).sum()))
+    object.__setattr__(batch, "_policy_action_count_cache", int(policy_action_mask(batch).sum()))
+    return batch
 
 
 def _move_tree(value, device):
@@ -133,54 +315,7 @@ class _TensorTaskBuffer:
         raise TypeError(f"Unsupported transition field type: {type(value)!r}")
 
     def _initialize(self, graph: Data, action: torch.Tensor) -> None:
-        extra = set(graph.keys()) - _SUPPORTED_GRAPH_FIELDS
-        if extra:
-            raise ValueError(f"Tensor replay does not support graph fields: {sorted(extra)!r}.")
-        mask = getattr(graph, "action_mask", None)
-        role = getattr(graph, "edge_role", None)
-        rigidity = getattr(graph, "rigidity", None)
-        template = Data(x=torch.zeros_like(graph.x), edge_index=graph.edge_index.detach().clone())
-        if mask is not None:
-            template.action_mask = mask.detach().clone().bool()
-        if role is not None:
-            template.edge_role = role.detach().clone().long()
-        if rigidity is not None:
-            template.rigidity = torch.zeros_like(torch.as_tensor(rigidity).reshape(1)).float()
-        prepared = prepare_graph(
-            template,
-            use_virtual_node=bool(getattr(self.cfg, "use_virtual_node", False)),
-            **graph_feature_flags(self.cfg),
-        )
-        self._static = {
-            "raw_node_count": int(graph.x.size(0)),
-            "raw_feature_dim": int(graph.x.size(1)),
-            "action_shape": list(action.shape),
-            "edge_index": graph.edge_index.detach().cpu().long().contiguous(),
-            "action_mask": None if mask is None else mask.detach().cpu().bool().contiguous(),
-            "edge_role": None if role is None else role.detach().cpu().long().contiguous(),
-            "has_rigidity": rigidity is not None,
-            "prepared_edge_index": prepared.edge_index.detach().cpu().long().contiguous(),
-            "prepared_action_mask": (
-                prepared.action_mask.detach().cpu().bool().contiguous()
-                if "action_mask" in prepared else None
-            ),
-            "prepared_physical_node_mask": (
-                prepared.physical_node_mask.detach().cpu().bool().contiguous()
-                if "physical_node_mask" in prepared else None
-            ),
-            "prepared_x_template": prepared.x.detach().cpu().contiguous(),
-            "prepared_edge_attr_template": (
-                prepared.edge_attr.detach().cpu().contiguous() if "edge_attr" in prepared else None
-            ),
-            "prepared_edge_role": (
-                prepared.edge_role.detach().cpu().long().contiguous() if "edge_role" in prepared else None
-            ),
-            "prepared_edge_type": (
-                prepared.edge_type.detach().cpu().long().contiguous() if "edge_type" in prepared else None
-            ),
-            "raw_edge_count": int(graph.edge_index.size(1)),
-            "signature": graph_structure_signature(graph),
-        }
+        self._static = build_graph_static(self.cfg, graph, action)
         self._buffer = TensorDictReplayBuffer(
             storage=LazyTensorStorage(self._capacity, device=self._storage_device),
             batch_size=self._batch_size,
@@ -256,6 +391,76 @@ class _TensorTaskBuffer:
         self._idx = (self._idx + count) % self._capacity
         self._size = min(self._size + count, self._capacity)
         self._num_eps += int(bool(count_episode))
+        return self._num_eps
+
+    def add_dense(self, transitions: Mapping[str, torch.Tensor], *, completed_episodes=0,
+                  edge_index=None, edge_role=None):
+        """Insert a batch of same-topology transitions stored as dense tensors.
+
+        ``transitions`` holds ``obs_x``/``next_obs_x`` ``[B, N, F]``,
+        ``obs_rigidity``/``next_obs_rigidity`` ``[B, 1]``, ``action`` ``[B, N, A]``,
+        ``reward``/``terminated`` ``[B]`` and ``obs_action_mask``/``next_obs_action_mask``
+        ``[B, N]``. The topology is fixed per task, so it is validated once from
+        ``edge_index`` rather than per graph.
+        """
+        count = int(transitions["obs_x"].size(0))
+        if not count:
+            return self._num_eps
+        if count > self._capacity:
+            transitions = {key: value[-self._capacity:] for key, value in transitions.items()}
+            count = self._capacity
+        if self._buffer is None:
+            if edge_index is None:
+                raise ValueError("The first dense replay insertion needs the task edge_index.")
+            template = Data(
+                x=transitions["obs_x"][0],
+                edge_index=torch.as_tensor(edge_index),
+                action_mask=transitions["obs_action_mask"][0],
+                rigidity=transitions["obs_rigidity"][0],
+            )
+            if edge_role is not None:
+                template.edge_role = torch.as_tensor(edge_role)
+            self._initialize(template, transitions["action"][0])
+        static = self._static
+        if list(transitions["obs_x"].shape[1:]) != [static["raw_node_count"], static["raw_feature_dim"]]:
+            raise ValueError("Replay observation topology or action ordering changed within a task.")
+        if self._graph_signature is not None and (
+            static["signature"]["shape"] != self._graph_signature["shape"]
+            or static["signature"]["edges"] != self._graph_signature["edges"]
+        ):
+            raise ValueError("Replay observation topology or action ordering differs from teacher.")
+        if list(transitions["action"].shape[1:]) != static["action_shape"]:
+            raise ValueError("Replay action shape changed within a task.")
+        fields = {
+            "obs_x": transitions["obs_x"].detach().float(),
+            "next_obs_x": transitions["next_obs_x"].detach().float(),
+            "obs_rigidity": transitions["obs_rigidity"].detach().float().reshape(count, 1),
+            "next_obs_rigidity": transitions["next_obs_rigidity"].detach().float().reshape(count, 1),
+            "action": transitions["action"].detach().float(),
+            "reward": transitions["reward"].detach().float().reshape(count, 1),
+            "terminated": transitions["terminated"].detach().float().reshape(count, 1),
+        }
+        if static["action_mask"] is not None:
+            masks = torch.cat((
+                transitions["obs_action_mask"].detach().bool(),
+                transitions["next_obs_action_mask"].detach().bool(),
+            ))
+            invalid = ~masks.any(dim=1)
+            if self._graph_signature is not None:
+                reference = torch.as_tensor(
+                    self._graph_signature["mask"], dtype=torch.bool, device=masks.device
+                )
+                invalid = invalid | (masks & ~reference).any(dim=1)
+            if bool(invalid.any()):
+                raise ValueError("Replay observation has an invalid action mask.")
+            fields["obs_action_mask"] = masks[:count]
+            fields["next_obs_action_mask"] = masks[count:]
+        values = TensorDict(fields, batch_size=[count]).to(self._storage_device)
+        self._require_finite("replay insertion", values)
+        self._buffer.extend(values)
+        self._idx = (self._idx + count) % self._capacity
+        self._size = min(self._size + count, self._capacity)
+        self._num_eps += int(completed_episodes)
         return self._num_eps
 
     def _build_values(self, current, following, actions, rewards, terminated):
@@ -536,6 +741,20 @@ class TensorGNNBuffer:
         self._buffers[str(task)].add(td, count_episode=count_episode)
         return self.num_eps
 
+    supports_dense_insertion = True
+
+    def add_dense(self, task, transitions, *, completed_episodes=0, edge_index=None, edge_role=None):
+        """Insert a dense batch of one task's transitions; see ``_TensorTaskBuffer.add_dense``."""
+        if str(task) not in self._buffers:
+            raise KeyError(f"Unknown replay task {task!r}; expected one of {self.task_names!r}.")
+        self._buffers[str(task)].add_dense(
+            transitions,
+            completed_episodes=completed_episodes,
+            edge_index=edge_index,
+            edge_role=edge_role,
+        )
+        return self.num_eps
+
     def set_task_graph_signatures(self, signatures):
         if set(signatures) != set(self.task_names):
             raise ValueError("Replay signature tasks do not match configured tasks.")
@@ -570,50 +789,17 @@ class TensorGNNBuffer:
             for index, task in enumerate(self.task_names)
         }
 
-    def _prepared_dense(self, sample: _PackedReplaySample, key: str):
-        values, static = sample.values, sample.static
-        raw_x = values[key]
-        rigidity_key = "obs_rigidity" if key == "obs_x" else "next_obs_rigidity"
-        mask_key = "obs_action_mask" if key == "obs_x" else "next_obs_action_mask"
-        count, raw_nodes, raw_features = raw_x.shape
-        device = raw_x.device
-        template_x = static["prepared_x_template"].to(device)
-        x = template_x.unsqueeze(0).expand(count, -1, -1).clone()
-        x[:, :raw_nodes, :raw_features] = raw_x
-        if graph_feature_flags(self.cfg)["use_node_roles"]:
-            if mask_key in values.keys():
-                action_mask = values[mask_key].bool()
-            else:
-                action_mask = static["prepared_action_mask"].to(device)[:raw_nodes]
-                action_mask = action_mask.unsqueeze(0).expand(count, -1)
-            node_roles = torch.stack((action_mask, ~action_mask), dim=-1).to(x.dtype)
-            x[:, :raw_nodes, raw_features:raw_features + 2] = node_roles
-        if bool(getattr(self.cfg, "use_virtual_node", False)):
-            x[:, -1, -1] = values[rigidity_key].reshape(-1)
-        template_edge_attr = static["prepared_edge_attr_template"]
-        edge_attr = None
-        if template_edge_attr is not None:
-            edge_attr = template_edge_attr.to(device).unsqueeze(0).expand(count, -1, -1).clone()
-            if graph_feature_flags(self.cfg)["use_edge_distance"]:
-                edge_index = static["edge_index"].to(device)
-                distance = torch.linalg.vector_norm(
-                    raw_x[:, edge_index[0], :3] - raw_x[:, edge_index[1], :3], dim=-1
-                )
-                edge_attr[:, :static["raw_edge_count"], -1] = distance
-        return x, edge_attr
-
     @staticmethod
-    def _prepared_action_mask(sample: _PackedReplaySample, key: str):
-        values, static = sample.values, sample.static
-        prepared = static["prepared_action_mask"]
-        if prepared is None:
-            return None
-        count = int(values[key].size(0))
-        result = prepared.to(values.device).unsqueeze(0).expand(count, -1).clone()
-        mask_key = "obs_action_mask" if key == "obs_x" else "next_obs_action_mask"
-        if mask_key in values.keys():
-            result[:, :static["raw_node_count"]] = values[mask_key].bool()
-        return result
+    def _dense_group(sample: _PackedReplaySample, key: str) -> DenseGraphGroup:
+        values = sample.values
+        prefix = "obs" if key == "obs_x" else "next_obs"
+        mask_key = f"{prefix}_action_mask"
+        return DenseGraphGroup(
+            static=sample.static,
+            x=values[key],
+            rigidity=values[f"{prefix}_rigidity"],
+            action_mask=values[mask_key] if mask_key in values.keys() else None,
+        )
 
     @staticmethod
     def _raw_observations(sample: _PackedReplaySample) -> list[Data]:
@@ -649,93 +835,25 @@ class TensorGNNBuffer:
         )
         with context:
             target = torch.device(getattr(self.cfg, "device", "cpu"))
-            x_parts, next_x_parts, edge_parts, next_edge_parts = [], [], [], []
-            obs_mask_parts, next_mask_parts, physical_parts, graph_ids, ptr = [], [], [], [], [0]
-            action_parts, reward_parts, terminated_parts = [], [], []
-            edge_attr_parts, next_edge_attr_parts, role_parts, type_parts = [], [], [], []
-            graph_offset = node_offset = 0
-            include_mask = include_physical = include_edge_attr = include_role = include_type = False
-            rigidity_parts, next_rigidity_parts = [], []
-            include_rigidity = False
+            moved = []
             for sample in samples:
                 values = sample.values
                 if values.device != target:
                     values = values.to(target, non_blocking=values.device.type == "cpu" and target.type == "cuda")
                     sample = _PackedReplaySample(sample.task, values, sample.static)
-                x, edge_attr = self._prepared_dense(sample, "obs_x")
-                next_x, next_edge_attr = self._prepared_dense(sample, "next_obs_x")
-                count, nodes = int(x.size(0)), int(x.size(1))
-                static_edge = sample.static["prepared_edge_index"].to(target)
-                edges = int(static_edge.size(1))
-                offsets = torch.arange(count, device=target).view(-1, 1, 1) * nodes + node_offset
-                packed_edge = (static_edge.view(1, 2, edges) + offsets).permute(1, 0, 2).reshape(2, -1)
-                x_parts.append(x.flatten(0, 1))
-                next_x_parts.append(next_x.flatten(0, 1))
-                edge_parts.append(packed_edge)
-                next_edge_parts.append(packed_edge)
-                obs_mask = self._prepared_action_mask(sample, "obs_x")
-                next_mask = self._prepared_action_mask(sample, "next_obs_x")
-                if obs_mask is not None:
-                    include_mask = True
-                    obs_mask_parts.append(obs_mask.flatten())
-                    next_mask_parts.append(next_mask.flatten())
-                physical = sample.static["prepared_physical_node_mask"]
-                if physical is not None:
-                    include_physical = True
-                    physical_parts.append(physical.to(target).repeat(count))
-                graph_ids.append(torch.arange(graph_offset, graph_offset + count, device=target).repeat_interleave(nodes))
-                ptr.extend(node_offset + i * nodes for i in range(1, count + 1))
-                action_parts.append(values["action"].flatten(0, 1))
-                reward_parts.append(values["reward"])
-                terminated_parts.append(values["terminated"])
-                if edge_attr is not None:
-                    include_edge_attr = True
-                    edge_attr_parts.append(edge_attr.flatten(0, 1))
-                    next_edge_attr_parts.append(next_edge_attr.flatten(0, 1))
-                prepared_role = sample.static["prepared_edge_role"]
-                if prepared_role is not None:
-                    include_role = True
-                    role_parts.append(prepared_role.to(target).repeat(count))
-                prepared_type = sample.static["prepared_edge_type"]
-                if prepared_type is not None:
-                    include_type = True
-                    type_parts.append(prepared_type.to(target).repeat(count))
-                if sample.static["has_rigidity"]:
-                    include_rigidity = True
-                    rigidity_parts.append(values["obs_rigidity"].reshape(-1))
-                    next_rigidity_parts.append(values["next_obs_rigidity"].reshape(-1))
-                graph_offset += count
-                node_offset += count * nodes
-            def make_batch(x_values, edges, attrs, rigidities, masks):
-                kwargs = {
-                    "x": torch.cat(x_values), "edge_index": torch.cat(edges, dim=1),
-                    "batch": torch.cat(graph_ids),
-                    "ptr": torch.tensor(ptr, device=target, dtype=torch.long),
-                }
-                if include_mask:
-                    kwargs["action_mask"] = torch.cat(masks)
-                if include_physical:
-                    kwargs["physical_node_mask"] = torch.cat(physical_parts)
-                if include_edge_attr:
-                    kwargs["edge_attr"] = torch.cat(attrs)
-                if include_role:
-                    kwargs["edge_role"] = torch.cat(role_parts)
-                if include_type:
-                    kwargs["edge_type"] = torch.cat(type_parts)
-                if include_rigidity:
-                    kwargs["rigidity"] = torch.cat(rigidities)
-                batch = Batch(**kwargs)
-                batch._num_graphs = graph_offset
-                object.__setattr__(batch, "_physical_node_count_cache", int(physical_node_mask(batch).sum()))
-                object.__setattr__(batch, "_policy_action_count_cache", int(policy_action_mask(batch).sum()))
-                return batch
+                moved.append(sample)
+            obs = dense_graph_batch(
+                self.cfg, [self._dense_group(sample, "obs_x") for sample in moved], target
+            )
+            next_obs = dense_graph_batch(
+                self.cfg, [self._dense_group(sample, "next_obs_x") for sample in moved], target
+            )
             return (
-                make_batch(x_parts, edge_parts, edge_attr_parts, rigidity_parts, obs_mask_parts),
-                torch.cat(action_parts), torch.cat(reward_parts), torch.cat(terminated_parts),
-                make_batch(
-                    next_x_parts, next_edge_parts, next_edge_attr_parts,
-                    next_rigidity_parts, next_mask_parts,
-                ),
+                obs,
+                torch.cat([sample.values["action"].flatten(0, 1) for sample in moved]),
+                torch.cat([sample.values["reward"] for sample in moved]),
+                torch.cat([sample.values["terminated"] for sample in moved]),
+                next_obs,
             )
 
     def sample(self, performance_profiler=None):

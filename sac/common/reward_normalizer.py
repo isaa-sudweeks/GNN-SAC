@@ -107,6 +107,39 @@ class TaskRewardNormalizer:
             return torch.as_tensor(normalized_value, dtype=reward.dtype, device=reward.device)
         return normalized_value
 
+    def normalize_batch(self, rewards: torch.Tensor, returns: torch.Tensor, *, task: str):
+        """Normalize a batch of same-task rewards whose streams are tracked by the caller.
+
+        ``returns`` holds each stream's unfinished discounted return and is
+        updated in place; callers zero finished streams. All discounted returns
+        in the batch are merged into the task statistics at once (Chan et al.),
+        so every reward in the batch shares one scale.
+        """
+        task = str(task)
+        if self.allowed_tasks is not None and task not in self.allowed_tasks:
+            raise KeyError(f"Unknown reward-normalization task {task!r}; expected one of {list(self.allowed_tasks)!r}.")
+        count = int(rewards.numel())
+        if not count:
+            return rewards
+        raw = rewards.detach().reshape(-1).to(returns.dtype)
+        returns.mul_(self.gamma).add_(raw)
+        batch_mean = returns.mean()
+        batch_m2 = (returns - batch_mean).square().sum()
+        finite, batch_mean, batch_m2, last_raw = torch.stack(
+            (torch.isfinite(raw).all().to(returns.dtype), batch_mean, batch_m2, raw[-1])
+        ).tolist()
+        if not finite:
+            raise ValueError("Reward normalization requires finite rewards.")
+        stats = self._stats.setdefault(task, RunningMeanVariance())
+        total = stats.count + count
+        delta = batch_mean - stats.mean
+        stats.m2 += batch_m2 + delta * delta * stats.count * count / total
+        stats.mean += delta * count / total
+        stats.count = total
+        scale = math.sqrt(stats.variance + self.epsilon)
+        self._last_rewards[task] = (last_raw, max(-self.clip, min(self.clip, last_raw / scale)))
+        return (rewards / scale).clamp(-self.clip, self.clip)
+
     def reset_stream(self, stream: Hashable) -> None:
         """Forget an unfinished return when its environment starts a new episode."""
         self._returns.pop(stream, None)

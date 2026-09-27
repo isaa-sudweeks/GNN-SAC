@@ -20,6 +20,7 @@ from common.graph_transforms import (
     policy_action_mask,
     prepare_graph,
 )
+from common.tensor_gnn_buffer import DenseGraphGroup, dense_graph_batch
 
 class GNNSAC(torch.nn.Module):
     """
@@ -311,6 +312,37 @@ class GNNSAC(torch.nn.Module):
             full_action[mask.to(action.device)] = active_action
             full_actions.append(full_action)
         return full_actions
+
+    @torch.no_grad()
+    def act_dense(self, groups: Sequence[DenseGraphGroup], eval_mode: bool = False) -> list[torch.Tensor]:
+        """Compute ``[B, N, A]`` actions for dense same-topology groups in one forward pass.
+
+        Rows for passive and broken nodes are zero, matching ``act_batch``.
+        """
+        if not groups:
+            return []
+        obs_batch = dense_graph_batch(self.cfg, groups, self.device)
+        if eval_mode:
+            action = self.model.pi_mean(obs_batch)
+        else:
+            action, _ = self.model.pi(obs_batch)
+        action = self._safe_action(action)
+        mask = policy_action_mask(obs_batch)
+        if action.size(0) != int(obs_batch._policy_action_count_cache):
+            raise RuntimeError(
+                f"Actor produced {action.size(0)} node actions for "
+                f"{int(obs_batch._policy_action_count_cache)} actuated observation nodes"
+            )
+        full = action.new_zeros((mask.numel(), action.size(-1)))
+        full[mask] = action
+        results, offset = [], 0
+        for group in groups:
+            count, raw_nodes = int(group.x.size(0)), int(group.x.size(1))
+            nodes = int(group.static["prepared_x_template"].size(0))
+            block = full[offset: offset + count * nodes].view(count, nodes, -1)
+            results.append(block[:, :raw_nodes])
+            offset += count * nodes
+        return results
 
     @torch.no_grad()
     def _td_target(self, next_obs, reward, terminated):

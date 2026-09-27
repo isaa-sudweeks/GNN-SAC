@@ -20,6 +20,7 @@ eval_task: null # Task key for evaluation, if different from training. Defaults 
 episodic: true # Whether true environment terminations should stop bootstrap targets.
 multitask: false # Whether to build a multitask wrapper over several environments.
 num_envs: 1 # Number of independent copies of the selected task to use in one run.
+vectorized_collection: auto # auto uses tensor-batched MJX collection when supported; false forces the per-env loop; true requires it.
 tasks: # Task list used by multitask code paths and logging.
   - ${task}
 

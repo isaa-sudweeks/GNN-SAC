@@ -23,6 +23,13 @@ in [archive/gpu_optimization_audit.md](../archive/gpu_optimization_audit.md).
   bounded, and sampling was 33x faster in matched MJX training. Full-checkpoint
   writes went from about 7 s to about 37 ms. See
   [replay_benchmark_results.md](replay_benchmark_results.md).
+- **Tensor-batched MJX collection** (`vectorized_collection=auto`). Actions,
+  environment steps, reward normalization, episode statistics, and replay
+  insertion run as whole-bucket tensor operations instead of Python work per
+  environment. On an L40S with the CV setup (8 topologies, `num_envs=1536`,
+  PCGrad), a vector step went from 6.06 s to 3.90 s (254 to 394 env steps/s):
+  replay insertion, transition processing, and action selection fell from 1.89 s
+  to 0.02 s, and the environment step from 0.85 s to 0.64 s.
 - **Checkpoints.** Writes are asynchronous and atomic (temporary file then
   rename), and a small `latest.metadata.json` sidecar lets the Slurm launcher
   skip completed jobs without loading replay.
@@ -50,9 +57,12 @@ These are ordered roughly by expected impact.
 5. **Evaluation cost.** Evaluation is synchronous (`eval_freq=20_000`,
    `eval_episodes=5` by default). Asynchronous or post-hoc evaluation would
    remove it from the training critical path.
-6. **Learner-side GPU work.** Candidates are mixed precision, fused optimizers,
-   `torch.compile`, and CUDA graphs. Only pursue these once profiling shows the
-   learner is the bottleneck; dynamic PyG shapes complicate compilation.
+6. **Learner-side GPU work.** After tensor-batched collection, optimization is
+   about 79% of an MJX vector step in the CV setup (0.41 s per PCGrad update,
+   7.5 updates per step) while the GPU stays mostly idle, so the learner is
+   launch-bound rather than compute-bound. Candidates are fewer per-task
+   passes in PCGrad, fused optimizers, `torch.compile`, and CUDA graphs;
+   dynamic PyG shapes complicate compilation.
 7. **Multiple GPUs.** Until a single GPU is saturated, use extra GPUs for
    independent seeds, folds, or sweeps rather than a distributed learner.
 

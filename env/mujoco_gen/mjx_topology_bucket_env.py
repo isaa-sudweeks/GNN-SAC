@@ -5,6 +5,7 @@ from collections.abc import Iterable, Sequence
 from copy import deepcopy
 
 import gymnasium as gym
+import torch
 
 from common.config_utils import round_to_nearest_multiple
 from env.mujoco_gen.mjx_vector_env import MjxVectorGraphEnv
@@ -148,6 +149,15 @@ class MjxTopologyBucketEnv(gym.Env):
                 info["env_idx"] = global_idx
                 results[action_idx] = (observation, reward, done, info)
         return results
+
+    supports_batched_tensors = True
+
+    def batched_groups(self):
+        """Return ``(bucket_env, global_indices)`` pairs for tensor-batched collection."""
+        return [
+            (bucket, torch.as_tensor(self._bucket_to_global[bucket_idx], dtype=torch.long))
+            for bucket_idx, bucket in enumerate(self.buckets)
+        ]
 
     def close(self):
         for bucket in self.buckets:

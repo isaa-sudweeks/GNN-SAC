@@ -10,6 +10,7 @@ from env.mujoco_gen.topology_envs import broken_node_schedule, is_broken_regime_
 from common.reward_normalizer import TaskRewardNormalizer
 from common.training_profiler import TrainingProfiler
 from trainer.base import Trainer
+from trainer.vector_collection import VectorBucket, select_rows
 
 try:
     from torch_geometric.data import Data
@@ -819,6 +820,9 @@ class OnlineTrainer(Trainer):
         self._run_distillation_pretraining()
         self._ensure_performance_profiler()
         num_envs = int(getattr(self.env, "num_envs", getattr(self.cfg, "num_envs", 1)))
+        buckets = self._vector_collection_buckets()
+        if buckets is not None:
+            return self._train_vectorized(buckets)
         if num_envs > 1:
             return self._train_multi_env(num_envs)
 
@@ -917,6 +921,222 @@ class OnlineTrainer(Trainer):
                 optimizer_updates=self._optimizer_updates - updates_before_step,
                 global_step=self._step,
             )
+        num_updates = self._updates_due(pretrain_steps, force=True)
+        if num_updates > 0:
+            train_metrics.update(self._run_agent_updates(num_updates))
+        self._log_collection_progress(force=True)
+        self._evaluate_final_policy()
+        self.maybe_save_checkpoint(force=True)
+        self.performance_profiler.finalize(global_step=self._step)
+        self.logger.finish(self.agent)
+        if self.eval_env is not self.env:
+            self.eval_env.close()
+        return self._best_eval_metrics
+
+    def _vector_collection_buckets(self):
+        """Return tensor-batched rollout buckets, or ``None`` to use per-env collection."""
+        mode = str(getattr(self.cfg, "vectorized_collection", "auto")).lower()
+        if mode not in {"auto", "true", "false"}:
+            raise ValueError("vectorized_collection must be auto, true, or false.")
+        if mode == "false":
+            return None
+        vector_env = getattr(self, "env", None)
+        while vector_env is not None and not getattr(vector_env, "supports_batched_tensors", False):
+            vector_env = getattr(vector_env, "env", None)
+        missing = []
+        if vector_env is None:
+            missing.append("an MJX vector environment (sim_backend=mjx)")
+        if not callable(getattr(getattr(self, "agent", None), "act_dense", None)):
+            missing.append("an agent with act_dense (sac_backend=gnn or padded_mlp)")
+        if not getattr(getattr(self, "buffer", None), "supports_dense_insertion", False):
+            missing.append("tensor replay (replay_backend=torchrl_tensor)")
+        if missing:
+            if mode == "true":
+                raise ValueError("vectorized_collection=true requires " + ", ".join(missing) + ".")
+            return None
+        return [VectorBucket(env, indices) for env, indices in vector_env.batched_groups()]
+
+    def _select_vector_actions(self, buckets, using_seed_actions):
+        if using_seed_actions:
+            actions = [
+                torch.rand(bucket.obs["x"].shape[:2] + (1,), device=bucket.device) * 2.0 - 1.0
+                for bucket in buckets
+            ]
+        else:
+            actions = self.agent.act_dense([bucket.policy_group(self.cfg) for bucket in buckets])
+            # The learner device may differ from the simulator device (device=cpu with MJX on CUDA).
+            actions = [action.to(bucket.device) for bucket, action in zip(buckets, actions)]
+        if self._should_apply_action_noise(seed_action=using_seed_actions):
+            actions = [self._apply_action_noise(action) for action in actions]
+        if callable(getattr(type(self.agent), "project_action", None)):
+            actions = [
+                action.masked_fill(~bucket.obs["action_mask"].unsqueeze(-1), 0.0)
+                for bucket, action in zip(buckets, actions)
+            ]
+        return actions
+
+    def _log_vector_episodes(self, buckets, train_metrics):
+        for bucket in buckets:
+            slots, summary, components = bucket.finished_episodes()
+            for position, slot in enumerate(slots):
+                env_idx = int(bucket.global_indices[slot])
+                train_metrics.update(
+                    {name: float(values[position]) for name, values in summary.items()}
+                )
+                train_metrics["episode_length"] = int(summary["episode_length"][position])
+                train_metrics["episode_env_idx"] = env_idx
+                train_metrics.update(self.common_metrics())
+                self.logger.log(train_metrics, 'train')
+                if components:
+                    reward_metrics = dict(
+                        step=self._step,
+                        episode=self._ep_idx,
+                        episode_length=train_metrics["episode_length"],
+                        episode_env_idx=env_idx,
+                    )
+                    reward_metrics.update(
+                        {name: float(values[position]) for name, values in components.items()}
+                    )
+                    self.logger.log(reward_metrics, 'training_rewards')
+
+    def _normalize_vector_rewards(self, bucket, reward, keep=None):
+        """Normalize one bucket's rewards, updating statistics only from kept slots.
+
+        On the final partial vector step, slots beyond the step budget are
+        simulated but never stored, so they must not affect normalization.
+        """
+        if getattr(self, "reward_normalizer", None) is None:
+            return reward
+        normalized = reward.clone()
+        for task, slots in bucket.task_groups(keep):
+            if slots is None:
+                return self.reward_normalizer.normalize_batch(
+                    reward, bucket.normalizer_returns, task=task
+                )
+            returns = bucket.normalizer_returns.index_select(0, slots)
+            normalized[slots] = self.reward_normalizer.normalize_batch(
+                reward.index_select(0, slots), returns, task=task
+            )
+            bucket.normalizer_returns[slots] = returns
+        return normalized
+
+    def _train_vectorized(self, buckets):
+        """Collect with whole-batch tensor operations per topology bucket.
+
+        Follows ``_train_multi_env`` step for step (evaluation timing, update
+        scheduling, checkpoints, and profiling phases), but keeps observations,
+        actions, rewards, and episode statistics as tensors so the cost of a
+        vector step does not grow with Python work per environment.
+        """
+        train_metrics, eval_next = {}, False
+        pretrain_steps = int(getattr(self.cfg, 'pretrain_steps', min(self.cfg.seed_steps, 1000)))
+        num_envs = sum(bucket.size for bucket in buckets)
+        episodic = bool(self.cfg.episodic)
+        observation_noise = (
+            self._apply_observation_noise if self._should_apply_observation_noise() else (lambda x: x)
+        )
+
+        while self._step < self.cfg.steps:
+            self.performance_profiler.begin_vector_step(global_step=self._step)
+            updates_before_step = self._optimizer_updates
+            inserted_transitions = 0
+            if self._step % self.cfg.eval_freq == 0 and not (
+                getattr(self, "distillation", None) is not None and self._last_eval_step == self._step
+            ):
+                eval_next = True
+
+            done_buckets = [bucket for bucket in buckets if bucket.done.any()]
+            if done_buckets:
+                if eval_next:
+                    with self.performance_profiler.phase("evaluation"):
+                        first_done = min(
+                            int(bucket.global_indices[np.flatnonzero(bucket.done)[0]])
+                            for bucket in done_buckets
+                        )
+                        self._activate_shared_eval_env(first_done)
+                        self._evaluate_and_log()
+                    eval_next = False
+                with self.performance_profiler.phase("episode_reset"):
+                    self._log_vector_episodes(done_buckets, train_metrics)
+                    self._sync_broken_nodes_curriculum()
+                    for bucket in done_buckets:
+                        bucket.reset_done(observation_noise)
+
+            remaining_steps = self.cfg.steps - self._step
+            keep_count = min(num_envs, remaining_steps)
+            using_seed_actions = self._step <= self.cfg.seed_steps
+
+            with self.performance_profiler.phase("action_selection"):
+                actions = self._select_vector_actions(buckets, using_seed_actions)
+
+            with self.performance_profiler.phase("environment_step"):
+                results = [bucket.env.step_batch(action) for bucket, action in zip(buckets, actions)]
+
+            with self.performance_profiler.phase("transition_processing"):
+                pending = []
+                for bucket, action, (next_obs, reward, done, info) in zip(buckets, actions, results):
+                    keep = None if keep_count >= num_envs else bucket.global_indices < keep_count
+                    next_obs["x"] = observation_noise(next_obs["x"])
+                    terminated = (
+                        info["terminated"].float() if episodic and "terminated" in info
+                        else torch.zeros_like(reward)
+                    )
+                    normalized_reward = self._normalize_vector_rewards(bucket, reward, keep)
+                    bucket.normalizer_returns.masked_fill_(done, 0.0)
+                    bucket.record_step(reward, done, info)
+                    pending.append((bucket, keep, action, next_obs, normalized_reward, terminated))
+                done_flags = [done.cpu().numpy() for _, _, done, _ in results]
+
+            with self.performance_profiler.phase("replay_insertion"):
+                for (bucket, keep, action, next_obs, reward, terminated), done in zip(pending, done_flags):
+                    for task, slots in bucket.task_groups(keep):
+                        transitions = {
+                            "obs_x": bucket.obs["x"],
+                            "next_obs_x": next_obs["x"],
+                            "obs_rigidity": bucket.obs["rigidity"],
+                            "next_obs_rigidity": next_obs["rigidity"],
+                            "obs_action_mask": bucket.obs["action_mask"],
+                            "next_obs_action_mask": next_obs["action_mask"],
+                            "action": action,
+                            "reward": reward,
+                            "terminated": terminated,
+                        }
+                        transitions = {
+                            key: select_rows(value, slots) for key, value in transitions.items()
+                        }
+                        slot_done = done if slots is None else done[slots.cpu().numpy()]
+                        self._ep_idx = self.buffer.add_dense(
+                            task,
+                            transitions,
+                            completed_episodes=int(slot_done.sum()),
+                            edge_index=bucket.env.edge_index,
+                            edge_role=bucket.env.edge_role,
+                        )
+                        inserted_transitions += int(transitions["obs_x"].size(0))
+                    bucket.obs = next_obs
+                    bucket.done = done.copy()
+
+            previous_step = self._step
+            self._step += keep_count
+            self._queue_collected_transitions(inserted_transitions)
+            if self._crossed_eval_interval(previous_step, self._step, self.cfg.eval_freq):
+                eval_next = True
+
+            with self.performance_profiler.phase("update_scheduling"):
+                num_updates = self._updates_due(pretrain_steps)
+            if num_updates > 0:
+                train_metrics.update(self._run_agent_updates(num_updates))
+            if self._step < self.cfg.steps:
+                with self.performance_profiler.phase("progress_logging"):
+                    self._log_collection_progress(previous_step)
+            with self.performance_profiler.phase("checkpoint_dispatch"):
+                self.maybe_save_checkpoint(previous_step)
+            self.performance_profiler.end_vector_step(
+                transitions=inserted_transitions,
+                optimizer_updates=self._optimizer_updates - updates_before_step,
+                global_step=self._step,
+            )
+
         num_updates = self._updates_due(pretrain_steps, force=True)
         if num_updates > 0:
             train_metrics.update(self._run_agent_updates(num_updates))

@@ -30,6 +30,35 @@ class TaskRewardNormalizerTest(unittest.TestCase):
         self.assertAlmostEqual(metrics["return_mean"], 1.5)
         self.assertAlmostEqual(metrics["return_std"], 0.5)
 
+    def test_batch_normalization_merges_the_same_statistics_as_sequential_updates(self):
+        rewards = torch.tensor([[1.0, -2.0, 0.5], [3.0, 0.25, -1.0], [0.0, 2.0, 4.0]])
+        sequential = TaskRewardNormalizer(gamma=0.9, epsilon=1e-8, clip=100.0)
+        batched = TaskRewardNormalizer(gamma=0.9, epsilon=1e-8, clip=100.0)
+        returns = torch.zeros(3, dtype=torch.float64)
+        for step, row in enumerate(rewards):
+            for stream, reward in enumerate(row):
+                sequential.normalize(reward, task="task", stream=stream)
+            normalized = batched.normalize_batch(row, returns, task="task")
+            scale = batched.metrics()["task"]
+            torch.testing.assert_close(
+                returns,
+                torch.tensor([sequential._returns[stream] for stream in range(3)], dtype=torch.float64),
+            )
+            self.assertEqual(scale["count"], 3 * (step + 1))
+            expected_scale = (scale["return_std"] ** 2 + 1e-8) ** 0.5
+            torch.testing.assert_close(normalized, row / expected_scale)
+        for name in ("count", "return_mean", "return_std", "raw_reward"):
+            self.assertAlmostEqual(
+                batched.metrics()["task"][name], sequential.metrics()["task"][name], places=6
+            )
+
+    def test_batch_normalization_rejects_nonfinite_rewards(self):
+        normalizer = TaskRewardNormalizer(gamma=0.9)
+        with self.assertRaisesRegex(ValueError, "finite rewards"):
+            normalizer.normalize_batch(
+                torch.tensor([1.0, float("nan")]), torch.zeros(2, dtype=torch.float64), task="task"
+            )
+
     def test_task_scales_are_independent(self):
         normalizer = TaskRewardNormalizer(gamma=1.0, epsilon=1e-8, clip=100.0)
         for reward in (1.0, 1.0):
