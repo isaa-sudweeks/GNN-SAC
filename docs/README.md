@@ -17,8 +17,8 @@
   Submitit/Slurm runs
 - [domain_randomization.md](usage/domain_randomization.md): physical parameters
   and randomization families
-- [cross_validation.md](usage/cross_validation.md): leave-one-group-out and
-  random-fold topology cross-validation
+- [cross_validation.md](usage/cross_validation.md): leave-one-group-out,
+  random-fold, and farthest-point morphology-cluster cross-validation
 - [distillation.md](usage/distillation.md): multi-teacher Gaussian KL
   distillation into one GNN student
 - [replay.md](usage/replay.md): tensor vs legacy replay, storage placement,

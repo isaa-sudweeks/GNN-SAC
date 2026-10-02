@@ -1,7 +1,7 @@
 # @package _global_
 
 # Leave-one-node-count-out development split.
-# Replace every placeholder below with an exact mujoco-truss-gen preset name.
+# Development pool with completed paper-v4 topology teachers.
 # Keep all seven-node configurations exclusively in final_test.
 cross_validation:
   enabled: true
@@ -12,14 +12,23 @@ cross_validation:
     node_5:
       - henneberg_n5_1tube_1
     node_6:
+      - henneberg_n6_1tube_1
       - henneberg_n6_1tube_2
       - henneberg_n6_2tube_1
+      - henneberg_n6_3tube_1
       - octahedron
     node_8:
+      - henneberg_n8_1tube_13
       - henneberg_n8_1tube_57
+      - henneberg_n8_1tube_69
+      - henneberg_n8_2tube_127
+      - henneberg_n8_2tube_134
       - henneberg_n8_2tube_187
-      - henneberg_n8_3tube_64
-      - usevitch_210272254_p1
+      - henneberg_n8_3tube_11
+      - henneberg_n8_3tube_34
+      - henneberg_n8_3tube_60
+      - henneberg_n8_3tube_85
+      - usevitch_212365307
     node_9:
       - usevitch_60243677150_p1
   final_test:

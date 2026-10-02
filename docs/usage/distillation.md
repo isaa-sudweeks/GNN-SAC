@@ -26,6 +26,22 @@ For cross-validation, use the existing `cross_validation` overrides **instead
 of** setting `truss_topologies`. Supply a mapping covering every possible
 training topology; the resolved fold controls which entries are used.
 
+For the completed paper-v4 development experts on ORC, use the saved preset
+instead of typing the mapping:
+
+```bash
+uv run python scripts/launch_cross_validation.py cross_validation=node_count_loso \
+  --seeds 1,2,3 platform=supercomputer distillation=kl_paper_v4
+```
+
+`config/distillation/kl_paper_v4.yaml` inherits the `kl` schedule and maps all
+19 development topologies to pinned full `step_10000000.pt` checkpoints. It uses
+seed 1 except for octahedron, which uses seed 3; selection is independent of CV
+student seed. The three reserved seven-node topologies are absent. The same
+preset covers `random_5fold` and `farthest_point_5fold`. Paths refer to the ORC
+checkpoint tree, so copy that tree or override
+`distillation.teacher_root=/path/to/truss-graph` when running elsewhere.
+
 The `distillation=kl` preset performs 10,000 offline updates, using 256
 observations per topology per update. Then ordinary online SAC begins with
 an actor KL weight of 1, decaying linearly to zero over half of `cfg.steps`.

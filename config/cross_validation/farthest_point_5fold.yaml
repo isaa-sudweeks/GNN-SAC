@@ -1,0 +1,314 @@
+# @package _global_
+
+# Farthest-point prototypes with nearest-prototype morphology clusters.
+# Generated file; regenerate instead of editing by hand:
+#   uv run python scripts/make_farthest_point_cross_validation.py --source node_count_loso --num-folds 5 --name farthest_point_5fold
+cross_validation:
+  enabled: true
+  name: farthest_point_5fold
+  groups:
+    fold_0:
+    - tetrahedron
+    fold_1:
+    - henneberg_n8_3tube_34
+    - usevitch_212365307
+    - usevitch_60243677150_p1
+    fold_2:
+    - henneberg_n6_1tube_1
+    - henneberg_n6_1tube_2
+    - octahedron
+    fold_3:
+    - henneberg_n5_1tube_1
+    - henneberg_n6_2tube_1
+    - henneberg_n6_3tube_1
+    - henneberg_n8_1tube_13
+    - henneberg_n8_2tube_127
+    fold_4:
+    - henneberg_n8_1tube_57
+    - henneberg_n8_1tube_69
+    - henneberg_n8_2tube_134
+    - henneberg_n8_2tube_187
+    - henneberg_n8_3tube_11
+    - henneberg_n8_3tube_60
+    - henneberg_n8_3tube_85
+  final_test:
+  - henneberg_n7_1tube_3
+  - henneberg_n7_3tube_1
+  - usevitch_1514879
+  held_out_group: null
+  split:
+    source: node_count_loso
+    method: farthest_point_clusters
+    version: 1
+    num_folds: 5
+    distance: euclidean_development_zscore
+    start: farthest_from_centroid
+    tie_break: sorted_topology_name
+    mujoco_truss_gen_version: 0.12.5
+    feature_names:
+    - nodes
+    - edges
+    - tubes
+    - degree_std
+    - clustering
+    - mean_shortest_path
+    - diameter
+    - active_edge_fraction
+    - route_length_cv
+    - edge_length_cv
+    - shape_middle_ratio
+    - shape_small_ratio
+    prototypes:
+    - tetrahedron
+    - usevitch_60243677150_p1
+    - henneberg_n6_1tube_2
+    - henneberg_n6_3tube_1
+    - henneberg_n8_2tube_134
+    features:
+      henneberg_n5_1tube_1:
+      - 5.0
+      - 9.0
+      - 1.0
+      - 0.489897948557
+      - 0.9
+      - 1.1
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.001150405957
+      - 0.377757764207
+      - 0.377757758202
+      henneberg_n6_1tube_1:
+      - 6.0
+      - 12.0
+      - 1.0
+      - 0.57735026919
+      - 0.727777777778
+      - 1.2
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.078638322858
+      - 0.898756330143
+      - 0.53604789339
+      henneberg_n6_1tube_2:
+      - 6.0
+      - 12.0
+      - 1.0
+      - 0.0
+      - 0.666666666667
+      - 1.2
+      - 2.0
+      - 1.0
+      - 0.0
+      - 1.17e-10
+      - 0.999999999803
+      - 0.999999999539
+      henneberg_n6_2tube_1:
+      - 6.0
+      - 12.0
+      - 2.0
+      - 0.816496580928
+      - 0.844444444444
+      - 1.2
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.079728192092
+      - 0.331359292669
+      - 0.126572460197
+      henneberg_n6_3tube_1:
+      - 6.0
+      - 12.0
+      - 3.0
+      - 1.0
+      - 0.85
+      - 1.2
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.08547495122
+      - 0.338065593673
+      - 0.298939434324
+      henneberg_n8_1tube_13:
+      - 8.0
+      - 18.0
+      - 1.0
+      - 1.224744871392
+      - 0.7
+      - 1.357142857143
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.066057330533
+      - 0.367715773385
+      - 0.347226916573
+      henneberg_n8_1tube_57:
+      - 8.0
+      - 18.0
+      - 1.0
+      - 0.866025403784
+      - 0.6
+      - 1.357142857143
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.053306431348
+      - 0.999999451338
+      - 0.173037835132
+      henneberg_n8_1tube_69:
+      - 8.0
+      - 18.0
+      - 1.0
+      - 0.707106781187
+      - 0.6125
+      - 1.357142857143
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.046564394988
+      - 0.659850953975
+      - 0.429941058199
+      henneberg_n8_2tube_127:
+      - 8.0
+      - 18.0
+      - 2.0
+      - 1.5
+      - 0.797619047619
+      - 1.357142857143
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.134176536132
+      - 0.657653568089
+      - 0.042539457021
+      henneberg_n8_2tube_134:
+      - 8.0
+      - 18.0
+      - 2.0
+      - 1.5
+      - 0.8
+      - 1.357142857143
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.004262295628
+      - 0.999999999683
+      - 0.999999999504
+      henneberg_n8_2tube_187:
+      - 8.0
+      - 18.0
+      - 2.0
+      - 0.5
+      - 0.583333333333
+      - 1.357142857143
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.015732291836
+      - 0.554886189669
+      - 0.554886157824
+      henneberg_n8_3tube_11:
+      - 8.0
+      - 18.0
+      - 3.0
+      - 1.224744871392
+      - 0.654166666667
+      - 1.357142857143
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.077321987597
+      - 0.842731951169
+      - 0.250910201031
+      henneberg_n8_3tube_34:
+      - 8.0
+      - 18.0
+      - 3.0
+      - 0.707106781187
+      - 0.5375
+      - 1.357142857143
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.068037375658
+      - 0.783134106891
+      - 0.474409750423
+      henneberg_n8_3tube_60:
+      - 8.0
+      - 18.0
+      - 3.0
+      - 1.414213562373
+      - 0.794642857143
+      - 1.357142857143
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.020842566684
+      - 0.736039521225
+      - 0.327807845737
+      henneberg_n8_3tube_85:
+      - 8.0
+      - 18.0
+      - 3.0
+      - 1.0
+      - 0.616666666667
+      - 1.357142857143
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.091965491401
+      - 0.932382135316
+      - 0.231995989405
+      octahedron:
+      - 6.0
+      - 10.0
+      - 4.0
+      - 0.471404520791
+      - 0.555555555556
+      - 1.333333333333
+      - 2.0
+      - 1.0
+      - 0.0
+      - 2.6048316e-05
+      - 0.999919947621
+      - 0.999905073358
+      tetrahedron:
+      - 4.0
+      - 6.0
+      - 2.0
+      - 0.0
+      - 1.0
+      - 1.0
+      - 1.0
+      - 0.666666666667
+      - 0.0
+      - 1.0078899e-05
+      - 0.999998220584
+      - 0.999937774714
+      usevitch_212365307:
+      - 8.0
+      - 18.0
+      - 6.0
+      - 0.866025403784
+      - 0.6125
+      - 1.357142857143
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.16951201661
+      - 0.863752545841
+      - 0.490360040955
+      usevitch_60243677150_p1:
+      - 9.0
+      - 21.0
+      - 7.0
+      - 0.942809041582
+      - 0.6
+      - 1.416666666667
+      - 2.0
+      - 1.0
+      - 0.0
+      - 0.081459233825
+      - 0.243990851488
+      - 0.238978375285

@@ -10,6 +10,7 @@ invoked, even if you pass `--help`.
 |---|---|
 | `scripts/launch_cross_validation.py` | Launch every leave-one-group-out fold and seed as a Hydra multirun. See [cross_validation.md](cross_validation.md). |
 | `scripts/make_random_cross_validation.py` | Generate a random-fold cross-validation definition (for example `random_5fold`) from an existing one. |
+| `scripts/make_farthest_point_cross_validation.py` | Generate frozen morphology-cluster folds using farthest-point prototypes and nearest-prototype assignment. |
 | `scripts/validate_padded_mlp_topologies.py` | **No CLI.** Check that the fixed padded-MLP capacity covers the thesis topology set. Rerun after upgrading `mujoco-truss-gen`. |
 | `scripts/validate_domain_randomization.py` | Run the domain-randomization validation plan and write machine-readable results. |
 | `scripts/run_domain_randomization_training_smoke.py` | **No CLI.** Immediately runs the full three-seed training smoke matrix (every randomization family) and writes its outputs. |
