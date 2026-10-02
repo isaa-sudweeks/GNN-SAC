@@ -79,6 +79,35 @@ random fold that holds one of them out is still an unseen-size fold. Compare
 per-topology `eval/<topology>_episode_reward` against the matching
 `node_count_loso` run rather than only the fold aggregate.
 
+### Random CV with the paper-v4 teachers
+
+Use this shortcut to launch the frozen random folds with the same pinned teacher
+mapping used by `farthest_point_5fold`:
+
+```bash
+# Inspect the 15-job manifest without submitting training.
+uv run python scripts/launch_random_teacher_cv.py --dry-run
+
+# Submit five folds with student seeds 1, 2, and 3.
+uv run python scripts/launch_random_teacher_cv.py
+```
+
+Defaults match the diversity experiment: `platform=supercomputer`,
+`sim_backend=mjx`, `distillation=kl_paper_v4`, and the GNN student, with
+`run_root=/home/isuds/nobackup/autodelete/GNN-SAC` and shared teacher cache
+`distillation.cache_dir=/home/isuds/nobackup/autodelete/GNN-SAC/distillation_cache/paper-v4`.
+The experiment name is `diversity-random-cv`. Other settings inherit the existing
+training configuration. Any default can be overridden; for example:
+
+```bash
+uv run python scripts/launch_random_teacher_cv.py --seeds 1 exp_name=diversity-random-pilot
+```
+
+`--shuffle-seed` changes only launch order; the committed random split stays fixed.
+`--manifest PATH` chooses the manifest location. Teacher paths can be relocated
+with `distillation.teacher_root=/path/to/truss-graph`. Each fold loads only its
+training teachers, and the reserved final-test set remains excluded.
+
 ## Farthest-point morphology clusters
 
 `farthest_point_5fold` uses the same 19 development topologies and final-test

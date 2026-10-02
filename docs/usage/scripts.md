@@ -9,6 +9,7 @@ invoked, even if you pass `--help`.
 | Script | Purpose |
 |---|---|
 | `scripts/launch_cross_validation.py` | Launch every leave-one-group-out fold and seed as a Hydra multirun. See [cross_validation.md](cross_validation.md). |
+| `scripts/launch_random_teacher_cv.py` | Launch random five-fold GNN CV with the paper-v4 teachers; defaults to three seeds on the supercomputer and supports `--dry-run`. |
 | `scripts/make_random_cross_validation.py` | Generate a random-fold cross-validation definition (for example `random_5fold`) from an existing one. |
 | `scripts/make_farthest_point_cross_validation.py` | Generate frozen morphology-cluster folds using farthest-point prototypes and nearest-prototype assignment. |
 | `scripts/validate_padded_mlp_topologies.py` | **No CLI.** Check that the fixed padded-MLP capacity covers the thesis topology set. Rerun after upgrading `mujoco-truss-gen`. |
