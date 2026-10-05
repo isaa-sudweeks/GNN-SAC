@@ -1,0 +1,8 @@
+# @package _global_
+exp_name: routing-v1-baseline
+routing_ablation_arm: baseline
+graph_features:
+  node_roles: true
+  edge_distance: true
+  edge_roles: false
+  edge_direction: false

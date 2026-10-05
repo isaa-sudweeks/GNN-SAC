@@ -27,6 +27,9 @@
   comparison baseline
 - [scripts.md](usage/scripts.md): launch, validation, benchmark, and figure scripts
 
+- [routing_ablation.md](usage/routing_ablation.md): controlled signed-routing
+  experiment and read-only development diagnostics
+
 ## Design
 
 - [architecture.md](design/architecture.md): graph observation, networks, action

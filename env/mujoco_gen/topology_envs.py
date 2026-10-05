@@ -38,6 +38,51 @@ def _edge_roles_enabled(config) -> bool:
     return bool(_cfg_get(features, "edge_roles", False))
 
 
+def _edge_direction_enabled(config) -> bool:
+    features = _cfg_get(config, "graph_features", {})
+    enabled = bool(_cfg_get(features, "edge_direction", False))
+    if enabled and not bool(_cfg_get(config, "use_control_graph", False)):
+        raise ValueError("Signed edge directions require use_control_graph=true.")
+    return enabled
+
+
+def control_edge_directions(source) -> np.ndarray:
+    """Align controller incidence signs with bidirectional control message edges.
+
+    +1 follows the actuator's from_node -> to_node convention (positive
+    contribution at the receiver); -1 reverses it. Connector and tube edges
+    without a direct actuator are zero.
+    Read actuator metadata, never infer orientation from node names or positions.
+    """
+    metadata = source.control_graph
+    if not metadata.enabled:
+        raise ValueError("Signed routing requires control-graph actuator metadata.")
+    oriented = {}
+    for edge in metadata.actuator_edges:
+        for pair, sign in (((edge.from_node, edge.to_node), 1),
+                           ((edge.to_node, edge.from_node), -1)):
+            if pair in oriented and oriented[pair] != sign:
+                raise ValueError("Ambiguous actuator orientation for a control edge.")
+            oriented[pair] = sign
+    values = []
+    for edge in metadata.edges:
+        if edge.from_node == edge.to_node:
+            raise ValueError("Signed routing does not support self-loop control edges.")
+        if edge.type == "connector":
+            sign = 0
+        elif edge.type == "actuated":
+            pair = (edge.from_node, edge.to_node)
+            # Some structural tube edges intentionally have no direct actuator.
+            sign = oriented.get(pair, 0)
+        else:
+            raise ValueError(f"Unknown control edge type: {edge.type!r}.")
+        values.extend((sign, -sign))
+    result = np.asarray(values, dtype=np.float32)
+    if result.size != get_edge_index(source, graph_view="control").shape[1]:
+        raise ValueError("Control edge directions do not align with message edges.")
+    return result
+
+
 def _broken_nodes_probability(config) -> float | None:
     """Validate and return the enabled per-node failure probability."""
     if not bool(_cfg_get(config, "domain_randomization", False)):
@@ -734,6 +779,10 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
                 shape=(edge_index.shape[1],),
                 dtype=np.int64,
             )
+        if _edge_direction_enabled(self.source_config):
+            observation_spaces["edge_direction"] = spaces.Box(
+                low=-1, high=1, shape=(get_edge_index(self.mj_model, graph_view="control").shape[1],), dtype=np.float32
+            )
         self.observation_space = spaces.Dict(observation_spaces)
 
     def _policy_action_mask(self):
@@ -826,6 +875,8 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
             observation["edge_role"] = _semantic_edge_roles(
                 self.mj_model, graph_view=graph_view
             )
+        if _edge_direction_enabled(self.source_config):
+            observation["edge_direction"] = control_edge_directions(self.mj_model)
         return observation
 
     def step(self, action):

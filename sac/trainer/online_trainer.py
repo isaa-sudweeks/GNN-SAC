@@ -1111,6 +1111,7 @@ class OnlineTrainer(Trainer):
                             completed_episodes=int(slot_done.sum()),
                             edge_index=bucket.env.edge_index,
                             edge_role=bucket.env.edge_role,
+                            edge_direction=getattr(bucket.env, "edge_direction", None),
                         )
                         inserted_transitions += int(transitions["obs_x"].size(0))
                     bucket.obs = next_obs

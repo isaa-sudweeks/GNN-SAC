@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import copy, deepcopy
 import hashlib
 import json
 import math
@@ -96,6 +97,8 @@ def replay_observations(replay: dict):
                     if replay_format >= 4 and "obs_action_mask" in fields
                     else static["action_mask"]
                 )
+            if static.get("edge_direction") is not None:
+                graph.edge_direction = static["edge_direction"]
             if static["edge_role"] is not None:
                 graph.edge_role = static["edge_role"]
             if static["has_rigidity"]:
@@ -131,6 +134,52 @@ def replay_contract_observation(replay: dict, first: Data) -> Data:
     contract = first.clone()
     contract.action_mask = base_mask.detach().clone().bool()
     return contract
+
+
+def attach_control_metadata(graph: Data, metadata: dict[str, torch.Tensor]) -> Data:
+    """Add validated static metadata without mutating teacher replay tensors."""
+    if not metadata:
+        return graph
+    result = copy(graph)
+    for key, value in metadata.items():
+        existing = getattr(graph, key, None)
+        if existing is not None and not torch.equal(existing.cpu(), value.cpu()):
+            raise ValueError(f"Teacher replay {key} disagrees with reconstructed metadata.")
+        result[key] = value.to(graph.x.device)
+    return result
+
+
+def reconstruct_control_metadata(teacher_cfg, student_cfg, graph: Data) -> dict[str, torch.Tensor]:
+    """Recover missing edge semantics from a verified teacher control graph.
+
+    Never infer signs from replay geometry. Fail on ordered topology, mask, or
+    existing-metadata disagreement; no held-out teacher is opened here.
+    """
+    from env.mujoco_gen.topology_envs import MujocoPresetGraphEnv
+    flags = graph_feature_flags(student_cfg)
+    if not (flags["use_edge_roles"] or flags["use_edge_direction"]):
+        return {}
+    if not bool(_get(teacher_cfg, "use_control_graph", False)):
+        raise ValueError("Metadata reconstruction requires a control-graph teacher.")
+    config = deepcopy(vars(teacher_cfg) if not isinstance(teacher_cfg, dict) else teacher_cfg)
+    config.update(domain_randomization=False, mujoco_backend="mujoco", sim_backend="mujoco")
+    config["graph_features"] = dict(node_roles=False, edge_distance=False,
+                                    edge_roles=flags["use_edge_roles"],
+                                    edge_direction=flags["use_edge_direction"])
+    env = MujocoPresetGraphEnv(config)
+    try:
+        observation, _ = env.reset(seed=0)
+        if (tuple(observation["x"].shape) != tuple(graph.x.shape)
+                or not torch.equal(torch.as_tensor(observation["edge_index"]), graph.edge_index.cpu())
+                or not torch.equal(torch.as_tensor(observation["action_mask"]).bool(),
+                                   policy_action_mask(graph).cpu())):
+            raise ValueError("Reconstructed teacher control graph differs from replay ordering or mask.")
+        metadata = {key: torch.as_tensor(observation[key])
+                    for key in ("edge_role", "edge_direction") if key in observation}
+        attach_control_metadata(graph, metadata)
+        return metadata
+    finally:
+        env.close()
 
 
 TARGET_CACHE_FORMAT = "gnn-sac-distillation-targets-v3"
@@ -425,6 +474,7 @@ class Distillation:
         self.teachers, self.teacher_configs = {}, {}
         self.datasets, self.sources = {}, {}
         self.schema_pairs = {}
+        self.control_metadata = {}
         self._dataset_plans = {}
         self.replay_signatures = {}
         self.pending_samples = {}
@@ -474,6 +524,13 @@ class Distillation:
                     replay = replay["buffers"][matching[0]]
                 first = next(replay_observations(replay))
                 contract_observation = replay_contract_observation(replay, first)
+                if bool(_get(options, "reconstruct_control_metadata", False)):
+                    self.control_metadata[task] = reconstruct_control_metadata(
+                        teacher_cfg, cfg, contract_observation
+                    )
+                    contract_observation = attach_control_metadata(
+                        contract_observation, self.control_metadata[task]
+                    )
                 signature = graph_signature(contract_observation)
                 if first.x.size(1) != int(cfg.obs_dim):
                     raise ValueError("Teacher replay observation width differs from student.")
@@ -492,11 +549,16 @@ class Distillation:
                         "student_graph_feature_schema": self.schema_pairs[task]["student"],
                         "use_virtual_node": bool(_get(self.cfg, "use_virtual_node", False)),
                     }
+                    if self.control_metadata.get(task):
+                        contract["reconstructed_control_metadata"] = {
+                            key: value.tolist() for key, value in self.control_metadata[task].items()
+                        }
                     contract_hash = hashlib.sha256(
                         json.dumps(contract, sort_keys=True).encode()
                     ).hexdigest()[:16]
                     directory = cache / f"{digest}-targets-v3-{contract_hash}-s{shard_size}"
-                    if self.schema_pairs[task]["teacher"] == self.schema_pairs[task]["student"]:
+                    if (self.schema_pairs[task]["teacher"] == self.schema_pairs[task]["student"]
+                            and not self.control_metadata.get(task)):
                         legacy_contract = {
                             "format": TARGET_CACHE_FORMAT,
                             "source_sha256": digest,
@@ -532,7 +594,8 @@ class Distillation:
     def _prepare_dataset(self, task: str, observations) -> ObservationShards:
         plan = self._dataset_plans[task]
         return ObservationShards.prepare(
-            plan["directory"], observations, plan["shard_size"], plan["contract"],
+            plan["directory"], (attach_control_metadata(g, self.control_metadata.get(task, {}))
+                                for g in observations), plan["shard_size"], plan["contract"],
             self.teachers[task], lambda graph: self.prepare_teacher(task, graph),
             self.device, plan["target_batch_size"],
             student_prepare_graph_fn=self.prepare_student,

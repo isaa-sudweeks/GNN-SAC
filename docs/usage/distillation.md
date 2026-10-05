@@ -172,7 +172,16 @@ action mask and edge distance uses observed xyz coordinates. Edge roles require
 used for an offline student that requires edge roles. Likewise, online teacher
 edge roles require the student's raw replay to retain them. Missing metadata
 fails during compatibility validation with the affected policy and schema.
-Distillation never guesses semantic roles.
+Distillation never guesses semantic roles. With the explicit opt-in
+`distillation.reconstruct_control_metadata=true`, it can instead rebuild the
+teacher control graph from the checkpoint configuration and verify its exact
+ordered adjacency, observation shape, base action mask, and any existing metadata
+against replay before adding roles or routing signs. This supports legacy teacher
+replays without those fields. Reconstructed values are fingerprinted in the cache
+contract; teacher network inputs/targets retain their own saved feature schema.
+No held-out teachers are used by training. The separate read-only development
+diagnostic script described in [routing_ablation.md](routing_ablation.md) opens
+held-out teachers for evaluation only.
 
 Target-cache contracts include both feature schemas and both prepared graph
 signatures, so incompatible pairs cannot share tensors. Existing v2 caches
@@ -202,3 +211,8 @@ replay/shard handling, held-out exclusion, both actor optimizers, zero-weight
 baseline equivalence, offline resume, and a short two-topology native MuJoCo
 training smoke test using generated fixture teachers. This validates mechanics;
 it does not establish transfer performance for trained specialist checkpoints.
+
+Students may also enable `graph_features.edge_direction=true` while keeping
+legacy teachers unchanged. This adds signed actuator-routing metadata to edge
+features, not an action-space or controller change. Metadata reconstruction is
+required if those teacher replays did not retain the field.

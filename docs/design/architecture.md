@@ -8,7 +8,7 @@ early design proposals it replaces (edge-action decoders, edge features) are in
 mujoco-truss-gen model
    │  env/mujoco_gen/topology_envs.py  (native)   or   mjx_vector_env.py (MJX)
    ▼
-graph observation dict {x, edge_index, action_mask, rigidity[, edge_role]}
+graph observation dict {x, edge_index, action_mask, rigidity[, edge_role, edge_direction]}
    │  env/wrappers → PyG Data;  sac/common/graph_transforms.prepare_graph
    ▼
 GNN actor ──► one action per actuated control node ──► NodeVelocityController ──► tendon actuator ctrl
@@ -26,6 +26,7 @@ The environment builds each observation from the `mujoco-truss-gen` model:
 | `action_mask` | `[num_nodes]` | `True` for nodes that receive a policy action (not passive). |
 | `rigidity` | `[1]` | Current rigidity normalized by its initial value. |
 | `edge_role` | `[num_directed_edges]` | Only present with `graph_features.edge_roles`. |
+| `edge_direction` | `[num_directed_edges]` | Optional controller incidence sign: +1 toward the actuator destination, -1 in reverse, zero for connector/unactuated edges. Requires the control graph. |
 
 **Which nodes appear** depends on the graph view:
 
@@ -143,3 +144,11 @@ temperature tuning.
 routing, replay, and entropy averaging. It swaps the GNN for an MLP over a fixed
 21-slot flattened node vector with existence and action masks, and it never
 reads `edge_index`. See [padded_mlp_baseline.md](../usage/padded_mlp_baseline.md).
+
+Signed routing (`graph_features.edge_direction=true`) uses the actuator metadata
+that defines the node-to-tendon incidence matrix. It is independent of geometric
+direction and node identifiers. Feature order is edge-role one-hot, routing sign,
+then observed edge distance (whichever are enabled). Architectural virtual edges
+have zero routing sign. Tensor replay preserves the static signed metadata, checks
+that it does not change within a task, and includes it in raw topology contracts.
+Legacy checkpoints retain their original feature schema when the flag is false.

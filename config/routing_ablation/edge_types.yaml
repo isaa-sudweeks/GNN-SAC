@@ -1,0 +1,8 @@
+# @package _global_
+exp_name: routing-v1-edge-types
+routing_ablation_arm: edge_types
+graph_features:
+  node_roles: true
+  edge_distance: true
+  edge_roles: true
+  edge_direction: false
