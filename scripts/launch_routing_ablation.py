@@ -33,8 +33,8 @@ def build_commands(run_root: Path, cache_dir: Path, seeds: list[int]) -> tuple[l
     ]
     jobs = []
     with initialize_config_dir(config_dir=str(ROOT / 'config'), version_base=None):
-        for arm in ('baseline', 'edge_types', 'signed'):
-            for seed in seeds:
+        for seed in seeds:
+            for arm in ('baseline', 'edge_types', 'signed'):
                 raw = compose(config_name='config', overrides=[*common, f'+routing_ablation={arm}', f'seed={seed}'])
                 cfg = parse_cfg(raw)
                 if cfg.steps != 2000010 or len(cfg.truss_topologies) != 15:
@@ -47,7 +47,7 @@ def build_commands(run_root: Path, cache_dir: Path, seeds: list[int]) -> tuple[l
                                  graph_features=cfg.graph_features,
                                  exp_name=cfg.exp_name))
     command = [sys.executable, str(ROOT / 'sac/train.py'), '-m', *common,
-               '+routing_ablation=baseline,edge_types,signed', 'seed='+','.join(map(str,seeds))]
+               'seed='+','.join(map(str,seeds)), '+routing_ablation=baseline,edge_types,signed']
     return command, jobs
 
 

@@ -68,7 +68,8 @@ def evaluate_checkpoint(path: Path, samples: int=256, episodes: int=5) -> dict:
     step=int(state.get('trainer',{}).get('step',0))
     final_test=set(config.get('cross_validation',{}).get('final_test',[]))
     heldout=list(config.get('eval_extra_topologies') or [])
-    if not heldout or set(heldout)&final_test:
+    if (not heldout or set(heldout)&final_test
+            or set(heldout)&set(config.get('truss_topologies') or [])):
         raise ValueError('Diagnostics require development holdouts and must exclude final_test.')
     del state
     result=dict(checkpoint=str(path),step=step,seed=cfg.seed,topologies={},
