@@ -44,7 +44,7 @@ def main() -> None:
             torch.save(dict(config=vars(cfg),agent=agent.training_state_dict(),buffer=buffer.state_dict()),path)
             mapping[topology]=str(path)
         finally:env.close()
-    teacher_override='distillation.teachers={'+','.join(f'{key}:{value}' for key,value in mapping.items())+'}'
+    teacher_override='++distillation.teachers={'+','.join(f'{key}:{value}' for key,value in mapping.items())+'}'
     command=[sys.executable,str(ROOT/'sac/train.py'),'sac_backend=gnn','platform=supercomputer',
              'sim_backend=mjx','mjx_impl=warp','num_envs=4','truss_topologies=[tetrahedron,octahedron]',
              'distillation=kl','distillation.reconstruct_control_metadata=true',teacher_override,
