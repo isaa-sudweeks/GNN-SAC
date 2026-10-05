@@ -27,7 +27,7 @@ from tests.test_tensor_gnn_buffer import config as replay_config, transition
 
 
 class SignedRoutingTest(unittest.TestCase):
-    def test_real_controller_reversal_and_permutation(self):
+    def test_real_controller_reversal_preserves_physical_commands(self):
         cfg = graph_test_cfg(domain_randomization=False, graph_features=dict(edge_direction=True, edge_roles=True))
         env = MujocoPresetGraphEnv(cfg)
         try:
@@ -106,7 +106,7 @@ class SignedRoutingTest(unittest.TestCase):
         from trainer.online_trainer import OnlineTrainer
         from tests.test_checkpointing import DummyLogger
         with tempfile.TemporaryDirectory() as tmp:
-            settings = dict(work_dir=tmp, steps=8, seed_steps=1, pretrain_steps=1,
+            settings = dict(work_dir=tmp, seed=1, steps=8, seed_steps=1, pretrain_steps=1,
                             batch_size=2, buffer_size=16, eval_freq=100, eval_episodes=1,
                             max_steps=2, nsubsteps=1, normalize_rewards=False,
                             save_video=False, enable_wandb=False, save_agent=False,
@@ -148,6 +148,18 @@ class SignedRoutingTest(unittest.TestCase):
                 self.assertEqual(trainer._step, cfg.steps)
                 self.assertGreater(trainer._optimizer_updates, 0)
                 self.assertTrue(all(torch.isfinite(x).all() for x in agent.model.parameters()))
+                # Exercise diagnostic I/O using fixture checkpoints, not research data.
+                from scripts.evaluate_routing_ablation import evaluate_checkpoint
+                state = trainer.checkpoint_state_dict()
+                state['config']['truss_topologies'] = ['octahedron']
+                state['config']['eval_extra_topologies'] = ['tetrahedron']
+                path = Path(tmp) / 'diagnostic_fixture.pt'
+                torch.save(state, path)
+                diagnostics = evaluate_checkpoint(path, samples=2, episodes=1)
+                metrics = diagnostics['topologies']['tetrahedron']
+                self.assertTrue(np.isfinite(metrics['teacher_kl']))
+                self.assertTrue(np.isfinite(metrics['episode_distance']))
+                self.assertEqual(len(metrics['rollouts']), 1)
             finally:
                 env.close()
 
