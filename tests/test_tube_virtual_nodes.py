@@ -230,7 +230,13 @@ class TubeVirtualNodeTest(unittest.TestCase):
                 self.assertFalse(any('_n7_' in t or t == 'usevitch_1514879'
                                      for t in job['training_topologies'] + job['heldout_topologies']))
                 self.assertTrue(job['graph_features']['edge_direction'])
+                self.assertTrue(job['enable_wandb'])
+                self.assertTrue(job['set_wandb_offline'])
+                self.assertEqual(job['wandb_dir'], '/tmp/tube-dry')
             self.assertIn('distillation.decay_steps=75000000', command)
+            self.assertIn('wandb_dir=/tmp/tube-dry', command)
+            self.assertIn('enable_wandb=true', command)
+            self.assertIn('set_wandb_offline=true', command)
 
     def test_tensor_replay_resume_preserves_tube_template(self):
         from common.distillation import replay_observations

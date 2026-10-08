@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -30,6 +31,7 @@ def build_commands(run_root: Path, cache_dir: Path, seeds: list[int],
         'distillation=kl_paper_v4', 'distillation.reconstruct_control_metadata=true',
         f'distillation.offline_only={str(stage == "offline").lower()}',
         f'run_root={run_root}', f'distillation.cache_dir={cache_dir}',
+        f'wandb_dir={run_root}', 'enable_wandb=true', 'set_wandb_offline=true',
         'steps=133334', 'distillation.decay_steps=75000000',
         'distillation.pretrain_updates=10000',
         'message_attention=true', 'use_virtual_node=true',
@@ -53,6 +55,9 @@ def build_commands(run_root: Path, cache_dir: Path, seeds: list[int],
                                  steps=0 if stage == 'offline' else cfg.steps,
                                  planned_online_steps=cfg.steps,
                                  trainable_parameters=parameters,
+                                 wandb_dir=str(cfg.wandb_dir),
+                                 enable_wandb=cfg.enable_wandb,
+                                 set_wandb_offline=cfg.set_wandb_offline,
                                  training_topologies=cfg.truss_topologies,
                                  heldout_topologies=cfg.eval_extra_topologies,
                                  graph_features=cfg.graph_features,
@@ -64,11 +69,15 @@ def build_commands(run_root: Path, cache_dir: Path, seeds: list[int],
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--run-root', type=Path, required=True)
-    parser.add_argument('--cache-dir', type=Path, required=True)
+    parser.add_argument('--run-root', type=Path, help='Default: ~/nobackup/autodelete/GNN-SAC/runs/tube-<stage>-v1.')
+    parser.add_argument('--cache-dir', type=Path, default=Path.home() / 'nobackup/autodelete/gnn-sac-tube-cache')
     parser.add_argument('--stage', choices=['offline', 'online'], default='offline')
     parser.add_argument('--execute', action='store_true', help='Submit; default writes a manifest only.')
     args = parser.parse_args()
+    if args.run_root is None:
+        args.run_root = Path.home() / f'nobackup/autodelete/GNN-SAC/runs/tube-{args.stage}-v1'
+    args.run_root = args.run_root.expanduser().resolve()
+    args.cache_dir = args.cache_dir.expanduser().resolve()
     command, jobs = build_commands(args.run_root, args.cache_dir, [1, 2, 3], args.stage)
     args.run_root.mkdir(parents=True, exist_ok=True)
     manifest = dict(command=command, jobs=jobs,
@@ -77,7 +86,16 @@ def main() -> None:
     (args.run_root / 'tube_experiment_manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(shlex.join(command), flush=True)
     if args.execute:
-        result = subprocess.run(command, cwd=ROOT)
+        # Slurm exports this environment to workers. Keep W&B's artifact staging
+        # and cache on the same storage as its offline run records.
+        environment = dict(os.environ)
+        for name, directory in {
+            'WANDB_CACHE_DIR': args.run_root / 'cache/wandb',
+            'WANDB_DATA_DIR': args.run_root / 'cache/wandb-data',
+        }.items():
+            directory.mkdir(parents=True, exist_ok=True)
+            environment[name] = str(directory)
+        result = subprocess.run(command, cwd=ROOT, env=environment)
         diagnostics = []
         for directory in sorted(args.run_root.glob('truss-graph/tube-v1-*/seed_*/*/checkpoints')):
             if not (directory / 'distillation.pt').exists():

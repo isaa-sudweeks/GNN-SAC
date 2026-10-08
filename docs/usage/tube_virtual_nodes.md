@@ -27,20 +27,29 @@ From the repository checkout on ORC (with the implementation available there):
 
 ```bash
 uv run python scripts/run_routing_canary.py \
-  --tube-nodes --run-root "$HOME/robotics/GNN-SAC/runs/tube-canary"
+  --tube-nodes --run-root "$HOME/nobackup/autodelete/GNN-SAC/runs/tube-canary"
 
 uv run python scripts/launch_tube_ablation.py \
   --stage offline \
-  --run-root "$HOME/robotics/GNN-SAC/runs/tube-offline-v1" \
+  --run-root "$HOME/nobackup/autodelete/GNN-SAC/runs/tube-offline-v1" \
   --cache-dir "$HOME/nobackup/autodelete/gnn-sac-tube-cache" \
   --execute
 ```
 
 Omit `--execute` to write the manifest and print the Hydra command without
-submitting. On a local CPU machine, add `--cpu` to the canary.
+submitting. The default run root is
+`~/nobackup/autodelete/GNN-SAC/runs/tube-<stage>-v1`; the default distillation cache
+is `~/nobackup/autodelete/gnn-sac-tube-cache`. On a local CPU machine, add `--cpu`
+to the canary.
+
+Experiment jobs explicitly enable offline W&B logging, with records under
+`<run_root>/wandb/offline-run-*`. The launcher also places W&B artifact staging
+and cache under `<run_root>/cache`. Upload those offline records later using
+`wandb sync`. The canary disables W&B entirely. Separate development diagnostics
+are saved in `tube_diagnostics.json`; they are not automatically added to W&B.
 
 The launcher compares signed versus signed plus tube membership across seeds
-1–3. It fixes random_5fold/fold_0 (15 training presets, four development holdouts),
+1–3: six jobs total, on **one fold only**. It fixes random_5fold/fold_0 (15 training presets, four development holdouts),
 10,000 offline updates, attention/global-node settings, teachers, and a
 75M-transition KL decay. N7 final tests are excluded. The manifest reports
 trainable parameter counts; width/depth stay fixed, so parameter counts differ
@@ -74,7 +83,7 @@ matched offline-plus-online experiment:
 ```bash
 uv run python scripts/launch_tube_ablation.py \
   --stage online \
-  --run-root "$HOME/robotics/GNN-SAC/runs/tube-online-v1" \
+  --run-root "$HOME/nobackup/autodelete/GNN-SAC/runs/tube-online-v1" \
   --cache-dir "$HOME/nobackup/autodelete/gnn-sac-tube-cache" \
   --execute
 ```
