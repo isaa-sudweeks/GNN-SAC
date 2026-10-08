@@ -152,3 +152,15 @@ then observed edge distance (whichever are enabled). Architectural virtual edges
 have zero routing sign. Tensor replay preserves the static signed metadata, checks
 that it does not change within a task, and includes it in raw topology contracts.
 Legacy checkpoints retain their original feature schema when the flag is false.
+
+## Tube aggregation nodes
+
+With `graph_features.tube_nodes=true`, `prepare_graph` appends one non-actuated
+hub per structural connected component in the control graph, after the existing
+global node. Connector edges do not merge tubes. A dedicated tube-type channel
+and fourth membership-edge role identify this relation. Membership messages have
+zero direction and distance. Physical/action masks exclude all architectural
+nodes; `global_node_mask` identifies the single rigidity-bearing readout node.
+Dense replay templates and distillation shards preserve that mask explicitly.
+See [the experiment workflow](../usage/tube_virtual_nodes.md) for the feature
+contract, legacy-teacher alignment, and grouping-only scope.

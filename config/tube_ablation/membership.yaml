@@ -1,0 +1,9 @@
+# @package _global_
+exp_name: tube-v1-membership
+tube_ablation_arm: membership
+graph_features:
+  tube_nodes: true
+  node_roles: true
+  edge_distance: true
+  edge_roles: true
+  edge_direction: true

@@ -27,6 +27,7 @@
   comparison baseline
 - [scripts.md](usage/scripts.md): launch, validation, benchmark, and figure scripts
 
+- [tube_virtual_nodes.md](usage/tube_virtual_nodes.md): tube membership screen and launch commands
 - [routing_ablation.md](usage/routing_ablation.md): controlled signed-routing
   experiment and read-only development diagnostics
 

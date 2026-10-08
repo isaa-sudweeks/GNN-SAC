@@ -35,7 +35,10 @@ def _cfg_get(config, name, default=None):
 
 def _edge_roles_enabled(config) -> bool:
     features = _cfg_get(config, "graph_features", {})
-    return bool(_cfg_get(features, "edge_roles", False))
+    tubes = bool(_cfg_get(features, "tube_nodes", False))
+    if tubes and not bool(_cfg_get(config, "use_control_graph", False)):
+        raise ValueError("Tube nodes require use_control_graph=true.")
+    return bool(_cfg_get(features, "edge_roles", False)) or tubes
 
 
 def _edge_direction_enabled(config) -> bool:

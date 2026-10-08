@@ -50,11 +50,13 @@ class GNNActorCritic(nn.Module):
             cfg.obs_dim,
             use_virtual_node=use_virtual_node,
             use_node_roles=feature_flags["use_node_roles"],
+            use_tube_nodes=feature_flags["use_tube_nodes"],
         )
         edge_channels = graph_edge_input_dim(
             use_edge_roles=feature_flags["use_edge_roles"],
             use_edge_distance=feature_flags["use_edge_distance"],
             use_edge_direction=feature_flags["use_edge_direction"],
+            use_tube_nodes=feature_flags["use_tube_nodes"],
         )
 
         self._pi = gnn_layers.GNN(
@@ -196,11 +198,7 @@ class GNNActorCritic(nn.Module):
             obs, "_physical_node_count_cache", None
         )
         if physical_node_count is None:
-            if bool(getattr(self.cfg, "use_virtual_node", False)):
-                graph_count = int(getattr(obs, "num_graphs", 1))
-                physical_node_count = obs.x.size(0) - graph_count
-            else:
-                physical_node_count = obs.x.size(0)
+            physical_node_count = int(pool_mask.sum())
         policy_action_count = getattr(
             obs, "_policy_action_count_cache", None
         )
@@ -231,6 +229,7 @@ class GNNActorCritic(nn.Module):
             pool_mask,
             getattr(obs, "edge_attr", None),
             num_graphs=int(getattr(obs, "num_graphs", 1)),
+            global_mask=getattr(obs, "global_node_mask", None),
         )
 
         if return_type == "all":

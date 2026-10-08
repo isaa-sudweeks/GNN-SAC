@@ -81,12 +81,16 @@ def _configure_graph_feature_dims(cfg):
     edge_roles = bool(get_value("edge_roles", False))
     edge_distance = bool(get_value("edge_distance", False))
     use_virtual_node = bool(getattr(cfg, "use_virtual_node", False))
+    cfg.edge_role_vocabulary = ["tube", "connector", "virtual"]
+    if get_value("tube_nodes", False):
+        cfg.edge_role_vocabulary.append("membership")
     cfg.effective_node_feature_dim = (
         int(cfg.node_feature_dim)
         + 2 * int(node_roles)
         + 2 * int(use_virtual_node)
+        + int(get_value("tube_nodes", False))
     )
-    cfg.edge_feature_dim = 3 * int(edge_roles) + int(edge_distance) + int(get_value("edge_direction", False))
+    cfg.edge_feature_dim = (3 + int(get_value("tube_nodes", False))) * int(edge_roles) + int(edge_distance) + int(get_value("edge_direction", False))
 
 def _num_policy_actuators(env):
     mj_model = env.unwrapped.mj_model

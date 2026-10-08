@@ -116,6 +116,10 @@ def build_graph_static(cfg, graph: Data, action: torch.Tensor) -> dict:
             prepared.physical_node_mask.detach().cpu().bool().contiguous()
             if "physical_node_mask" in prepared else None
         ),
+        "prepared_global_node_mask": (
+            prepared.global_node_mask.detach().cpu().bool().contiguous()
+            if "global_node_mask" in prepared else None
+        ),
         "prepared_x_template": prepared.x.detach().cpu().contiguous(),
         "prepared_edge_attr_template": (
             prepared.edge_attr.detach().cpu().contiguous() if "edge_attr" in prepared else None
@@ -152,7 +156,9 @@ def _dense_prepared_features(cfg, group: DenseGraphGroup, device):
             torch.zeros(count, device=device, dtype=x.dtype)
             if group.rigidity is None else group.rigidity.reshape(-1)
         )
-        x[:, -1, -1] = rigidity
+        global_mask = static.get("prepared_global_node_mask")
+        global_index = -1 if global_mask is None else int(global_mask.nonzero()[0])
+        x[:, global_index, -1] = rigidity
     template_edge_attr = static["prepared_edge_attr_template"]
     edge_attr = None
     if template_edge_attr is not None:
@@ -187,6 +193,7 @@ def dense_graph_batch(cfg, groups, device) -> Batch:
     device = torch.device(device)
     x_parts, edge_parts, attr_parts, mask_parts, physical_parts = [], [], [], [], []
     role_parts, type_parts, rigidity_parts, graph_ids, ptr_parts = [], [], [], [], []
+    global_parts = []
     ptr_parts.append(torch.zeros(1, dtype=torch.long, device=device))
     graph_offset = node_offset = 0
     for group in groups:
@@ -209,6 +216,9 @@ def dense_graph_batch(cfg, groups, device) -> Batch:
         mask = _dense_prepared_action_mask(group, device)
         if mask is not None:
             mask_parts.append(mask.flatten())
+        global_mask = static.get("prepared_global_node_mask")
+        if global_mask is not None:
+            global_parts.append(global_mask.to(device).repeat(count))
         physical = static["prepared_physical_node_mask"]
         if physical is not None:
             physical_parts.append(physical.to(device).repeat(count))
@@ -234,6 +244,8 @@ def dense_graph_batch(cfg, groups, device) -> Batch:
     }
     if mask_parts:
         kwargs["action_mask"] = torch.cat(mask_parts)
+    if global_parts:
+        kwargs["global_node_mask"] = torch.cat(global_parts)
     if physical_parts:
         kwargs["physical_node_mask"] = torch.cat(physical_parts)
     if attr_parts:

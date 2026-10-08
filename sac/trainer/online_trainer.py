@@ -818,6 +818,15 @@ class OnlineTrainer(Trainer):
         Train the SAC agent.
         """
         self._run_distillation_pretraining()
+        distillation_options = getattr(self.cfg, "distillation", {})
+        if distillation_options.get("offline_only", False):
+            if self.distillation is None:
+                raise ValueError("distillation.offline_only requires enabled distillation.")
+            self.save_checkpoint(identifier="distillation")
+            self.logger.finish(self.agent)
+            if self.eval_env is not self.env:
+                self.eval_env.close()
+            return self._best_eval_metrics
         self._ensure_performance_profiler()
         num_envs = int(getattr(self.env, "num_envs", getattr(self.cfg, "num_envs", 1)))
         buckets = self._vector_collection_buckets()

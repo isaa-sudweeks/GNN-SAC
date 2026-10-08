@@ -1,6 +1,9 @@
 # Tube-specific virtual nodes: feasibility and experiment plan
 
-Status: research complete; model implementation and training experiment pending.
+Status: grouping-only model, replay/distillation integration, regression tests,
+and offline/online launch protocol implemented on `codex/implement-tube-virtual-nodes`.
+Numerical research experiments, GPU canary, physical-length features, and optional
+shuffled-group control pending. See [usage](../usage/tube_virtual_nodes.md).
 Branch: `codex/tube-virtual-nodes`, based on `codex/signed-routing-ablation`
 at `ec1e6fe`. Research date: 2026-10-07.
 

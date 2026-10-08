@@ -25,6 +25,7 @@ def graph_feature_flags(config) -> dict[str, bool]:
         "use_node_roles": bool(_cfg_get(features, "node_roles", False)),
         "use_edge_roles": bool(_cfg_get(features, "edge_roles", False)),
         "use_edge_distance": bool(_cfg_get(features, "edge_distance", False)),
+        "use_tube_nodes": bool(_cfg_get(features, "tube_nodes", False)),
         "use_edge_direction": bool(_cfg_get(features, "edge_direction", False)),
     }
 
@@ -41,6 +42,9 @@ def graph_feature_schema(config) -> dict[str, object]:
     # Preserve the exact legacy schema for checkpoints without signed routing.
     if flags["use_edge_direction"]:
         schema["edge_direction"] = "controller_incidence_v1"
+    if flags["use_tube_nodes"]:
+        schema["tube_nodes"] = "structural_components_v1"
+        schema["edge_role_vocabulary"] = [*EDGE_ROLE_NAMES, "membership"]
     return schema
 
 
@@ -49,19 +53,21 @@ def graph_input_dim(
     *,
     use_virtual_node: bool,
     use_node_roles: bool = False,
+    use_tube_nodes: bool = False,
 ) -> int:
     """Return the GNN input width after optional virtual-node context."""
     return (
         int(node_feature_dim)
+        + int(use_tube_nodes)
         + (NODE_ROLE_DIM if use_node_roles else 0)
         + (VIRTUAL_NODE_CONTEXT_DIM if use_virtual_node else 0)
     )
 
 
 def graph_edge_input_dim(*, use_edge_roles: bool, use_edge_distance: bool,
-                         use_edge_direction: bool = False) -> int:
+                         use_edge_direction: bool = False, use_tube_nodes: bool = False) -> int:
     """Return the configured message-edge feature width."""
-    return (EDGE_ROLE_DIM if use_edge_roles else 0) + int(use_edge_direction) + int(use_edge_distance)
+    return ((EDGE_ROLE_DIM + int(use_tube_nodes)) if use_edge_roles else 0) + int(use_edge_direction) + int(use_edge_distance)
 
 
 def _physical_edge_features(
@@ -70,6 +76,7 @@ def _physical_edge_features(
     use_edge_roles: bool,
     use_edge_distance: bool,
     use_edge_direction: bool = False,
+    use_tube_nodes: bool = False,
 ) -> torch.Tensor | None:
     edge_count = int(graph.edge_index.size(1))
     features = []
@@ -87,7 +94,7 @@ def _physical_edge_features(
         roles = roles.long()
         if roles.numel() and (int(roles.min()) < 0 or int(roles.max()) >= EDGE_ROLE_DIM - 1):
             raise ValueError("Raw edge roles must be tube=0 or connector=1; virtual edges are added internally.")
-        features.append(F.one_hot(roles, num_classes=EDGE_ROLE_DIM).to(dtype=graph.x.dtype))
+        features.append(F.one_hot(roles, num_classes=EDGE_ROLE_DIM + int(use_tube_nodes)).to(dtype=graph.x.dtype))
 
     if use_edge_direction:
         direction = getattr(graph, "edge_direction", None)
@@ -114,6 +121,34 @@ def _physical_edge_features(
     return torch.cat(features, dim=-1) if len(features) > 1 else features[0]
 
 
+def tube_components(graph: Data) -> list[list[int]]:
+    """Recover control instances per tube from all structural edges, including passive ones.
+
+    Connector edges couple distinct instances and must never merge their tubes.
+    Component labels are internal only and are never passed as numeric features.
+    """
+    roles = getattr(graph, "edge_role", None)
+    if roles is None or roles.numel() != graph.edge_index.size(1):
+        raise ValueError("Tube nodes require one raw edge_role per directed control edge.")
+    if not bool(((roles == 0) | (roles == 1)).all()):
+        raise ValueError("Tube membership requires raw tube/connector roles.")
+    parents = list(range(graph.num_nodes))
+    def root(i):
+        while parents[i] != i:
+            parents[i] = parents[parents[i]]
+            i = parents[i]
+        return i
+    for a, b in graph.edge_index[:, roles == 0].detach().cpu().t().tolist():
+        parents[root(b)] = root(a)
+    groups = {}
+    for i in range(graph.num_nodes):
+        groups.setdefault(root(i), []).append(i)
+    result = list(groups.values())
+    if any(len(group) < 2 for group in result):
+        raise ValueError("Control nodes without a structural tube cannot receive a tube hub.")
+    return result
+
+
 def prepare_graph(
     graph: Data,
     *,
@@ -122,17 +157,21 @@ def prepare_graph(
     use_edge_roles: bool = False,
     use_edge_distance: bool = False,
     use_edge_direction: bool = False,
+    use_tube_nodes: bool = False,
 ) -> Data:
-    """Clone a graph and optionally append one rigidity-aware virtual node.
+    """Add global context and optional typed tube hubs to a raw physical graph.
 
-    Physical nodes receive two zero-valued context channels. The appended
-    virtual node receives an ``is_virtual`` flag and the graph's normalized
-    rigidity ratio, allowing global structural health to reach every physical
-    node through one message-passing layer.
+    The global node carries rigidity and only connects raw physical instances.
+    Tube hubs connect their own structural component, excluding connectors.
+    Architectural edges carry no geometric distance or controller incidence.
+    Legacy feature widths and schemas remain unchanged when tube hubs are off.
     """
-    if not (use_virtual_node or use_node_roles or use_edge_roles or use_edge_distance or use_edge_direction):
+    if not (use_virtual_node or use_node_roles or use_edge_roles or use_edge_distance or use_edge_direction or use_tube_nodes):
         return graph
 
+    if use_tube_nodes and not (use_virtual_node and use_edge_roles):
+        raise ValueError("Tube nodes require use_virtual_node=true and graph_features.edge_roles=true.")
+    groups = tube_components(graph) if use_tube_nodes else []
     prepared = graph.clone()
     num_nodes = prepared.num_nodes
     if num_nodes is None:
@@ -161,12 +200,16 @@ def prepare_graph(
         use_edge_roles=use_edge_roles,
         use_edge_distance=use_edge_distance,
         use_edge_direction=use_edge_direction,
+        use_tube_nodes=use_tube_nodes,
     )
     if edge_attr is not None:
         prepared.edge_attr = edge_attr
     for field in ("edge_role", "edge_direction"):
         if field in prepared:
             del prepared[field]
+
+    if use_tube_nodes:
+        prepared.x = torch.cat((prepared.x, prepared.x.new_zeros((num_nodes, 1))), dim=-1)
 
     if not use_virtual_node:
         return prepared
@@ -196,6 +239,28 @@ def prepare_graph(
         rigidity_value = rigidity_value[0]
     prepared.x[-1, -2] = 1.0
     prepared.x[-1, -1] = rigidity_value
+    if use_tube_nodes:
+        # Append hubs AFTER the global node so it only connects physical instances.
+        global_index = num_nodes
+        prepared.global_node_mask = torch.arange(prepared.num_nodes, device=prepared.x.device) == global_index
+        hubs = prepared.x.new_zeros((len(groups), prepared.x.size(1)))
+        hubs[:, -3] = 1.0  # dedicated tube-type channel, before global context
+        prepared.x = torch.cat((prepared.x, hubs), dim=0)
+        for field in ("action_mask", "physical_node_mask", "global_node_mask"):
+            prepared[field] = torch.cat((prepared[field], torch.zeros(len(groups), dtype=torch.bool, device=prepared.x.device)))
+        members, targets = [], []
+        for tube, group in enumerate(groups):
+            members.extend(group)
+            targets.extend([num_nodes + 1 + tube] * len(group))
+        membership = torch.tensor([members, targets], dtype=torch.long, device=prepared.x.device)
+        membership = torch.cat((membership, membership.flip(0)), dim=1)
+        prepared.edge_index = torch.cat((prepared.edge_index, membership), dim=1)
+        attr = prepared.edge_attr.new_zeros((membership.size(1), prepared.edge_attr.size(1)))
+        attr[:, EDGE_ROLE_DIM] = 1.0
+        prepared.edge_attr = torch.cat((prepared.edge_attr, attr), dim=0)
+        if "edge_type" in prepared:
+            prepared.edge_type = torch.cat((prepared.edge_type, prepared.edge_type.new_full((membership.size(1),), int(prepared.edge_type.max()) + 1)))
+        prepared.num_nodes = prepared.x.size(0)
     return prepared
 
 

@@ -1,4 +1,5 @@
 enabled: false
+offline_only: false # Stop after offline distillation and initial deterministic evaluation.
 reconstruct_control_metadata: false # Validate/recover static control metadata for legacy teacher replay.
 teachers: {} # Mapping from training topology name to full trainer checkpoint.
 pretrain_updates: 0 # Separate from SAC pretrain_steps on seed data.

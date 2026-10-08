@@ -216,3 +216,8 @@ Students may also enable `graph_features.edge_direction=true` while keeping
 legacy teachers unchanged. This adds signed actuator-routing metadata to edge
 features, not an action-space or controller change. Metadata reconstruction is
 required if those teacher replays did not retain the field.
+
+`distillation.offline_only=true` stops after offline pretraining, deterministic
+evaluation, and saving `checkpoints/distillation.pt`, without SAC transitions.
+It requires enabled distillation. The tube-membership screen uses this mode; see
+[tube virtual nodes](tube_virtual_nodes.md).

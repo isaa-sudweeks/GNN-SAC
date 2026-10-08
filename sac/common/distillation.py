@@ -23,6 +23,7 @@ from common.graph_transforms import (
     graph_feature_schema,
     graph_signature_compatible,
     graph_structure_signature as graph_signature,
+    physical_node_mask,
     policy_action_mask,
     prepare_graph,
 )
@@ -205,12 +206,19 @@ def _validate_action_alignment(teacher_graph: Data, student_graph: Data) -> None
     """Require the two feature views to preserve action rows and their order."""
     teacher_mask = policy_action_mask(teacher_graph).detach().cpu()
     student_mask = policy_action_mask(student_graph).detach().cpu()
-    if (teacher_graph.x.size(0) != student_graph.x.size(0)
-            or not torch.equal(teacher_graph.edge_index.detach().cpu(),
-                               student_graph.edge_index.detach().cpu())
-            or not torch.equal(teacher_mask, student_mask)):
+    teacher_physical = physical_node_mask(teacher_graph).cpu()
+    student_physical = physical_node_mask(student_graph).cpu()
+
+    def physical_edges(graph, mask):
+        edges = graph.edge_index.detach().cpu()
+        return edges[:, mask[edges[0]] & mask[edges[1]]]
+
+    if (not torch.equal(teacher_physical.nonzero(), student_physical.nonzero())
+            or not torch.equal(physical_edges(teacher_graph, teacher_physical),
+                               physical_edges(student_graph, student_physical))
+            or not torch.equal(teacher_mask.nonzero(), student_mask.nonzero())):
         raise ValueError(
-            "Teacher and student graph views differ in topology or policy action ordering."
+            "Teacher and student graph views differ in physical topology or policy action ordering."
         )
 
 
@@ -292,6 +300,8 @@ class ObservationShards:
             batch=torch.arange(count).repeat_interleave(nodes),
             ptr=torch.arange(0, (count + 1) * nodes, nodes),
         )
+        if "global_node_mask" in self.static:
+            kwargs["global_node_mask"] = self.static["global_node_mask"].repeat(count)
         if "physical_node_mask" in self.static:
             kwargs["physical_node_mask"] = self.static["physical_node_mask"].repeat(count)
         if "edge_attr" in shard:
@@ -362,6 +372,9 @@ class ObservationShards:
                 current_static = {
                     "edge_index": first.edge_index.cpu().contiguous(),
                 }
+                global_mask = getattr(first, "global_node_mask", None)
+                if global_mask is not None:
+                    current_static["global_node_mask"] = global_mask.cpu().contiguous()
                 physical = getattr(first, "physical_node_mask", None)
                 if physical is not None:
                     current_static["physical_node_mask"] = physical.cpu().contiguous()
@@ -388,8 +401,8 @@ class ObservationShards:
                     for row, (mask, row_mean, row_log_std) in enumerate(zip(
                         masks, mean.split(counts), log_std.split(counts)
                     )):
-                        padded_mean[row, mask] = row_mean
-                        padded_log_std[row, mask] = row_log_std
+                        padded_mean[row, mask.nonzero().flatten()] = row_mean
+                        padded_log_std[row, mask.nonzero().flatten()] = row_log_std
                     means.append(padded_mean.cpu())
                     log_stds.append(padded_log_std.cpu())
                 payload = {
