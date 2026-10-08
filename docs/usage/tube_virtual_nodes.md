@@ -42,6 +42,10 @@ submitting. The default run root is
 is `~/nobackup/autodelete/gnn-sac-tube-cache`. On a local CPU machine, add `--cpu`
 to the canary.
 
+Use `--exp-name tube-online-v2` to change the experiment base name. The two arms
+then use `tube-online-v2-signed` and `tube-online-v2-membership` for their experiment
+names. The default base is `tube-v1`. This option does not change `--run-root`.
+
 Experiment jobs explicitly enable offline W&B logging, with records under
 `<run_root>/wandb/offline-run-*`. The launcher also places W&B artifact staging
 and cache under `<run_root>/cache`. Upload those offline records later using

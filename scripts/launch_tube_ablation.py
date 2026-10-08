@@ -19,7 +19,7 @@ from common.gnn_actor_critic import GNNActorCritic
 
 
 def build_commands(run_root: Path, cache_dir: Path, seeds: list[int],
-                   stage: str = 'offline') -> tuple[list[str], list[dict]]:
+                   stage: str = 'offline', exp_name: str = 'tube-v1') -> tuple[list[str], list[dict]]:
     """Preserve the routing protocol; the offline screen collects no SAC transitions."""
     if stage not in {'offline', 'online'}:
         raise ValueError('stage must be offline or online')
@@ -38,6 +38,7 @@ def build_commands(run_root: Path, cache_dir: Path, seeds: list[int],
         'checkpoint_freq=800000', 'checkpoint_keep_last=5',
         'eval_freq=200000', 'eval_episodes=5', 'save_video=false',
         'hydra.launcher.array_parallelism=3',
+        f'exp_name={exp_name}-${{tube_ablation_arm}}',
     ]
     jobs = []
     with initialize_config_dir(config_dir=str(ROOT / 'config'), version_base=None):
@@ -72,13 +73,14 @@ def main() -> None:
     parser.add_argument('--run-root', type=Path, help='Default: ~/nobackup/autodelete/GNN-SAC/runs/tube-<stage>-v1.')
     parser.add_argument('--cache-dir', type=Path, default=Path.home() / 'nobackup/autodelete/gnn-sac-tube-cache')
     parser.add_argument('--stage', choices=['offline', 'online'], default='offline')
+    parser.add_argument('--exp-name', default='tube-v1', help='Experiment base name; appends -signed or -membership.')
     parser.add_argument('--execute', action='store_true', help='Submit; default writes a manifest only.')
     args = parser.parse_args()
     if args.run_root is None:
         args.run_root = Path.home() / f'nobackup/autodelete/GNN-SAC/runs/tube-{args.stage}-v1'
     args.run_root = args.run_root.expanduser().resolve()
     args.cache_dir = args.cache_dir.expanduser().resolve()
-    command, jobs = build_commands(args.run_root, args.cache_dir, [1, 2, 3], args.stage)
+    command, jobs = build_commands(args.run_root, args.cache_dir, [1, 2, 3], args.stage, args.exp_name)
     args.run_root.mkdir(parents=True, exist_ok=True)
     manifest = dict(command=command, jobs=jobs,
                     training_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
@@ -97,7 +99,9 @@ def main() -> None:
             environment[name] = str(directory)
         result = subprocess.run(command, cwd=ROOT, env=environment)
         diagnostics = []
-        for directory in sorted(args.run_root.glob('truss-graph/tube-v1-*/seed_*/*/checkpoints')):
+        for directory in sorted(args.run_root.glob('truss-graph/*/seed_*/*/checkpoints')):
+            if directory.parents[2].name not in {job['exp_name'] for job in jobs}:
+                continue
             if not (directory / 'distillation.pt').exists():
                 continue
             output = directory.parent / 'tube_diagnostics.json'

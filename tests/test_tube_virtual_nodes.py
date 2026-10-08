@@ -219,8 +219,11 @@ class TubeVirtualNodeTest(unittest.TestCase):
     def test_launcher_preserves_protocol_and_excludes_final_tests(self):
         from scripts.launch_tube_ablation import build_commands
         for stage, steps in [('offline', 0), ('online', 2000010)]:
-            command, jobs = build_commands(Path('/tmp/tube-dry'), Path('/tmp/tube-cache'), [1, 2, 3], stage)
+            command, jobs = build_commands(Path('/tmp/tube-dry'), Path('/tmp/tube-cache'), [1, 2, 3], stage,
+                                           exp_name='custom-tube')
             self.assertEqual(len(jobs), 6)
+            self.assertEqual({job['exp_name'] for job in jobs},
+                             {'custom-tube-signed', 'custom-tube-membership'})
             self.assertEqual({job['steps'] for job in jobs}, {steps})
             self.assertEqual(len({tuple(job['training_topologies']) for job in jobs}), 1)
             self.assertEqual(len({tuple(job['heldout_topologies']) for job in jobs}), 1)
