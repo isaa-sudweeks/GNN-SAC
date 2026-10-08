@@ -1,5 +1,6 @@
 # @package _global_
-exp_name: tube-v1-membership
+tube_experiment_base: tube-v1
+exp_name: ${tube_experiment_base}-membership
 tube_ablation_arm: membership
 graph_features:
   tube_nodes: true

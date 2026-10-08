@@ -38,7 +38,7 @@ def build_commands(run_root: Path, cache_dir: Path, seeds: list[int],
         'checkpoint_freq=800000', 'checkpoint_keep_last=5',
         'eval_freq=200000', 'eval_episodes=5', 'save_video=false',
         'hydra.launcher.array_parallelism=3',
-        f'exp_name={exp_name}-${{tube_ablation_arm}}',
+        f'++tube_experiment_base={exp_name}',
     ]
     jobs = []
     with initialize_config_dir(config_dir=str(ROOT / 'config'), version_base=None):

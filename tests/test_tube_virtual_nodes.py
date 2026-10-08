@@ -240,6 +240,13 @@ class TubeVirtualNodeTest(unittest.TestCase):
             self.assertIn('wandb_dir=/tmp/tube-dry', command)
             self.assertIn('enable_wandb=true', command)
             self.assertIn('set_wandb_offline=true', command)
+            # Hydra resolves the sweep directory before loading swept arm groups.
+            # Validate that root config too, rather than only per-arm manifests.
+            from hydra import compose, initialize_config_dir
+            with initialize_config_dir(config_dir=str(ROOT / 'config'), version_base=None):
+                root_cfg = compose(config_name='config', overrides=command[3:-2],
+                                   return_hydra_config=True)
+                self.assertTrue(str(root_cfg.hydra.sweep.dir).startswith('/tmp/tube-dry/hydra/'))
 
     def test_tensor_replay_resume_preserves_tube_template(self):
         from common.distillation import replay_observations

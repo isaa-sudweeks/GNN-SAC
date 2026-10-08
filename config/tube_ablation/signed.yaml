@@ -1,5 +1,6 @@
 # @package _global_
-exp_name: tube-v1-signed
+tube_experiment_base: tube-v1
+exp_name: ${tube_experiment_base}-signed
 tube_ablation_arm: signed
 graph_features:
   tube_nodes: false
