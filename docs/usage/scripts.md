@@ -44,8 +44,12 @@ W&B (`--project`, default `i-suds/paper_results`). It writes the
 distance-by-topology plot and summary CSVs to `figures/`. The generated files
 are checked in there next to the script.
 
-- `launch_tube_ablation.py`: manifest/dry run or ORC submission for matched signed
-  versus tube-membership seeds, with an offline screen and explicit online stage.
+- `launch_tube_ablation.py`: manifest/dry run or ORC submission for matched signed,
+  membership and optional physics arms, with an offline screen and online stage.
+  `--arms signed membership physics` prepares shared clean frozen-teacher replay
+  on CPU before submitting students. See [tube virtual nodes](tube_virtual_nodes.md).
+- `prepare_tube_replay.py`: CPU Slurm worker for deterministic, noise-free replay
+  collection and provenance-checked cache reuse.
 - `run_routing_canary.py --tube-nodes`: legacy-teacher tube student canary; add
   `--cpu` for a native local smoke run.
 

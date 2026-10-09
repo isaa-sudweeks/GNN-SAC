@@ -16,6 +16,7 @@ from torch_geometric.data import Batch, Data
 from torch_geometric.nn import global_mean_pool
 
 from env.mujoco_gen.topology_envs import base_regime_task, is_broken_regime_task
+from env.mujoco_gen.tube_physics import TUBE_PHYSICS_FIELDS
 
 from common.gnn_actor_critic import GNNActorCritic
 from common.graph_transforms import (
@@ -100,6 +101,8 @@ def replay_observations(replay: dict):
                 )
             if static.get("edge_direction") is not None:
                 graph.edge_direction = static["edge_direction"]
+            for key, value in static.get("tube_physics_metadata", {}).items():
+                graph[key] = value
             if static["edge_role"] is not None:
                 graph.edge_role = static["edge_role"]
             if static["has_rigidity"]:
@@ -158,6 +161,14 @@ def reconstruct_control_metadata(teacher_cfg, student_cfg, graph: Data) -> dict[
     """
     from env.mujoco_gen.topology_envs import MujocoPresetGraphEnv
     flags = graph_feature_flags(student_cfg)
+    if flags["use_tube_physics"]:
+        parameters = _get(teacher_cfg, "domain_randomization_params", {})
+        noise = _get(parameters, "observation_noise", {})
+        scale = _get(parameters, "length_scale", {})
+        if bool(_get(teacher_cfg, "domain_randomization", False)) and (
+                bool(_get(scale, "enabled", True)) or
+                (bool(_get(noise, "enabled", False)) and float(_get(noise, "std", 0)) > 0)):
+            raise ValueError("Tube physics requires clean, fixed-scale replay. Prepare shared clean teacher replay first.")
     if not (flags["use_edge_roles"] or flags["use_edge_direction"]):
         return {}
     if not bool(_get(teacher_cfg, "use_control_graph", False)):
@@ -166,7 +177,8 @@ def reconstruct_control_metadata(teacher_cfg, student_cfg, graph: Data) -> dict[
     config.update(domain_randomization=False, mujoco_backend="mujoco", sim_backend="mujoco")
     config["graph_features"] = dict(node_roles=False, edge_distance=False,
                                     edge_roles=flags["use_edge_roles"],
-                                    edge_direction=flags["use_edge_direction"])
+                                    edge_direction=flags["use_edge_direction"],
+                                    tube_physics=flags["use_tube_physics"])
     env = MujocoPresetGraphEnv(config)
     try:
         observation, _ = env.reset(seed=0)
@@ -176,7 +188,7 @@ def reconstruct_control_metadata(teacher_cfg, student_cfg, graph: Data) -> dict[
                                    policy_action_mask(graph).cpu())):
             raise ValueError("Reconstructed teacher control graph differs from replay ordering or mask.")
         metadata = {key: torch.as_tensor(observation[key])
-                    for key in ("edge_role", "edge_direction") if key in observation}
+                    for key in ("edge_role", "edge_direction", *TUBE_PHYSICS_FIELDS) if key in observation}
         attach_control_metadata(graph, metadata)
         return metadata
     finally:

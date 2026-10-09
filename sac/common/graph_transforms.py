@@ -3,6 +3,7 @@ import torch.nn.functional as F
 from torch_geometric.data import Data
 from torch_geometric.transforms import VirtualNode
 
+from env.mujoco_gen.tube_physics import TUBE_PHYSICS_FIELDS
 
 _VIRTUAL_NODE = VirtualNode()
 VIRTUAL_NODE_CONTEXT_DIM = 2
@@ -26,6 +27,7 @@ def graph_feature_flags(config) -> dict[str, bool]:
         "use_edge_roles": bool(_cfg_get(features, "edge_roles", False)),
         "use_edge_distance": bool(_cfg_get(features, "edge_distance", False)),
         "use_tube_nodes": bool(_cfg_get(features, "tube_nodes", False)),
+        "use_tube_physics": bool(_cfg_get(features, "tube_physics", False)),
         "use_edge_direction": bool(_cfg_get(features, "edge_direction", False)),
     }
 
@@ -45,6 +47,8 @@ def graph_feature_schema(config) -> dict[str, object]:
     if flags["use_tube_nodes"]:
         schema["tube_nodes"] = "structural_components_v1"
         schema["edge_role_vocabulary"] = [*EDGE_ROLE_NAMES, "membership"]
+    if flags["use_tube_physics"]:
+        schema["tube_physics"] = "route_segments_reference_m_ratio_relative_residual_v1"
     return schema
 
 
@@ -54,11 +58,13 @@ def graph_input_dim(
     use_virtual_node: bool,
     use_node_roles: bool = False,
     use_tube_nodes: bool = False,
+    use_tube_physics: bool = False,
 ) -> int:
     """Return the GNN input width after optional virtual-node context."""
     return (
         int(node_feature_dim)
         + int(use_tube_nodes)
+        + 4 * int(use_tube_physics)
         + (NODE_ROLE_DIM if use_node_roles else 0)
         + (VIRTUAL_NODE_CONTEXT_DIM if use_virtual_node else 0)
     )
@@ -149,6 +155,42 @@ def tube_components(graph: Data) -> list[list[int]]:
     return result
 
 
+def tube_physics_features(x: torch.Tensor, edge_index: torch.Tensor,
+                          groups: list[list[int]], metadata: Data | dict) -> torch.Tensor:
+    """Compute [..., tubes, 4] features after undoing xyz normalization.
+
+    Reference length uses a fixed one-metre scale; residual is (L-L0)/L0.
+    Static route weights count each segment once across bidirectional edges.
+    """
+    scale, reference, weights = [torch.as_tensor(metadata[k], device=x.device, dtype=x.dtype)
+                                 for k in TUBE_PHYSICS_FIELDS]
+    if (scale.shape != (1, 3) or reference.shape != (x.size(-2),)
+            or weights.shape != (edge_index.size(1),)):
+        raise ValueError("Invalid tube physics metadata shape.")
+    if (not all(bool(torch.isfinite(v).all()) for v in (scale, reference, weights))
+            or bool((scale <= 0).any()) or bool((reference <= 0).any())
+            or bool((weights < 0).any())):
+        raise ValueError("Invalid tube physics metadata values.")
+    position = x[..., :3] * scale
+    lengths = torch.linalg.vector_norm(position[..., edge_index[0], :] - position[..., edge_index[1], :], dim=-1)
+    result = []
+    for group in groups:
+        ref = reference[group[0]]
+        if not torch.allclose(reference[group], ref.expand(len(group))):
+            raise ValueError("Tube members disagree on reference length.")
+        members = torch.zeros(x.size(-2), dtype=torch.bool, device=x.device)
+        members[group] = True
+        mask = members[edge_index[0]] & members[edge_index[1]] & (weights > 0)
+        count = weights[mask].sum()
+        if count <= 0:
+            raise ValueError("Tube has no route segments.")
+        current = (lengths[..., mask] * weights[mask]).sum(-1)
+        ratio = current / ref
+        result.append(torch.stack((torch.ones_like(ratio) * count,
+                                   torch.ones_like(ratio) * ref, ratio, ratio - 1), -1))
+    return torch.stack(result, dim=-2)
+
+
 def prepare_graph(
     graph: Data,
     *,
@@ -158,6 +200,7 @@ def prepare_graph(
     use_edge_distance: bool = False,
     use_edge_direction: bool = False,
     use_tube_nodes: bool = False,
+    use_tube_physics: bool = False,
 ) -> Data:
     """Add global context and optional typed tube hubs to a raw physical graph.
 
@@ -166,12 +209,19 @@ def prepare_graph(
     Architectural edges carry no geometric distance or controller incidence.
     Legacy feature widths and schemas remain unchanged when tube hubs are off.
     """
-    if not (use_virtual_node or use_node_roles or use_edge_roles or use_edge_distance or use_edge_direction or use_tube_nodes):
+    if not (use_virtual_node or use_node_roles or use_edge_roles or use_edge_distance or use_edge_direction or use_tube_nodes or use_tube_physics):
         return graph
 
+    if use_tube_physics and not use_tube_nodes:
+        raise ValueError("Tube physics requires graph_features.tube_nodes=true.")
     if use_tube_nodes and not (use_virtual_node and use_edge_roles):
         raise ValueError("Tube nodes require use_virtual_node=true and graph_features.edge_roles=true.")
     groups = tube_components(graph) if use_tube_nodes else []
+    physics = None
+    if use_tube_physics:
+        if any(getattr(graph, k, None) is None for k in TUBE_PHYSICS_FIELDS):
+            raise ValueError("Tube physics requires validated simulator route metadata.")
+        physics = tube_physics_features(graph.x, graph.edge_index, groups, graph)
     prepared = graph.clone()
     num_nodes = prepared.num_nodes
     if num_nodes is None:
@@ -204,11 +254,13 @@ def prepare_graph(
     )
     if edge_attr is not None:
         prepared.edge_attr = edge_attr
-    for field in ("edge_role", "edge_direction"):
+    for field in ("edge_role", "edge_direction", *TUBE_PHYSICS_FIELDS):
         if field in prepared:
             del prepared[field]
 
     if use_tube_nodes:
+        if use_tube_physics:
+            prepared.x = torch.cat((prepared.x, prepared.x.new_zeros((num_nodes, 4))), dim=-1)
         prepared.x = torch.cat((prepared.x, prepared.x.new_zeros((num_nodes, 1))), dim=-1)
 
     if not use_virtual_node:
@@ -245,6 +297,8 @@ def prepare_graph(
         prepared.global_node_mask = torch.arange(prepared.num_nodes, device=prepared.x.device) == global_index
         hubs = prepared.x.new_zeros((len(groups), prepared.x.size(1)))
         hubs[:, -3] = 1.0  # dedicated tube-type channel, before global context
+        if physics is not None:
+            hubs[:, -7:-3] = physics
         prepared.x = torch.cat((prepared.x, hubs), dim=0)
         for field in ("action_mask", "physical_node_mask", "global_node_mask"):
             prepared[field] = torch.cat((prepared[field], torch.zeros(len(groups), dtype=torch.bool, device=prepared.x.device)))
@@ -292,6 +346,9 @@ def graph_structure_signature(graph: Data) -> dict:
     }
     if getattr(graph, "edge_direction", None) is not None:
         signature["edge_direction"] = graph.edge_direction.detach().cpu().tolist()
+    for field in TUBE_PHYSICS_FIELDS:
+        if getattr(graph, field, None) is not None:
+            signature[field] = graph[field].detach().cpu().tolist()
     return signature
 
 
@@ -310,6 +367,8 @@ def graph_signature_compatible(
     if candidate.get("shape") != reference.get("shape"):
         return False
     if candidate.get("edge_direction") != reference.get("edge_direction"):
+        return False
+    if any(candidate.get(k) != reference.get(k) for k in TUBE_PHYSICS_FIELDS):
         return False
     if candidate.get("edges") != reference.get("edges"):
         return False

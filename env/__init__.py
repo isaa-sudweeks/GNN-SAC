@@ -89,6 +89,7 @@ def _configure_graph_feature_dims(cfg):
         + 2 * int(node_roles)
         + 2 * int(use_virtual_node)
         + int(get_value("tube_nodes", False))
+        + 4 * int(get_value("tube_physics", False))
     )
     cfg.edge_feature_dim = (3 + int(get_value("tube_nodes", False))) * int(edge_roles) + int(edge_distance) + int(get_value("edge_direction", False))
 

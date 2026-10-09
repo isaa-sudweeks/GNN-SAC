@@ -133,6 +133,16 @@ class MjxVectorGraphEnv(gym.Env):
         self._edge_index = torch.as_tensor(edge_index, dtype=torch.long)
         self._edge_role = None
         self._edge_direction = None
+        from env.mujoco_gen.tube_physics import build_tube_physics_metadata, tube_physics_enabled
+        self.tube_physics_metadata = {}
+        if tube_physics_enabled(cfg):
+            from env.mujoco_gen.topology_envs import resolve_truss_realistic
+            if resolve_truss_realistic(cfg):
+                raise ValueError("Tube physics requires abstract models.")
+            self.tube_physics_metadata = {
+                k: torch.as_tensor(v) for k, v in build_tube_physics_metadata(
+                    self.mj_model, edge_index, _semantic_edge_roles(self.mj_model, graph_view="control"),
+                    normalized=bool(self._core.config.normalize_observations)).items()}
         observation_spaces = {
                 "x": spaces.Box(
                     low=-np.inf,
@@ -154,6 +164,8 @@ class MjxVectorGraphEnv(gym.Env):
                     dtype=np.float32,
                 ),
             }
+        for key, value in self.tube_physics_metadata.items():
+            observation_spaces[key] = spaces.Box(-np.inf, np.inf, shape=tuple(value.shape), dtype=np.float32)
         if _edge_roles_enabled(cfg):
             self._edge_role = torch.as_tensor(
                 _semantic_edge_roles(self.mj_model, graph_view="control"),
@@ -475,6 +487,8 @@ class MjxVectorGraphEnv(gym.Env):
         if self._edge_direction is not None:
             for observation in observations:
                 observation["edge_direction"] = self._edge_direction
+        for observation in observations:
+            observation.update(self.tube_physics_metadata)
         return observations
 
     def _sample_broken_nodes(self, indices: Sequence[int]) -> None:

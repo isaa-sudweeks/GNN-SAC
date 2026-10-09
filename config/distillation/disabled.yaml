@@ -9,6 +9,7 @@ decay_steps: null # Null resolves to decay_fraction * online steps.
 decay_fraction: 0.5
 checkpoint_freq: 1000 # Offline updates; 0 disables offline checkpoints.
 log_freq: 100
+eval_freq: 0 # Offline updates between development rollout evaluations; 0 disables.
 cache_dir: null # Null uses work_dir/distillation_cache; set to share across runs.
 # Number of prepared observations plus teacher targets per on-disk tensor shard.
 # At most the current and one prefetched shard per topology are resident in RAM.

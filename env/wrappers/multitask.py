@@ -126,7 +126,8 @@ class MultitaskWrapper(gym.Env):
         if not (isinstance(reference_obs, spaces.Dict) and isinstance(candidate_obs, spaces.Dict)):
             return False
         required = {"x", "edge_index"}
-        allowed = required | {"action_mask", "edge_role", "edge_direction", "rigidity"}
+        allowed = required | {"action_mask", "edge_role", "edge_direction", "rigidity",
+                              "tube_position_scale", "tube_reference_length", "tube_segment_weight"}
         if not (
             required <= set(reference_obs.spaces) <= allowed
             and required <= set(candidate_obs.spaces) <= allowed

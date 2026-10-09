@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import sys
 import tempfile
 import unittest
+from unittest.mock import Mock
 
 import numpy as np
 import torch
@@ -140,7 +141,7 @@ class TubeVirtualNodeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'requires|require'):
             prepare_graph(fixture(), **dict(FLAGS, use_virtual_node=False))
 
-    def _run_cpu_distillation_smoke(self, offline_only=False):
+    def _run_cpu_distillation_smoke(self, offline_only=False, tube_physics=False):
         from common.gnn_buffer import GNNBuffer
         from common.logger import Logger
         from env import make_env
@@ -176,17 +177,26 @@ class TubeVirtualNodeTest(unittest.TestCase):
                 finally:
                     env.close()
             cfg = graph_test_cfg(**settings, truss_topologies=['tetrahedron', 'octahedron'],
-                                 graph_features=dict(tube_nodes=True, node_roles=True, edge_roles=True, edge_direction=True, edge_distance=True),
+                                 graph_features=dict(tube_nodes=True, tube_physics=tube_physics, node_roles=True, edge_roles=True, edge_direction=True, edge_distance=True),
                                  distillation=dict(enabled=True, offline_only=offline_only, teachers=mapping, pretrain_updates=2,
-                                                   batch_size=2, shard_size=2, checkpoint_freq=0, log_freq=1,
+                                                   batch_size=2, shard_size=2, checkpoint_freq=0, log_freq=1, eval_freq=int(tube_physics),
                                                    reconstruct_control_metadata=True))
             env = make_env(cfg)
             try:
                 agent = GNNSAC(cfg)
+                logger = Logger(cfg)
+                if tube_physics:
+                    logger.log = Mock(wraps=logger.log)
                 trainer = OnlineTrainer(cfg=cfg, env=env, agent=agent,
-                                        buffer=TensorGNNBuffer(cfg), logger=Logger(cfg))
+                                        buffer=TensorGNNBuffer(cfg), logger=logger)
                 trainer.train()
                 self.assertEqual(trainer.distillation.completed_updates, 2)
+                if tube_physics:
+                    records = [call.args[0] for call in logger.log.call_args_list
+                               if call.args[1] == 'distillation' and call.args[0].get('stage') == 'offline']
+                    self.assertEqual(len(records), 2)
+                    self.assertTrue(all('episode_distance' in record and 'kl' in record for record in records))
+                    self.assertTrue((Path(cfg.work_dir) / 'checkpoints' / 'distillation_1.pt').exists())
                 self.assertEqual(trainer._step, 0 if offline_only else cfg.steps)
                 if offline_only:
                     self.assertEqual(trainer._optimizer_updates, 0)
@@ -212,6 +222,12 @@ class TubeVirtualNodeTest(unittest.TestCase):
 
     def test_tube_student_two_topology_cpu_distillation_smoke(self):
         self._run_cpu_distillation_smoke()
+
+    def test_physics_student_legacy_teacher_cpu_distillation_and_online(self):
+        self._run_cpu_distillation_smoke(tube_physics=True)
+
+    def test_physics_offline_screen_saves_periodic_checkpoints(self):
+        self._run_cpu_distillation_smoke(tube_physics=True, offline_only=True)
 
     def test_offline_screen_saves_checkpoint_without_sac_transitions(self):
         self._run_cpu_distillation_smoke(offline_only=True)
@@ -269,10 +285,16 @@ class TubeVirtualNodeTest(unittest.TestCase):
                 torch.testing.assert_close(actual[field], expected[field])
 
     def test_native_mjx_reset_feature_and_inference_parity(self):
+        self._native_mjx_parity()
+
+    def test_native_mjx_physics_feature_and_inference_parity(self):
+        self._native_mjx_parity(tube_physics=True)
+
+    def _native_mjx_parity(self, tube_physics=False):
         from env import make_env
         from tests.test_mjx_vector_env import mjx_cfg
         native_cfg = graph_test_cfg(domain_randomization=False,
-                                    graph_features=dict(tube_nodes=True, node_roles=True, edge_roles=True,
+                                    graph_features=dict(tube_nodes=True, tube_physics=tube_physics, node_roles=True, edge_roles=True,
                                                         edge_distance=True, edge_direction=True))
         vector_cfg = mjx_cfg(graph_features=native_cfg.graph_features)
         native, vector = make_env(native_cfg), make_env(vector_cfg)
@@ -282,6 +304,9 @@ class TubeVirtualNodeTest(unittest.TestCase):
             # prepare/infer the identical physical state to isolate adapter parity.
             for field in ('edge_index', 'edge_role', 'edge_direction', 'action_mask'):
                 torch.testing.assert_close(native_raw[field], vector_raw[field])
+            if tube_physics:
+                for field in ('tube_position_scale', 'tube_reference_length', 'tube_segment_weight'):
+                    torch.testing.assert_close(native_raw[field], vector_raw[field])
             self.assertTrue(torch.isfinite(vector_raw.x).all())
             vector_raw.x = native_raw.x.clone()
             vector_raw.rigidity = native_raw.rigidity.clone()

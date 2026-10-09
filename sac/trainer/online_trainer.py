@@ -160,12 +160,30 @@ class OnlineTrainer(Trainer):
         distillation = getattr(self, "distillation", None)
         if distillation is None or distillation.stage != "offline":
             return
+        options = self.cfg.distillation
+        offline_eval_freq = int(options.get("eval_freq", 0) if hasattr(options, "get") else getattr(options, "eval_freq", 0))
+        if offline_eval_freq < 0:
+            raise ValueError("distillation.eval_freq must be nonnegative.")
         while distillation.completed_updates < distillation.pretrain_updates:
             metrics = distillation.offline_update(self.agent)
-            if distillation.completed_updates % distillation.log_freq == 0 or distillation.completed_updates == 1:
-                self.logger.log({"step": self._step, **metrics}, "distillation")
+            log_update = distillation.completed_updates % distillation.log_freq == 0 or distillation.completed_updates == 1
             if distillation.checkpoint_freq and distillation.completed_updates % distillation.checkpoint_freq == 0:
                 self.save_checkpoint(identifier="distillation")
+            if offline_eval_freq and distillation.completed_updates % offline_eval_freq == 0:
+                # Evaluation must not change optimization/sampling randomness.
+                rng = self._rng_state_dict()
+                try:
+                    self._record_video_this_eval = False
+                    evaluation = self.eval()
+                    metrics.update(evaluation)
+                    log_update = True
+                finally:
+                    self._load_rng_state_dict(rng)
+                self.save_checkpoint(identifier=f"distillation_{distillation.completed_updates}")
+            if log_update:
+                # One W&B record per update: a second committed record at the
+                # same explicit step would discard the evaluation metrics.
+                self.logger.log({"step": self._step, **metrics}, "distillation")
         distillation.finish_pretraining(self.agent)
         self.logger.log({"step": self._step, "stage": "online",
                          "offline_updates": distillation.completed_updates}, "distillation")
@@ -1121,6 +1139,7 @@ class OnlineTrainer(Trainer):
                             edge_index=bucket.env.edge_index,
                             edge_role=bucket.env.edge_role,
                             edge_direction=getattr(bucket.env, "edge_direction", None),
+                            tube_physics_metadata=getattr(bucket.env, "tube_physics_metadata", None),
                         )
                         inserted_transitions += int(transitions["obs_x"].size(0))
                     bucket.obs = next_obs

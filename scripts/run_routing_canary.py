@@ -22,6 +22,7 @@ def main() -> None:
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-root',type=Path,required=True)
     parser.add_argument('--tube-nodes', action='store_true', help='Exercise tube membership student with legacy teachers.')
+    parser.add_argument('--tube-physics', action='store_true', help='Exercise physical tube features reconstructed from legacy replay.')
     parser.add_argument('--cpu', action='store_true', help='Run native two-topology canary locally.')
     args=parser.parse_args();args.run_root.mkdir(parents=True,exist_ok=True)
     mapping={}
@@ -60,14 +61,18 @@ def main() -> None:
              'mpl_dims=[8]','message_hidden_dims=[8]','head_hidden_dims=[8]',
              'log_std_min=-2','log_std_max=0',f'run_root={args.run_root}',
              f'work_dir={args.run_root}/student','exp_name=routing-canary']
-    if args.tube_nodes:
+    if args.tube_nodes or args.tube_physics:
         command.append('graph_features.tube_nodes=true')
+    if args.tube_physics:
+        command.extend(['++graph_features.tube_physics=true', 'distillation.eval_freq=1'])
     if args.cpu:
         command = [item for item in command if not item.startswith(('platform=', 'sim_backend=', 'mjx_impl=', 'num_envs='))]
         command = ['+' + item if item.startswith('run_root=') else item for item in command]
         command.extend(['device=cpu', 'sim_backend=mujoco', 'num_envs=1'])
     subprocess.run(command,cwd=ROOT,check=True)
-    (args.run_root/'PASSED').write_text(f'Signed-routing tube_nodes={args.tube_nodes} cpu={args.cpu} offline + online canary completed.\n')
+    (args.run_root/'PASSED').write_text(
+        f'Signed-routing tube_nodes={args.tube_nodes or args.tube_physics} '
+        f'tube_physics={args.tube_physics} cpu={args.cpu} offline + online canary completed.\n')
 
 
 if __name__=='__main__':main()

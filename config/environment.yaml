@@ -58,6 +58,7 @@ effective_node_feature_dim: 6 # Resolved policy input width after configurable g
 edge_role_vocabulary: [tube, connector, virtual] # Stable semantic order used by edge-role one-hot features.
 graph_features:
   tube_nodes: false # One non-actuated hub per structural control-graph tube.
+  tube_physics: false # Validated route count/reference length/ratio/residual at tube hubs.
   edge_direction: false # Signed controller routing on message edges; zero for connectors.
   node_roles: false # Append [actuated, passive] to each physical node observation.
   edge_roles: false # Append [tube, connector, virtual] to each directed message edge.

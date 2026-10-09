@@ -56,6 +56,9 @@ class TensorWrapper(gym.Wrapper):
 					graph.edge_direction = obs["edge_direction"].float().reshape(-1)
 				if "edge_role" in obs:
 					graph.edge_role = obs["edge_role"].long().reshape(-1)
+				for key in ("tube_position_scale", "tube_reference_length", "tube_segment_weight"):
+					if key in obs:
+						graph[key] = obs[key].float()
 				return graph
 		else:
 			obs = self._try_f32_tensor(obs)

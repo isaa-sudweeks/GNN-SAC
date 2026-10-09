@@ -51,6 +51,7 @@ class GNNActorCritic(nn.Module):
             use_virtual_node=use_virtual_node,
             use_node_roles=feature_flags["use_node_roles"],
             use_tube_nodes=feature_flags["use_tube_nodes"],
+            use_tube_physics=feature_flags["use_tube_physics"],
         )
         edge_channels = graph_edge_input_dim(
             use_edge_roles=feature_flags["use_edge_roles"],
