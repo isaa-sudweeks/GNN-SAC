@@ -21,6 +21,8 @@
   random-fold, and farthest-point morphology-cluster cross-validation
 - [distillation.md](usage/distillation.md): multi-teacher Gaussian KL
   distillation into one GNN student
+- [teacher_student_diagnostic.md](usage/teacher_student_diagnostic.md): matched
+  teacher, separate-student and shared-student fidelity experiment
 - [replay.md](usage/replay.md): tensor vs legacy replay, storage placement,
   checkpoint conversion
 - [padded_mlp_baseline.md](usage/padded_mlp_baseline.md): fixed-width MLP
