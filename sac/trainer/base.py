@@ -100,6 +100,9 @@ class Trainer:
             "rng": self._rng_state_dict(),
             "config": self._config_state_dict(),
         }
+        sampler = getattr(self, "sgs", None)
+        if sampler is not None:
+            state["sgs"] = sampler.state_dict()
         reward_normalizer = getattr(self, "reward_normalizer", None)
         distillation = getattr(self, "distillation", None)
         if distillation is not None:
@@ -156,9 +159,17 @@ class Trainer:
             )
         if "distillation" in state_dict:
             snapshot["distillation"] = self._snapshot_checkpoint_value(state_dict["distillation"])
+        if "sgs" in state_dict:
+            snapshot["sgs"] = self._snapshot_checkpoint_value(state_dict["sgs"])
         return snapshot
 
     def load_checkpoint_state_dict(self, state_dict):
+        sampler = getattr(self, "sgs", None)
+        saved_sampler = state_dict.get("sgs")
+        if (sampler is None) != (saved_sampler is None):
+            raise ValueError("Resume requires the same SGS mode as the checkpoint.")
+        if sampler is not None:
+            sampler.load_state_dict(saved_sampler)
         distillation = getattr(self, "distillation", None)
         saved_distillation = state_dict.get("distillation")
         if (distillation is None) != (saved_distillation is None):

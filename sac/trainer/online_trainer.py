@@ -8,6 +8,7 @@ from tensordict.tensordict import TensorDict
 from common.finite_checks import NonFiniteTrainingError
 from env.mujoco_gen.topology_envs import broken_node_schedule, is_broken_regime_task, regime_task_name
 from common.reward_normalizer import TaskRewardNormalizer
+from common.sgs import SuccessGuidedSampler
 from common.training_profiler import TrainingProfiler
 from trainer.base import Trainer
 from trainer.vector_collection import VectorBucket, select_rows
@@ -99,6 +100,10 @@ class OnlineTrainer(Trainer):
             or topology_bucket_metadata is not None
             or uses_distinct_eval_backend
             or bool(self._eval_heldout_topologies)
+            or bool(getattr(self.cfg, "multitask", False))
+            # Adaptive collection pauses unfinished training episodes. Evaluation
+            # must never reset or advance any of those simulator instances.
+            or str(self._cfg_get(getattr(self.cfg, "sgs", None), "mode", "disabled")) != "disabled"
         ):
             from copy import deepcopy
             from env import make_env
@@ -151,6 +156,7 @@ class OnlineTrainer(Trainer):
             )
             self.distillation.bind_replay(self.buffer)
             self.agent.distillation = self.distillation
+        self._initialize_sgs()
         self.maybe_load_checkpoint()
         self._sync_broken_nodes_curriculum()
         if self.distillation is not None:
@@ -172,6 +178,56 @@ class OnlineTrainer(Trainer):
         self._evaluate_and_log()
         if distillation.checkpoint_freq:
             self.save_checkpoint(identifier="distillation")
+
+    def _initialize_sgs(self):
+        settings = self._cfg_get(self.cfg, "sgs", {})
+        mode = str(self._cfg_get(settings, "mode", "disabled"))
+        self.sgs = None
+        if mode == "disabled":
+            return
+        if not hasattr(self.buffer, "task_names") or not hasattr(self.buffer, "_sample_raw_by_task"):
+            raise ValueError("SGS requires graph replay (sac_backend=gnn or padded_mlp).")
+        tasks = list(self.buffer.task_names)
+        if any(is_broken_regime_task(task) for task in tasks):
+            raise ValueError("SGS currently requires unsplit topology tasks; disable broken-regime replay splitting.")
+        if len(tasks) < 2:
+            raise ValueError("SGS requires at least two training topologies/tasks.")
+        self.sgs = SuccessGuidedSampler(settings, tasks, seed=int(self.cfg.seed))
+        self.buffer.sgs = self.sgs
+        self.agent.sgs = self.sgs
+
+    def _sgs_record_episode(self, task, info):
+        sampler = getattr(self, "sgs", None)
+        if sampler is not None:
+            sampler.record_episode(str(task), info)
+
+    def _sgs_record_collection(self, task, count):
+        sampler = getattr(self, "sgs", None)
+        if sampler is not None:
+            sampler.record_collection(str(task), count)
+
+    def _sgs_native_groups(self, num_envs):
+        sampler = getattr(self, "sgs", None)
+        if sampler is None or not sampler.adaptive_collection:
+            return None
+        current = self.env
+        while current is not None:
+            if getattr(type(current), "is_topology_bucket", False):
+                groups = {}
+                for index in range(num_envs):
+                    task = f"{current.task}:{current.topology_for_env(index)}"
+                    groups.setdefault(task, []).append(index)
+                return groups
+            tasks = vars(current).get("tasks")
+            if tasks is not None and len(tasks) == num_envs:
+                groups = {}
+                for index, task in enumerate(tasks):
+                    groups.setdefault(str(task), []).append(index)
+                if set(groups) != set(sampler.tasks):
+                    raise ValueError("SGS environment tasks do not match replay tasks.")
+                return groups
+            current = getattr(current, "env", None)
+        raise ValueError("SGS collection cannot identify environment topology groups.")
 
     def _buffer_task(self, info):
         """Replay/reward-normalization task key for a transition's info dict.
@@ -609,6 +665,9 @@ class OnlineTrainer(Trainer):
             should_log = self._crossed_eval_interval(previous_step, self._step, progress_freq)
         if should_log:
             self.logger.log(self.common_metrics(), 'train')
+            sampler = getattr(self, "sgs", None)
+            if sampler is not None:
+                self.logger.log(dict(step=self._step, **sampler.metrics()), 'sgs')
 
     def _ensure_performance_profiler(self):
         """Initialize lazily for lightweight trainer fixtures and restored callers."""
@@ -1020,7 +1079,7 @@ class OnlineTrainer(Trainer):
             bucket.normalizer_returns[slots] = returns
         return normalized
 
-    def _train_vectorized(self, buckets):
+    def _train_vectorized(self, all_buckets):
         """Collect with whole-batch tensor operations per topology bucket.
 
         Follows ``_train_multi_env`` step for step (evaluation timing, update
@@ -1030,13 +1089,23 @@ class OnlineTrainer(Trainer):
         """
         train_metrics, eval_next = {}, False
         pretrain_steps = int(getattr(self.cfg, 'pretrain_steps', min(self.cfg.seed_steps, 1000)))
-        num_envs = sum(bucket.size for bucket in buckets)
+        sampler = getattr(self, "sgs", None)
+        if sampler is not None and any(len(bucket.task_slots) != 1 for bucket in all_buckets):
+            raise ValueError("SGS requires homogeneous topology buckets.")
+        bucket_tasks = [next(iter(bucket.task_slots)) for bucket in all_buckets]
+        if sampler is not None and set(bucket_tasks) != set(sampler.tasks):
+            raise ValueError("SGS bucket tasks do not match replay tasks.")
         episodic = bool(self.cfg.episodic)
         observation_noise = (
             self._apply_observation_noise if self._should_apply_observation_noise() else (lambda x: x)
         )
 
         while self._step < self.cfg.steps:
+            selected = None if sampler is None or not self._pretrain_complete else sampler.collection_group(
+                bucket_tasks, [bucket.size for bucket in all_buckets]
+            )
+            buckets = all_buckets if selected is None else [all_buckets[selected]]
+            num_envs = sum(bucket.size for bucket in buckets)
             self.performance_profiler.begin_vector_step(global_step=self._step)
             updates_before_step = self._optimizer_updates
             inserted_transitions = 0
@@ -1075,7 +1144,10 @@ class OnlineTrainer(Trainer):
             with self.performance_profiler.phase("transition_processing"):
                 pending = []
                 for bucket, action, (next_obs, reward, done, info) in zip(buckets, actions, results):
-                    keep = None if keep_count >= num_envs else bucket.global_indices < keep_count
+                    keep = None if keep_count >= num_envs else (
+                        bucket.global_indices < keep_count if selected is None
+                        else np.arange(bucket.size) < keep_count
+                    )
                     next_obs["x"] = observation_noise(next_obs["x"])
                     terminated = (
                         info["terminated"].float() if episodic and "terminated" in info
@@ -1084,6 +1156,21 @@ class OnlineTrainer(Trainer):
                     normalized_reward = self._normalize_vector_rewards(bucket, reward, keep)
                     bucket.normalizer_returns.masked_fill_(done, 0.0)
                     bucket.record_step(reward, done, info)
+                    if sampler is not None:
+                        task = next(iter(bucket.task_slots))
+                        kept_done = done.cpu().numpy() & (True if keep is None else keep)
+                        for slot in np.flatnonzero(kept_done):
+                            outcome = {
+                                key: self._scalar_value(value[slot])
+                                for key, value in info.items()
+                                if isinstance(value, torch.Tensor) and value.shape == (bucket.size,)
+                            }
+                            if sampler.success_metric == "distance":
+                                if "com_delta_x" not in bucket.reward_components:
+                                    raise ValueError("SGS distance success requires com_delta_x in environment info.")
+                                outcome["sgs_distance"] = self._scalar_value(bucket.reward_components["com_delta_x"][slot])
+                            outcome["sgs_episode_length"] = self._scalar_value(bucket.episode_length[slot])
+                            self._sgs_record_episode(task, outcome)
                     pending.append((bucket, keep, action, next_obs, normalized_reward, terminated))
                 done_flags = [done.cpu().numpy() for _, _, done, _ in results]
 
@@ -1112,7 +1199,9 @@ class OnlineTrainer(Trainer):
                             edge_index=bucket.env.edge_index,
                             edge_role=bucket.env.edge_role,
                         )
-                        inserted_transitions += int(transitions["obs_x"].size(0))
+                        count = int(transitions["obs_x"].size(0))
+                        inserted_transitions += count
+                        self._sgs_record_collection(task, count)
                     bucket.obs = next_obs
                     bucket.done = done.copy()
 
@@ -1155,11 +1244,13 @@ class OnlineTrainer(Trainer):
         """
         self._ensure_performance_profiler()
         train_metrics, eval_next = {}, False
+        sgs_groups = self._sgs_native_groups(num_envs)
         done = [True] * num_envs
         infos = [None] * num_envs
         observations = [None] * num_envs
         episode_tds = [None] * num_envs
         reward_components = [None] * num_envs
+        episode_distances = [0.0] * num_envs
         pretrain_steps = int(getattr(self.cfg, 'pretrain_steps', min(self.cfg.seed_steps, 1000)))
 
         while self._step < self.cfg.steps:
@@ -1214,10 +1305,17 @@ class OnlineTrainer(Trainer):
                         observations[env_idx] = obs
                         episode_tds[env_idx] = [self.to_td(obs)]
                         reward_components[env_idx] = {}
+                        episode_distances[env_idx] = 0.0
                         done[env_idx] = False
 
             remaining_steps = self.cfg.steps - self._step
-            env_indices = list(range(min(num_envs, remaining_steps)))
+            env_indices = list(range(num_envs))
+            if sgs_groups is not None and self._pretrain_complete:
+                tasks = list(sgs_groups)
+                selected = self.sgs.collection_group(tasks, [len(sgs_groups[task]) for task in tasks])
+                if selected is not None:
+                    env_indices = sgs_groups[tasks[selected]]
+            env_indices = env_indices[:remaining_steps]
             if not env_indices:
                 break
 
@@ -1233,6 +1331,16 @@ class OnlineTrainer(Trainer):
                     observations[env_idx] = obs
                     done[env_idx] = is_done
                     infos[env_idx] = info
+                    task = self._buffer_task(info)
+                    sampler = getattr(self, "sgs", None)
+                    if sampler is not None and sampler.success_metric == "distance":
+                        if "com_delta_x" not in info:
+                            raise ValueError("SGS distance success requires com_delta_x in environment info.")
+                        episode_distances[env_idx] += self._scalar_value(info["com_delta_x"])
+                    if is_done:
+                        self._sgs_record_episode(task, dict(info, sgs_distance=episode_distances[env_idx],
+                                                            sgs_episode_length=len(episode_tds[env_idx])))
+                    self._sgs_record_collection(task, 1)
 
                     previous_components = self._episode_reward_components
                     self._episode_reward_components = reward_components[env_idx]

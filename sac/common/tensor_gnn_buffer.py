@@ -533,13 +533,14 @@ class _TensorTaskBuffer:
         ):
             raise ValueError("Replay observation topology or action ordering differs from teacher.")
 
-    def sample_raw(self, performance_profiler=None):
-        if self._size < self._batch_size:
-            raise ValueError(f"Replay buffer has {self._size} transitions, need batch_size={self._batch_size}.")
+    def sample_raw(self, performance_profiler=None, *, sample_count=None):
+        count = self._batch_size if sample_count is None else int(sample_count)
+        if count < 1 or self._size < (self._batch_size if sample_count is None else 1):
+            raise ValueError("Replay sampling requires positive count and available transitions.")
         subphase = performance_profiler.subphase if performance_profiler is not None else None
         context = subphase("balanced_gather") if subphase is not None else torch.no_grad()
         with context:
-            indices = torch.randint(self._size, (self._batch_size,), device="cpu")
+            indices = torch.randint(self._size, (count,), device="cpu")
             values = self._buffer[indices.to(self._storage_device)]
         return _PackedReplaySample(self.task, values, self._static)
 
@@ -766,6 +767,15 @@ class TensorGNNBuffer:
     def _sample_raw_by_task(self, performance_profiler=None):
         if not self.ready:
             raise ValueError("Every task replay buffer must contain one full sub-batch.")
+        sampler = getattr(self, "sgs", None)
+        if sampler is not None:
+            counts = sampler.replay_counts(self._batch_size, self._batch_size_per_task)
+            return {
+                task: self._buffers[task].sample_raw(
+                    performance_profiler=performance_profiler, sample_count=count
+                )
+                for task, count in counts.items()
+            }
         return {
             task: self._buffers[task].sample_raw(performance_profiler=performance_profiler)
             for task in self.task_names

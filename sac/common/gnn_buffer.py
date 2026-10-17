@@ -133,9 +133,10 @@ class _GNNTaskBuffer:
         self._num_eps += int(bool(count_episode))
         return self._num_eps
 
-    def sample_raw(self, performance_profiler=None):
-        if self._size < self._batch_size:
-            raise ValueError(f"Replay buffer has {self._size} transitions, need batch_size={self._batch_size}.")
+    def sample_raw(self, performance_profiler=None, *, sample_count=None):
+        count = self._batch_size if sample_count is None else int(sample_count)
+        if count < 1 or self._size < (self._batch_size if sample_count is None else 1):
+            raise ValueError("Replay sampling requires positive count and available transitions.")
 
         subphase = (
             performance_profiler.subphase
@@ -145,7 +146,7 @@ class _GNNTaskBuffer:
         with subphase("balanced_gather"):
             idx = torch.randint(
                 self._size,
-                (self._batch_size,),
+                (count,),
                 device=self._storage_device,
             ).tolist()
             raw_obs = [self._obs[i] for i in idx]
@@ -418,6 +419,15 @@ class GNNBuffer:
             raise ValueError(
                 f"Every task replay buffer needs {self._batch_size_per_task} transitions; got {sizes}."
             )
+        sampler = getattr(self, "sgs", None)
+        if sampler is not None:
+            counts = sampler.replay_counts(self._batch_size, self._batch_size_per_task)
+            return {
+                task: self._buffers[task].sample_raw(
+                    performance_profiler=performance_profiler, sample_count=count
+                )
+                for task, count in counts.items()
+            }
         return {
             task: self._buffers[task].sample_raw(
                 performance_profiler=performance_profiler

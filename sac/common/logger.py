@@ -58,6 +58,7 @@ CAT_TO_COLOR = {
     "gradient_diagnostics": "cyan",
     "profiling": "yellow",
     "distillation": "cyan",
+    "sgs": "cyan",
 }
 
 

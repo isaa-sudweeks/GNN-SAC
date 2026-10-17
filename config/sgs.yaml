@@ -1,0 +1,17 @@
+# @package sgs
+# Beta SGS from arXiv:2610.12465 §3.2 and Appendix B.2 (locomotion defaults).
+mode: disabled # disabled | collection | replay | both
+history_size: 100 # Most recent completed training episodes per topology.
+target: 0.66 # Mode of the success-rate beta kernel.
+concentration: 5.0
+temperature: 2.0 # Paper implementation clamps the effective value to >= 1.
+epsilon: 1.0e-8 # Weight floor and additive epsilon inside the log.
+uniform_mix: 0.0 # Optional extra uniform mixture; zero reproduces the paper kernel.
+warmup_steps: 5000 # Total transitions, not scaled by topology count.
+min_episodes: 10 # Collect uniformly until every task has this many outcomes.
+collection_block_steps: 16 # Vector steps from a selected bucket before reselection.
+success_metric: distance # distance: accumulated forward com_delta_x; info: Boolean success_key.
+distance_threshold: 15.0 # Minimum net forward displacement in meters.
+min_survival_steps: 400 # Minimum non-terminal environment steps per episode.
+success_key: success # Used only for success_metric=info; truss envs currently do not define it.
+require_survival: false # Optional stricter full-episode survival, beyond min_survival_steps.

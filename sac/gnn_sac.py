@@ -640,6 +640,20 @@ class GNNSAC(torch.nn.Module):
                     metrics[f"{objective}/norm_agreement/{pair_key}"] = pair["norm_agreement"]
         return metrics
 
+    def _sgs_scale_task_gradients(self, gradients, task_batches):
+        """Preserve adaptive replay fractions through PCGrad's task averaging.
+
+        Positive scaling leaves conflict projection directions unchanged and
+        makes the final mean proportional to each task's transition count.
+        """
+        sampler = getattr(self, "sgs", None)
+        if sampler is None or not sampler.adaptive_replay or not sampler.warmed_up:
+            return gradients
+        counts = [batch[2].numel() for batch in task_batches.values()]
+        total = sum(counts)
+        return [tuple(value * (len(counts) * count / total) for value in task_gradient)
+                for task_gradient, count in zip(gradients, counts)]
+
     def _pcgrad_q_update(
         self,
         task_batches,
@@ -669,7 +683,9 @@ class GNNSAC(torch.nn.Module):
         with self._optimization_subphase(
             performance_profiler, "pcgrad_critic_projection"
         ):
-            projected_gradients = self.pcgrad_project(task_gradient_values)
+            projected_gradients = self.pcgrad_project(
+                self._sgs_scale_task_gradients(task_gradient_values, task_batches)
+            )
             self._require_finite("projected critic gradients", projected_gradients)
             self._set_parameter_gradients(parameters, projected_gradients)
         with self._optimization_subphase(
@@ -730,7 +746,9 @@ class GNNSAC(torch.nn.Module):
         with self._optimization_subphase(
             performance_profiler, "pcgrad_actor_projection"
         ):
-            projected_gradients = self.pcgrad_project(task_gradient_values)
+            projected_gradients = self.pcgrad_project(
+                self._sgs_scale_task_gradients(task_gradient_values, task_batches)
+            )
             self._require_finite("projected actor gradients", projected_gradients)
             self._set_parameter_gradients(parameters, projected_gradients)
         with self._optimization_subphase(

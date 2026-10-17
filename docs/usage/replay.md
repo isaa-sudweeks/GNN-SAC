@@ -71,3 +71,11 @@ The default changed after the CUDA equivalence, memory-headroom, production
 restart, replay, checkpoint, and bounded end-to-end throughput promotion gates
 passed. The legacy backend remains available as an explicit rollback and
 reproduction option.
+
+## Adaptive topology sampling
+
+`sgs.mode=replay` or `both` draws topology sample counts from the SGS beta
+distribution while preserving the total learner batch size. Sampling within
+each topology remains uniform with replacement. Zero-count tasks are omitted
+from that update. `collection` keeps balanced replay. See [SGS](sgs.md) for
+warm-up, checkpoint requirements, and PCGrad weighting.

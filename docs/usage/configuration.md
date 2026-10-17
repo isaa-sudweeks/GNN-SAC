@@ -10,6 +10,7 @@ defaults:
   - physics/domain_randomization       # see domain_randomization.md
   - cross_validation: disabled         # see cross_validation.md
   - training                           # schedule, evaluation, checkpoints, W&B
+  - sgs                                # optional adaptive topology allocation
   - distillation: disabled             # see distillation.md
   - sac_backend: mlp
   - sim_backend: mujoco
@@ -85,9 +86,8 @@ uv run python sac/train.py sac_backend=gnn 'truss_topologies=[octahedron,octahed
 
 **Per-topology budgets.** `steps`, `batch_size`, and `buffer_size` are given
 *per topology*. For multi-topology runs the parser multiplies them by the number
-of topologies and records the original values as `per_topology_<name>`. Replay
-is task-balanced: each topology gets an equal share of both capacity and every
-batch. See [replay.md](replay.md) for replay backends and storage placement.
+of topologies and records the original values as `per_topology_<name>`. Replay capacity stays balanced across tasks. Replay batches are balanced by
+default; `sgs.mode=replay|both` adaptively changes their topology sample counts. See [replay.md](replay.md) for replay backends and storage placement.
 
 **Evaluation topologies.**
 

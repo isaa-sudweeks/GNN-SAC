@@ -58,6 +58,16 @@ With `pcgrad=true` (the GNN default), critic and actor gradients are computed
 separately for each topology, and conflicting gradients are projected before
 the optimizer step.
 
+## Adaptive topology allocation
+
+`sgs.mode=collection|replay|both` enables the paper beta SGS kernel for fresh
+collection, replay sample counts, or both. It defaults to `disabled`. See
+[SGS](sgs.md) for the exact kernel, warm-up, PCGrad weighting, diagnostics,
+and a four-arm comparison command. Adaptive collection allocates a shared total
+transition budget rather than equal final experience per topology. Native
+multitask evaluation uses separate simulator instances, including with SGS
+disabled, so evaluation cannot reset ongoing training rollouts.
+
 ## MJX
 
 `sim_backend=mjx` runs training environments batch-natively on the accelerator
