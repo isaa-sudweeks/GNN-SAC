@@ -384,7 +384,7 @@ class GNNSAC(torch.nn.Module):
                 # Broken-node regime tasks (see tensor_gnn_buffer._task_names)
                 # have no teacher and must never receive the KL term.
                 losses = [
-                    self._teacher_loss(
+                    distillation.weight_for(task) * self._teacher_loss(
                         task,
                         batch[0],
                         None if raw_observations_by_task is None else
@@ -393,9 +393,12 @@ class GNNSAC(torch.nn.Module):
                     )
                     for task, batch in task_batches.items()
                     if task in distillation.teachers
+                    and distillation.weight_for(task) > 0
                 ]
                 if losses:
-                    pi_loss = pi_loss + distillation.weight * torch.stack(losses).mean()
+                    pi_loss = pi_loss + torch.stack(losses).sum() / sum(
+                        task in distillation.teachers for task in task_batches
+                    )
         log_prob = info["log_prob"]
         self._require_finite("actor loss", pi_loss)
         self._require_finite("actor distribution statistics", info)
@@ -455,8 +458,8 @@ class GNNSAC(torch.nn.Module):
             distillation.metrics[f"sac_actor_loss/{task}"] = loss.detach()
             # Broken-node regime tasks have no teacher and must never receive
             # the KL term, unconditionally (not just while weight is decaying).
-            if distillation.weight > 0 and task in distillation.teachers:
-                loss = loss + distillation.weight * self._teacher_loss(
+            if distillation.weight_for(task) > 0:
+                loss = loss + distillation.weight_for(task) * self._teacher_loss(
                     task,
                     obs,
                     raw_observations,
@@ -921,7 +924,15 @@ class GNNSAC(torch.nn.Module):
             sac_values = [value for key, value in metrics.items() if key.startswith("sac_actor_loss/")]
             if sac_values:
                 metrics["sac_actor_loss"] = torch.stack(sac_values).mean()
-            metrics.update(kl=kl, weighted_kl=distillation.weight * kl,
+            weighted_values = [value * distillation.weight_for(key[3:])
+                               for key, value in metrics.items() if key.startswith("kl/")]
+            denominator = (len(task_batches or {}) if pcgrad_enabled else
+                           sum(task in distillation.teachers for task in (task_batches or {})))
+            weighted_kl = (torch.stack(weighted_values).sum() / denominator
+                           if weighted_values else torch.tensor(0.0))
+            for task in distillation.teachers:
+                metrics[f"weight/{task}"] = distillation.weight_for(task)
+            metrics.update(kl=kl, weighted_kl=weighted_kl,
                            weight=distillation.weight, offline_updates=distillation.completed_updates,
                            stage="online")
             info.update({f"distillation/{key}": value for key, value in metrics.items()})

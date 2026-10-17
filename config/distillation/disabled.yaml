@@ -18,3 +18,12 @@ target_batch_size: 256
 pin_memory: true
 # Load the checkpointed one-batch lookahead on a bounded background worker.
 prefetch: true
+
+# Opt-in online release; provide audited references for every training teacher.
+performance_decay:
+  enabled: false
+  distance_ratio: 0.9
+  survival_tolerance: 0.05
+  patience: 3 # Consecutive qualifying evaluations at distinct transition counts.
+  release_steps: 100000 # Additional linear decay after qualification.
+  references: {} # topology: {distance, survival, horizon, teacher_sha256}

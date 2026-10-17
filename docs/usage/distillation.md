@@ -186,3 +186,76 @@ replay/shard handling, held-out exclusion, both actor optimizers, zero-weight
 baseline equivalence, offline resume, and a short two-topology native MuJoCo
 training smoke test using generated fixture teachers. This validates mechanics;
 it does not establish transfer performance for trained specialist checkpoints.
+
+## Performance-triggered per-topology release
+
+Set `distillation.performance_decay.enabled=true` to accelerate online KL decay
+independently for each training topology. The default is disabled, retaining the
+global schedule. Collection, replay allocation, offline pretraining, critic and
+temperature objectives are unchanged.
+
+Supply audited teacher references in a Hydra configuration (illustrative values
+below; replace them with matched evaluations of your actual checkpoints):
+
+```yaml
+distillation:
+  performance_decay:
+    enabled: true
+    distance_ratio: 0.9
+    survival_tolerance: 0.05
+    patience: 3
+    release_steps: 100000
+    references:
+      tetrahedron:
+        distance: 10.0
+        survival: 1.0
+        horizon: 1000
+        teacher_sha256: REPLACE_WITH_CHECKPOINT_SHA256
+```
+
+Provide one reference for every **training** topology. `distance` is mean episode
+forward displacement; `survival` is the fraction of episodes reaching the full
+`horizon` in control steps. Evaluate the frozen teacher under the same simulator,
+physics, reset distribution, horizon, and deterministic policy settings as the
+student's nominal evaluation, using multiple resets. The loader checks the
+checkpoint SHA-256 and positive finite reference performance; it cannot verify
+that externally supplied audit metrics were measured under matching conditions.
+Zero-distance or zero-survival teachers are unsuitable references and are rejected.
+Extra reference entries are ignored and never become scheduling inputs.
+
+At each online evaluation, a topology qualifies when student distance is at least
+`distance_ratio * teacher_distance` and student survival is at least
+`teacher_survival - survival_tolerance`, with an identical horizon. Invalid or
+nonqualifying observations reset its consecutive-evaluation streak. Duplicate
+transition counts do not add evidence. After `patience` qualifying evaluations,
+its additional multiplier decreases linearly from one to zero over
+`release_steps` collected transitions. The effective weight is:
+
+```text
+weight(topology, step) = global_linear_weight(step) * release_multiplier(topology, step)
+```
+
+Release never reverses if performance later falls, and the global schedule still
+forces all guidance to zero at its original deadline. Released topology terms
+remain zero in the original loss average; remaining teachers are not upweighted.
+Teacher forward passes for a released topology stop. Broken-node regime tasks
+remain exempt from KL. The staged broken-node curriculum still waits for the
+**global** KL deadline, preserving the existing curriculum timing.
+
+Only training-topology evaluations update the schedule. Held-out distance or
+survival cannot trigger release. Offline-stage evaluations do not count.
+Evaluation now logs `episode_survival` for a single task and
+`<topology>_episode_survival` for topology evaluations. Training logs include
+`distillation/weight/<task>` and `distillation/weighted_kl`, with the latter
+reflecting the actual topology weights. The existing `distillation/weight` remains
+the global upper bound. Checkpoints preserve qualification streaks, last observed
+transition counts, and release start times; resume rejects changed references or
+adaptive settings. Legacy global-only checkpoints remain compatible when the
+feature is disabled.
+
+For an initial ablation, compare enabled versus disabled with identical teacher
+checkpoints, offline work, seeds, collection/replay settings, and transition
+budgets. Compare development-held-out distance and survival plus mean/worst
+training-topology performance. Keep final-test topologies outside tuning and
+schedule inputs. These thresholds are experimental defaults, not validated
+performance improvements.

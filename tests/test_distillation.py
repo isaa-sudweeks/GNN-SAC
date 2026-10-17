@@ -1,5 +1,6 @@
 from copy import deepcopy
 import json
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -946,6 +947,13 @@ class DistillationTrainingTest(unittest.TestCase):
                                                      edge_distance=False),
                                  distillation=dict(enabled=True, teachers=mapping, pretrain_updates=2,
                                                    batch_size=2, shard_size=2, checkpoint_freq=0, log_freq=1))
+            cfg.distillation["performance_decay"] = dict(
+                enabled=True, patience=1, release_steps=2,
+                references={topology: dict(
+                    distance=1e-6, survival=1.0, horizon=2,
+                    teacher_sha256=hashlib.sha256(Path(path).read_bytes()).hexdigest(),
+                ) for topology, path in mapping.items()},
+            )
             env = make_env(cfg)
             try:
                 agent = GNNSAC(cfg)
@@ -957,6 +965,8 @@ class DistillationTrainingTest(unittest.TestCase):
                 self.assertEqual(trainer._step, cfg.steps)
                 self.assertGreater(trainer._optimizer_updates, 0)
                 self.assertEqual(trainer.distillation.weight, 0)
+                for progress in trainer.distillation.performance_decay.progress.values():
+                    self.assertGreaterEqual(progress["last_step"], 0)
             finally:
                 env.close()
 

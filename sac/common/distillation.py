@@ -16,6 +16,7 @@ from torch_geometric.nn import global_mean_pool
 
 from env.mujoco_gen.topology_envs import base_regime_task, is_broken_regime_task
 
+from common.distillation_schedule import PerformanceDecay
 from common.gnn_actor_critic import GNNActorCritic
 from common.graph_transforms import (
     graph_feature_flags,
@@ -529,6 +530,28 @@ class Distillation:
                         )
                 del first, contract_observation, replay, state
 
+        self.task_topologies = {task: topology for task, (topology, _) in selected.items()}
+        adaptive = _get(options, "performance_decay", {})
+        self.performance_decay = None
+        if _get(adaptive, "enabled", False):
+            self.performance_decay = PerformanceDecay(
+                adaptive, self.task_topologies, self.sources
+            )
+            self.settings["performance_decay"] = self.performance_decay.settings
+
+    def weight_for(self, task: str) -> float:
+        """Return the effective online KL weight, capped by the global schedule."""
+        if task not in self.teachers:
+            return 0.0
+        multiplier = (self.performance_decay.multiplier(task, self.step)
+                      if self.performance_decay is not None else 1.0)
+        return self.weight * multiplier
+
+    def observe_evaluation(self, task: str, distance: float, survival: float, horizon: int) -> None:
+        """Update release evidence only during online training."""
+        if self.stage == "online" and self.performance_decay is not None:
+            self.performance_decay.observe(task, self.step, distance, survival, horizon)
+
     def _prepare_dataset(self, task: str, observations) -> ObservationShards:
         plan = self._dataset_plans[task]
         return ObservationShards.prepare(
@@ -716,14 +739,17 @@ class Distillation:
         return dict(stage=self.stage, completed_updates=self.completed_updates,
                     sources=self.sources, settings=self.settings, generator=self.generator.get_state(),
                     schema_pairs=self.schema_pairs,
-                    pending_samples=_copy_sample_specs(self.pending_samples))
+                    pending_samples=_copy_sample_specs(self.pending_samples),
+                    performance_decay=(self.performance_decay.state_dict()
+                                       if self.performance_decay is not None else None))
 
     def load_state_dict(self, state: dict) -> None:
         saved_settings = state.get("settings", {})
         saved_semantic_settings = {
             key: saved_settings.get(key) for key in self.settings
         }
-        if state["sources"] != self.sources or saved_semantic_settings != self.settings:
+        if (state["sources"] != self.sources or saved_semantic_settings != self.settings
+                or saved_settings.get("performance_decay") != self.settings.get("performance_decay")):
             raise ValueError("Distillation teacher sources or schedule/settings changed during resume.")
         saved_schema_pairs = state.get("schema_pairs")
         if saved_schema_pairs is None:
@@ -742,6 +768,11 @@ class Distillation:
             raise ValueError("Invalid distillation checkpoint stage/progress.")
         if stage == "online" and completed != self.pretrain_updates:
             raise ValueError("Online checkpoint has incomplete offline distillation.")
+        if self.performance_decay is not None:
+            progress = state.get("performance_decay")
+            if progress is None:
+                raise ValueError("Missing performance decay checkpoint state.")
+            self.performance_decay.load_state_dict(progress)
         self.stage, self.completed_updates = stage, completed
         self.generator.set_state(state["generator"])
         self.pending_samples = _copy_sample_specs(state.get("pending_samples", {}))

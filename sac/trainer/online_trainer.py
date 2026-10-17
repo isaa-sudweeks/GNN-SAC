@@ -123,6 +123,7 @@ class OnlineTrainer(Trainer):
                 if hasattr(eval_cfg, "tasks"):
                     eval_cfg.tasks = [eval_task]
             self.eval_env = make_env(eval_cfg)
+            self._evaluation_cfg = eval_cfg
             if topology_bucket_metadata is not None or self._eval_heldout_topologies:
                 eval_topology_metadata = self._topology_bucket_metadata(self.eval_env)
                 if eval_topology_metadata is not None:
@@ -329,7 +330,30 @@ class OnlineTrainer(Trainer):
             return self._eval_topology_buckets()
         if bool(getattr(self.cfg, "multitask", False)) and int(getattr(self.eval_env, "num_envs", 1)) > 1:
             return self._eval_multitask()
-        return self._eval_one()
+        metrics = self._eval_one()
+        evaluation_cfg = getattr(self, "_evaluation_cfg", self.cfg)
+        eval_task = str(evaluation_cfg.task)
+        topology = (eval_task.split(":", 1)[1] if ":" in eval_task else
+                    str(getattr(evaluation_cfg, "truss_topology", "")))
+        self._observe_distillation_eval(topology, metrics)
+        return metrics
+
+    def _observe_distillation_eval(self, topology: str, metrics: dict) -> None:
+        """Resolve evaluation identity to an exact training teacher key."""
+        distillation = getattr(self, "distillation", None)
+        if distillation is None or getattr(distillation, "performance_decay", None) is None:
+            return
+        evaluation_cfg = getattr(self, "_evaluation_cfg", self.cfg)
+        eval_task = str(evaluation_cfg.task)
+        eval_base = eval_task.split(":", 1)[0]
+        # An explicit topology override must agree with the evaluated topology.
+        if ":" in eval_task and eval_task.split(":", 1)[1] != topology:
+            return
+        for task, teacher_topology in distillation.task_topologies.items():
+            if teacher_topology == topology and task.split(":", 1)[0] == eval_base:
+                distillation.observe_evaluation(task, float(metrics["episode_distance"]),
+                                               float(metrics["episode_survival"]),
+                                               int(metrics["episode_horizon"]))
 
     def _evaluate_and_log(self):
         video_every_n_evals = int(getattr(self.cfg, "video_every_n_evals", 1))
@@ -339,6 +363,9 @@ class OnlineTrainer(Trainer):
         self._record_video_this_eval = bool(getattr(self.cfg, "save_video", False)) and (
             eval_count % video_every_n_evals == 0
         )
+        distillation = getattr(self, "distillation", None)
+        if distillation is not None:
+            distillation.step = int(self._step)
         eval_metrics = self.eval()
         eval_metrics.update(self.common_metrics())
         self.logger.log(eval_metrics, 'eval')
@@ -357,6 +384,12 @@ class OnlineTrainer(Trainer):
 
     def _eval_one(self, task_idx=None, video_key="videos/eval_video"):
         ep_rewards, ep_successes, ep_lengths, ep_distances = [], [], [], []
+        survivals = []
+        evaluation_cfg = getattr(self, "_evaluation_cfg", self.cfg)
+        horizons = getattr(evaluation_cfg, "episode_lengths", None)
+        horizon = (int(horizons[task_idx]) if horizons and task_idx is not None
+                   else int(getattr(evaluation_cfg, "episode_length",
+                                    getattr(self.eval_env, "max_episode_steps", 0))))
         record_video = bool(getattr(self.cfg, "save_video", False)) and bool(
             getattr(self, "_record_video_this_eval", True)
         )
@@ -378,10 +411,13 @@ class OnlineTrainer(Trainer):
             ep_rewards.append(self._scalar_value(ep_reward))
             ep_successes.append(self._scalar_value(info['success']))
             ep_lengths.append(t)
+            survivals.append(float(horizon > 0 and t >= horizon))
             ep_distances.append(ep_distance)
             if record_video:
                 self.logger.video.save(self._step, key=video_key)
         return dict(
+            episode_survival=np.mean(survivals),
+            episode_horizon=horizon,
             episode_reward=np.nanmean(ep_rewards),
             episode_success=np.nanmean(ep_successes),
             episode_length=np.nanmean(ep_lengths),
@@ -402,6 +438,10 @@ class OnlineTrainer(Trainer):
             metrics[f"{task_key}_episode_success"] = task_metrics["episode_success"]
             metrics[f"{task_key}_episode_length"] = task_metrics["episode_length"]
             metrics[f"{task_key}_episode_distance"] = task_metrics["episode_distance"]
+            topology = (task_name.split(":", 1)[1] if ":" in task_name else
+                        str(getattr(self.cfg, "truss_topology", "")))
+            self._observe_distillation_eval(topology, task_metrics)
+            metrics[f"{task_key}_episode_survival"] = task_metrics.get("episode_survival", float("nan"))
             task_rewards.append(task_metrics["episode_reward"])
             task_successes.append(task_metrics["episode_success"])
             task_lengths.append(task_metrics["episode_length"])
@@ -435,6 +475,9 @@ class OnlineTrainer(Trainer):
             metrics[f"{topology_key}_episode_success"] = topology_metrics["episode_success"]
             metrics[f"{topology_key}_episode_length"] = topology_metrics["episode_length"]
             metrics[f"{topology_key}_episode_distance"] = topology_metrics["episode_distance"]
+            if topology in trained_topologies:
+                self._observe_distillation_eval(topology, topology_metrics)
+            metrics[f"{topology_key}_episode_survival"] = topology_metrics.get("episode_survival", float("nan"))
             topology_rewards.append(topology_metrics["episode_reward"])
             topology_successes.append(topology_metrics["episode_success"])
             topology_lengths.append(topology_metrics["episode_length"])
