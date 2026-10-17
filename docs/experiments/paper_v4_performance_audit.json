@@ -1,0 +1,4880 @@
+{
+  "audit_date": "2026-10-14",
+  "audit_root": "/Users/isaacsudweeks/.codex/worktrees/89fa/GNN-SAC/outputs/teacher-audit-20261014",
+  "horizon": 1000,
+  "protocol": "Native MuJoCo, deterministic mean actions; clean noise/scale; randomized initial translation/yaw.",
+  "runtime": {
+    "packages": {
+      "torch": "2.13.0+cu130",
+      "torch-geometric": "2.8.0.post1",
+      "mujoco": "3.8.1",
+      "mujoco-truss-gen": "0.12.5",
+      "numpy": "2.5.1"
+    },
+    "files": {
+      "env/mujoco_gen/topology_envs.py": "d355316597a203713a3eb3562d4bc0bdfef931644ecfaf3e6f7f23a6a57383ef",
+      "sac/common/gnn_actor_critic.py": "dd719fb889ec9cde1def3e109c3de291e722f644a03992ae4b3558d1ae98a586",
+      "sac/common/gnn_layers.py": "23de4eda2365e099a4162c427c115ac2ff1a2dd8139d8eb1c1ccd949f278f5a2",
+      "sac/common/graph_transforms.py": "f0525b68d99cd6676d950a9f0db0c19851475642d4e620c7923d458d16251491",
+      "uv.lock": "ed5f802089c249dc5aa7ccb939f9fc3aecd25f95bb5fbf87a171e4bddc9f83a4"
+    },
+    "repo_status": " M config/distillation/kl_paper_v4.yaml\n M docs/usage/distillation.md\n M docs/usage/tube_virtual_nodes.md\n M scripts/launch_tube_ablation.py\n M tests/test_cross_validation.py\n M tests/test_tube_physics.py\n",
+    "diagnostic_worker_sha256": "c8d7204b6e279fdc8472db8428e16efb70f423fcb86cbebe7eb19d02f36ced03",
+    "native_rollout_overrides": {
+      "device": "cpu",
+      "mujoco_backend": "mujoco",
+      "sim_backend": "mujoco",
+      "truss_topologies": null,
+      "graph_features": {
+        "node_roles": true,
+        "edge_roles": true,
+        "edge_direction": true
+      },
+      "max_steps": 1000
+    },
+    "policy_evaluation": {
+      "actions": "pi_mean",
+      "threads": 1,
+      "action_noise": false,
+      "observation_noise": false,
+      "length_scale": false,
+      "initial_translation_yaw": "retain saved flags"
+    },
+    "audit_helper_sha256": {
+      "worker.py": "7ffc92f815922ab35c0bddad7bd17d6fe8b322a610a5ce47e02db1f89095d5fb",
+      "submit.py": "222900022fd1ca3e1cbc7c366b89e556cb1813324385c5f9b8416561d49ea891",
+      "validate_loader_local.py": "49d7a55db6d0eaa18213fe9fb9f57d773046ab3c67c63969d81d59df02998894",
+      "fast_config.py": "7be4497bebb6d122a3bb41549067750fcae217fd6ca7cb6aced8d084e632c1b5",
+      "reproduce_exact.py": "40c1c8610839b2a248966bfb5cea60005bd2e792b79b1e9e1723ba7dd1896638",
+      "validate_results.py": "469a0ee53a02db0c756e076a78c7a0cb1f011564d23a25efc4433555473f4a47",
+      "advance.py": "62529634b3390ffdbf0b108dd65fe3770428b958eb379d66108d140b4e7459fe",
+      "setup.py": "339301180976fac170df123dfebf7a9fd872fdc1fc111282501d61a56b698df1",
+      "select_screen.py": "1e52472ba37ff30b12121ab8176b19defbd311fb261efdedb0931c31b255426c",
+      "light_load.py": "cb245a56c7184b57a86296224accfa2da9585e74e510cd1cc22029b2ffbb0c2e",
+      "provenance.py": "05615be58ec73cfd5bb4704347d3622d7a1ab345782c4c64791bd16d9ffed5dd",
+      "zip_metadata.py": "9c61b114d90f75037f988d1fff3f1d87e01d619533a42fb9fff49c3abf902338",
+      "select_confirm.py": "5e711155c4f9e56c0a6fcf446a0009463bfb99cda0a7f8575f74d3be8ef5011c",
+      "retry_loading_errors.py": "76872c6bd9aaed1a8a2c082d7b65ef3bf892d1f4df09e445abd2c502c734d8f2",
+      "recover_confirm.py": "f2587554fed06fcf5f9bc28acbf07abf33b269d28ad6b17a1b0abc0080e54d3e",
+      "analyze.py": "0389530f5f794477518ac89135d37f06bba8e101ad7fd5e7b268a7292fa401cc",
+      "recover.py": "25cef52850e7e2c326111bf038415eb0cefa84143fba8b65f685bfb607047295",
+      "inventory.py": "005eb013311c14fb63b1e6a23f9fa71638bfcf40ea31b5f29750f7f1f9994301"
+    }
+  },
+  "teachers": {
+    "tetrahedron": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-tetrahedron/seed_1/job_0000_d699b420c3d8/checkpoints/step_10000000.pt",
+      "model_sha256": "5196b45bc4ecf1ef52570641cd536cecf9bd0875040591fea33f8eae1cafbe94",
+      "records": [
+        {
+          "path": "clean/0.json",
+          "sha256": "7a2bac0f4953b56d3f188918a7b326933bfe8814a8e793560a1ac31c080298cc"
+        },
+        {
+          "path": "confirm/49.json",
+          "sha256": "442f6afdb7ddf4fec397e94c5ced209794f4af884bdb37f73f843cc51e608f21"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 20000,
+          "distance": 27.623992253632963,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20001,
+          "distance": 23.240697178848375,
+          "length": 905,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20002,
+          "distance": 28.80783898765164,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20003,
+          "distance": 25.963215009951167,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20004,
+          "distance": 26.939566081479168,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20005,
+          "distance": 23.21000438473765,
+          "length": 888,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20006,
+          "distance": 2.298804185118308,
+          "length": 160,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20007,
+          "distance": 19.9615162818443,
+          "length": 728,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20008,
+          "distance": 3.0941556905836296,
+          "length": 149,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20009,
+          "distance": 11.55530153758578,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20010,
+          "distance": 27.153322783400064,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20011,
+          "distance": 1.1721770122219386,
+          "length": 91,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20012,
+          "distance": 11.496495976595448,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20013,
+          "distance": 27.341891793833728,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20014,
+          "distance": 12.174074722543946,
+          "length": 435,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40000,
+          "distance": 9.362850944499696,
+          "length": 831,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": 20.850047928061137,
+          "length": 708,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40002,
+          "distance": 7.366591818882178,
+          "length": 869,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": 1.4333855357489436,
+          "length": 103,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 3.6740836573981537,
+          "length": 151,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": 1.9284331357289664,
+          "length": 149,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": 2.325034778847471,
+          "length": 320,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": 14.927990772347602,
+          "length": 492,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40008,
+          "distance": 19.670498830317744,
+          "length": 711,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40009,
+          "distance": 11.045153626983806,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40010,
+          "distance": 11.453261240176905,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40011,
+          "distance": 2.6494130084343537,
+          "length": 158,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40012,
+          "distance": 9.703739272478135,
+          "length": 363,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": 29.368703866686154,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40014,
+          "distance": 8.648297169139022,
+          "length": 338,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "henneberg_n5_1tube_1": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n5_1tube_1/seed_1/job_0003_138070075220/checkpoints/step_10000000.pt",
+      "model_sha256": "87cedc93edaf37c7dbf7193ca5b2ad03d7298f1af8b2c26bd4326394f6062417",
+      "records": [
+        {
+          "path": "clean/1.json",
+          "sha256": "9328d32ef78fe203cac7f42d32edbf294968ec53a6ec821919715db644ed0930"
+        },
+        {
+          "path": "confirm/50.json",
+          "sha256": "0c8c9ffeda52a5416085b212094807be323be9c949ecf2daa8a2b54e668b4b3a"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 20000,
+          "distance": 33.00554223082116,
+          "length": 657,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20001,
+          "distance": 45.328645851071016,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20002,
+          "distance": 20.620379895531457,
+          "length": 420,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20003,
+          "distance": 8.396522308030606,
+          "length": 390,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20004,
+          "distance": 8.945645387972215,
+          "length": 253,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20005,
+          "distance": 1.248327057677232,
+          "length": 128,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20006,
+          "distance": 1.7815004476129794,
+          "length": 118,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20007,
+          "distance": 52.23689437458604,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20008,
+          "distance": 55.55218903966395,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20009,
+          "distance": 0.8867496020320685,
+          "length": 66,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20010,
+          "distance": 1.2448985075432293,
+          "length": 128,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20011,
+          "distance": 1.429304510135295,
+          "length": 70,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20012,
+          "distance": 48.90702953579344,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20013,
+          "distance": 1.4487148702826618,
+          "length": 71,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20014,
+          "distance": 50.4297015899915,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40000,
+          "distance": 53.22773998216954,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40001,
+          "distance": 45.97847185003714,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40002,
+          "distance": 52.948020962389016,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40003,
+          "distance": 46.78435614949777,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40004,
+          "distance": 3.2375164357313917,
+          "length": 175,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": 2.3219613040879032,
+          "length": 133,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": 56.699146945974356,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40007,
+          "distance": 53.11005308842164,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40008,
+          "distance": 1.450307576270183,
+          "length": 70,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40009,
+          "distance": 46.89648608838363,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40010,
+          "distance": 44.60142293110657,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40011,
+          "distance": 49.185482373170906,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40012,
+          "distance": 54.99132642653293,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40013,
+          "distance": 39.37165349995497,
+          "length": 742,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": 46.85213778134214,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        }
+      ]
+    },
+    "henneberg_n6_1tube_1": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n6_1tube_1/seed_3/job_0008_5f11f797288b/checkpoints/step_9801216.pt",
+      "model_sha256": "dc8ab437c870a0d43ad4f8ff495c7f94f30a9236919711a193b6efac75a30272",
+      "records": [
+        {
+          "path": "clean/2.json",
+          "sha256": "818a3cce8d0ea3d417a5dceb98a6724b8e26ef850a5a25c9ca08d33477749596"
+        },
+        {
+          "path": "confirm/29.json",
+          "sha256": "0305725ef0e70d2de6ff17a2a2e3711be08e77248b2afa93ac04a2aa5b7a20a6"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 20000,
+          "distance": -0.14744948445238595,
+          "length": 18,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20001,
+          "distance": -0.07646301056091809,
+          "length": 16,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20002,
+          "distance": 0.012704790165614543,
+          "length": 32,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20003,
+          "distance": 0.03633017192432033,
+          "length": 19,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20004,
+          "distance": -0.15012648433669457,
+          "length": 18,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20005,
+          "distance": 0.02027087430124766,
+          "length": 12,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20006,
+          "distance": -0.1556417113971607,
+          "length": 12,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20007,
+          "distance": -0.11860026262812107,
+          "length": 18,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20008,
+          "distance": -0.059989085449698054,
+          "length": 40,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20009,
+          "distance": 0.09998486928041585,
+          "length": 41,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20010,
+          "distance": 0.01099703056074297,
+          "length": 11,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20011,
+          "distance": -0.13442597252725075,
+          "length": 19,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20012,
+          "distance": 0.13617318521796123,
+          "length": 38,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20013,
+          "distance": -0.13520109257764157,
+          "length": 19,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20014,
+          "distance": -0.2811321964586555,
+          "length": 26,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40000,
+          "distance": 1.3766845891749253,
+          "length": 101,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": 65.82310996885201,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40002,
+          "distance": 88.82256320568207,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40003,
+          "distance": 0.5542050877771957,
+          "length": 65,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 79.81891104428729,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40005,
+          "distance": 87.49519963546659,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40006,
+          "distance": 0.3142532119296809,
+          "length": 26,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": 91.3977373278506,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40008,
+          "distance": 90.3336968506469,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40009,
+          "distance": 1.5860123666358115,
+          "length": 103,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": 0.678824831079216,
+          "length": 42,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40011,
+          "distance": 65.83398930053335,
+          "length": 896,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40012,
+          "distance": 85.92093199921197,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40013,
+          "distance": 1.8514418960172694,
+          "length": 82,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": 0.7311861290188536,
+          "length": 47,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "henneberg_n6_1tube_2": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n6_1tube_2/seed_1/job_0009_9321629a089b/checkpoints/step_10000000.pt",
+      "model_sha256": "e0147f42a4d3f5cc7c00d64553e5216562c87affc20db490cdffffae06794b95",
+      "records": [
+        {
+          "path": "clean/3.json",
+          "sha256": "eeba4cf0e509585a25e9cd85311cd7b62e124844c6caf1a7350c6e1b3fd962f1"
+        },
+        {
+          "path": "confirm/51.json",
+          "sha256": "6c1363212b55106ec206b4934881d3f05255297b9e7734d8df3c841d30e4c145"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 20000,
+          "distance": 10.205555293738286,
+          "length": 348,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20001,
+          "distance": 10.248387085281076,
+          "length": 397,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20002,
+          "distance": 2.482649942829541,
+          "length": 109,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20003,
+          "distance": 1.0085362916749565,
+          "length": 88,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20004,
+          "distance": 16.682417206000952,
+          "length": 548,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20005,
+          "distance": 12.774155616564848,
+          "length": 487,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20006,
+          "distance": 4.518315423306001,
+          "length": 143,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20007,
+          "distance": 10.204281270167847,
+          "length": 350,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20008,
+          "distance": 2.4257959068117914,
+          "length": 104,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20009,
+          "distance": 0.997176897928564,
+          "length": 62,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20010,
+          "distance": 10.103826541689136,
+          "length": 324,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20011,
+          "distance": 16.13919441990393,
+          "length": 534,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20012,
+          "distance": 1.4508261673815326,
+          "length": 99,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20013,
+          "distance": 18.50931434033364,
+          "length": 574,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20014,
+          "distance": 7.8745811936867005,
+          "length": 256,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40000,
+          "distance": 0.9433825330915688,
+          "length": 62,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": 9.888574177378523,
+          "length": 235,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40002,
+          "distance": 0.6098095558610483,
+          "length": 64,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": 1.0832488376986231,
+          "length": 82,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 9.013949142530256,
+          "length": 239,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": 0.920314572959688,
+          "length": 104,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": 0.9662103900220225,
+          "length": 81,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": 7.446981994437501,
+          "length": 185,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40008,
+          "distance": 0.6486954537438674,
+          "length": 84,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40009,
+          "distance": 10.855212532604881,
+          "length": 292,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": 2.924513685044703,
+          "length": 205,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40011,
+          "distance": 0.6842867186594103,
+          "length": 107,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40012,
+          "distance": 13.454040703821624,
+          "length": 403,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": 14.066207934122898,
+          "length": 391,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": 11.10926363794605,
+          "length": 278,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "henneberg_n6_2tube_1": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": null
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v3-henneberg_n6_2tube_1/seed_2/job_0013_bac8c12821a6/checkpoints/step_9600000_tensor_replay.pt",
+      "model_sha256": "cb30ae82f5d9d9bb93a7a3d6aef7d37235cb6774ad581b0d74be2a8f0e90efb5",
+      "records": [
+        {
+          "path": "confirm/70.json",
+          "sha256": "92b52ae788b70826f1d57800d669c55d49e30cdb1a5f02c913cd9d7c858ce53e"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 40000,
+          "distance": 58.374303235723495,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40001,
+          "distance": 57.9450759754059,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40002,
+          "distance": 29.444024377066643,
+          "length": 683,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": 60.05436494653972,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40004,
+          "distance": 54.79379647419633,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40005,
+          "distance": 3.1956192546237516,
+          "length": 138,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": 58.15269758521635,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40007,
+          "distance": 56.097481153665754,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40008,
+          "distance": 43.651934463622695,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40009,
+          "distance": 56.66431181128531,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40010,
+          "distance": 59.7545616069405,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40011,
+          "distance": 44.14662161843334,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40012,
+          "distance": 42.009637569592414,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40013,
+          "distance": 43.51660174301518,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40014,
+          "distance": 53.23647993291882,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        }
+      ]
+    },
+    "henneberg_n6_3tube_1": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n6_3tube_1/seed_3/job_0017_8dfc89778f25/checkpoints/step_9901056.pt",
+      "model_sha256": "a2c4452e7419b6dd08296b4145f000ad3b2e1a962f6b08ac9462a42b78b64110",
+      "records": [
+        {
+          "path": "confirm/34.json",
+          "sha256": "0500bfeb5d51d8ad5425d82c62bc72d62d76925ebed2d3213828613e38c2bbf6"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 40000,
+          "distance": 58.129254855365446,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40001,
+          "distance": 59.734506232639816,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40002,
+          "distance": 34.68040433871897,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40003,
+          "distance": 10.402655594126925,
+          "length": 373,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 62.955490119158156,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40005,
+          "distance": 34.52153158556755,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40006,
+          "distance": 0.18605163175554706,
+          "length": 67,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": 61.65416240171694,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40008,
+          "distance": 34.973187145004914,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40009,
+          "distance": 58.56789194139783,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40010,
+          "distance": 56.58872875506876,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40011,
+          "distance": 36.44626370654963,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40012,
+          "distance": 31.487441370258264,
+          "length": 634,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": 0.9762908754426081,
+          "length": 116,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": 58.24525039426529,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        }
+      ]
+    },
+    "octahedron": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-octahedron/seed_3/job_0020_edca45628497/checkpoints/step_10000000.pt",
+      "model_sha256": "b8802a1546f9255f3ad2642b96ae15283109bbbac249217f45bdd6ff428275a9",
+      "records": [
+        {
+          "path": "clean/6.json",
+          "sha256": "4733754d09ed2a8f03c0465e366493d9ec4f3a7c31dd6c5f17d2189587a21932"
+        },
+        {
+          "path": "confirm/52.json",
+          "sha256": "4d11f9f6ff0480e06e245a9c2001722b8ab2a83c17269beb48cc92edeaea16f7"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 20000,
+          "distance": 64.96206061766551,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20001,
+          "distance": 26.753403569853337,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20002,
+          "distance": 65.70466599570992,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20003,
+          "distance": 25.836430048980972,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20004,
+          "distance": 64.79620163001019,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20005,
+          "distance": 0.5342470806996854,
+          "length": 17,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20006,
+          "distance": 64.62294255500274,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20007,
+          "distance": 35.12701749531893,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20008,
+          "distance": 65.74087845961488,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20009,
+          "distance": 5.459546991844188,
+          "length": 266,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20010,
+          "distance": 0.5398543117374911,
+          "length": 18,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20011,
+          "distance": 65.03510847653251,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20012,
+          "distance": 5.557684259372515,
+          "length": 275,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20013,
+          "distance": 64.60073403900932,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20014,
+          "distance": 62.36569652800688,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40000,
+          "distance": 23.83461002568162,
+          "length": 935,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": 63.25884337152743,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40002,
+          "distance": 65.76805519379566,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40003,
+          "distance": 62.681704302221284,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40004,
+          "distance": 63.99372865567348,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40005,
+          "distance": 63.64547496659033,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40006,
+          "distance": 43.59992490018056,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40007,
+          "distance": 65.8110987074175,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40008,
+          "distance": 65.38484288532507,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40009,
+          "distance": 4.447252911881861,
+          "length": 259,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": 64.19780187631828,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40011,
+          "distance": 64.8934318513744,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40012,
+          "distance": 64.40858925882831,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40013,
+          "distance": 64.21847089345587,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40014,
+          "distance": 21.88122968685755,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        }
+      ]
+    },
+    "henneberg_n8_1tube_13": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n8_1tube_13/seed_1/job_0054_555692b2b293/checkpoints/step_10000000.pt",
+      "model_sha256": "6b8ce3c6f4bca23280309059a6cca8c647a1e2d19ebd9244ba3753a26a8b3c31",
+      "records": [
+        {
+          "path": "clean/7.json",
+          "sha256": "e3b17fb50e758da872af2f6aeced276c80b61b7fe462abebed560c16a1975a12"
+        },
+        {
+          "path": "confirm/39.json",
+          "sha256": "8c7ad8381b4e85cf380cd08c8c99676caf8aa4fb5d925f3ba6067f09455cc2c7"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 20000,
+          "distance": -0.2918365981570916,
+          "length": 29,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20001,
+          "distance": -0.5266352913151554,
+          "length": 23,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20002,
+          "distance": -0.8296715010010381,
+          "length": 34,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20003,
+          "distance": -0.41819413179347803,
+          "length": 31,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20004,
+          "distance": -0.3219085669166312,
+          "length": 26,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20005,
+          "distance": -0.7291213067429492,
+          "length": 29,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20006,
+          "distance": -0.4979466620083419,
+          "length": 46,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20007,
+          "distance": -0.2954334144968189,
+          "length": 27,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20008,
+          "distance": -0.48966803334204045,
+          "length": 31,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20009,
+          "distance": -0.12298349401570405,
+          "length": 50,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20010,
+          "distance": -0.7295790762537847,
+          "length": 27,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20011,
+          "distance": -0.29671859567410186,
+          "length": 29,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20012,
+          "distance": -0.18577641045463578,
+          "length": 47,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20013,
+          "distance": -0.2776089878353166,
+          "length": 31,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20014,
+          "distance": -0.5381601543831375,
+          "length": 26,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40000,
+          "distance": -0.5966250033228377,
+          "length": 28,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": -0.4874481096789628,
+          "length": 52,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40002,
+          "distance": -0.59370422730619,
+          "length": 46,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": -0.6355223227320026,
+          "length": 28,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": -0.363938280781317,
+          "length": 38,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": -0.5730560337544554,
+          "length": 32,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": -0.5634103071455494,
+          "length": 26,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": -0.6637643187986396,
+          "length": 29,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40008,
+          "distance": -0.2976389581749328,
+          "length": 29,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40009,
+          "distance": 0.07589257652378312,
+          "length": 34,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": -0.18192611095553657,
+          "length": 48,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40011,
+          "distance": -0.6925036993445949,
+          "length": 41,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40012,
+          "distance": -0.5753071149066333,
+          "length": 35,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": -0.5040772492025581,
+          "length": 30,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": -0.23008517690136565,
+          "length": 38,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "henneberg_n8_1tube_57": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": null
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v3-henneberg_n8_1tube_57/seed_3/job_0011_c53a71829c7b/checkpoints/step_9701376_tensor_replay.pt",
+      "model_sha256": "71c5142ac29c4ac768a0e7e65d3df9b4660398fb804787686ab1c399de01186e",
+      "records": [
+        {
+          "path": "confirm/77.json",
+          "sha256": "9f2167c0d0da50849de6d4c54cdb6deaf7f4f2b66094dc8ba7bac21fe80a7d0a"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 40000,
+          "distance": 1.5969520821515022,
+          "length": 72,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": 76.00536492279059,
+          "length": 862,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40002,
+          "distance": 0.6636811666585323,
+          "length": 75,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": 2.045890812536066,
+          "length": 74,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 25.580878918788887,
+          "length": 279,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": 2.0662797969147,
+          "length": 71,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": 0.8534771235902221,
+          "length": 23,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": 50.505228705935615,
+          "length": 480,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40008,
+          "distance": 96.79145415959927,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40009,
+          "distance": 75.83802313239968,
+          "length": 847,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": 56.04863325631397,
+          "length": 659,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40011,
+          "distance": 97.30782272831944,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40012,
+          "distance": 89.93522050890256,
+          "length": 917,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": 36.85964894546682,
+          "length": 359,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": 31.92166606995756,
+          "length": 364,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "henneberg_n8_1tube_69": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n8_1tube_69/seed_1/job_0051_343a43712bdf/checkpoints/step_10000000.pt",
+      "model_sha256": "b0838a75386bf0780b90b01c710d42df1bf20ee5cc9a3b5c1ed469e6fa5c9506",
+      "records": [
+        {
+          "path": "clean/9.json",
+          "sha256": "9eb18ba3a4a089e25506f32b1df2522847c0a9afde08b7d81c3ce3f043c40dd5"
+        },
+        {
+          "path": "confirm/43.json",
+          "sha256": "533f1e47446751c6d9821e1dec48a83171d79d333820dc4825590086673d2fd4"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 20000,
+          "distance": 0.06326212926796998,
+          "length": 52,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20001,
+          "distance": -0.10347184558873646,
+          "length": 36,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20002,
+          "distance": -0.10186362895387113,
+          "length": 22,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20003,
+          "distance": 0.06707449596027387,
+          "length": 19,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20004,
+          "distance": -0.4855777555139622,
+          "length": 31,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20005,
+          "distance": -0.23318575208329212,
+          "length": 26,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20006,
+          "distance": -0.213289159708005,
+          "length": 48,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20007,
+          "distance": -0.1444134232494928,
+          "length": 41,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20008,
+          "distance": -0.03160688787518873,
+          "length": 20,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20009,
+          "distance": -0.2317385551286952,
+          "length": 24,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20010,
+          "distance": -0.23404914097732377,
+          "length": 27,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20011,
+          "distance": -0.38719891229923575,
+          "length": 29,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20012,
+          "distance": -0.3228635029417165,
+          "length": 23,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20013,
+          "distance": 0.07392152661035067,
+          "length": 51,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20014,
+          "distance": -0.2680557663664034,
+          "length": 23,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40000,
+          "distance": 0.2957700554652505,
+          "length": 32,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": -0.37128066179542196,
+          "length": 42,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40002,
+          "distance": -0.39334155120871317,
+          "length": 27,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": -0.1740086968305632,
+          "length": 23,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": -0.00127319404455771,
+          "length": 50,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": 0.04588256975771965,
+          "length": 19,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": 0.08401970079552223,
+          "length": 23,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": -0.21773333789205074,
+          "length": 39,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40008,
+          "distance": -0.4610097400534482,
+          "length": 26,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40009,
+          "distance": -0.06887887514502866,
+          "length": 39,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": -0.08161587589479524,
+          "length": 32,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40011,
+          "distance": -0.014123563977833486,
+          "length": 45,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40012,
+          "distance": -0.042028158145773875,
+          "length": 19,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": -0.010044161585948175,
+          "length": 19,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": -0.03620370515943183,
+          "length": 39,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "henneberg_n8_2tube_127": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n8_2tube_127/seed_2/job_0025_dced0234241a/checkpoints/step_9701376.pt",
+      "model_sha256": "261c9899c16161ba17a2f4fcd5c0951ecce7d13a695ade25c014d8e2827fbaa8",
+      "records": [
+        {
+          "path": "confirm/1.json",
+          "sha256": "f9541c9c9394643c301c3de885e4d1f1eda7e7d2847d37e7778de52ca39d5c27"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 40000,
+          "distance": 96.11779599322035,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40001,
+          "distance": 0.9974016927629059,
+          "length": 48,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40002,
+          "distance": 44.55314944763724,
+          "length": 463,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": 6.081364326923231,
+          "length": 134,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 96.7920717512589,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40005,
+          "distance": 98.50711818221157,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40006,
+          "distance": 80.86411942080231,
+          "length": 836,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": 95.71363771731285,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40008,
+          "distance": 96.45148803636883,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40009,
+          "distance": 1.49191823492954,
+          "length": 51,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": 1.4537790968372335,
+          "length": 53,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40011,
+          "distance": 71.97540505820241,
+          "length": 726,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40012,
+          "distance": 26.72989141372141,
+          "length": 398,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": 2.4670518629736087,
+          "length": 115,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": 1.4523565443312036,
+          "length": 53,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "henneberg_n8_2tube_134": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n8_2tube_134/seed_1/job_0027_d91cbdbb67de/checkpoints/step_9600000.pt",
+      "model_sha256": "50cdc82aa999effb4f7ff13654d066d015ae6386b091f5c4c4e782daec94d2ca",
+      "records": [
+        {
+          "path": "confirm/11.json",
+          "sha256": "32c04378e119b7db5e9d27f3899d3ffac1845dd3ab559d71a36531368d2ee6d9"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 40000,
+          "distance": 1.8004329666023522,
+          "length": 106,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": 16.792309999236004,
+          "length": 175,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40002,
+          "distance": 1.2931719987423098,
+          "length": 73,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": 0.10721255920947992,
+          "length": 58,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 12.896615842126277,
+          "length": 186,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": 1.095682130765418,
+          "length": 65,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": -0.013826266021704559,
+          "length": 46,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": 18.881343555635905,
+          "length": 173,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40008,
+          "distance": 0.18606404245057173,
+          "length": 17,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40009,
+          "distance": 1.120191677839775,
+          "length": 66,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": 1.195316720251172,
+          "length": 59,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40011,
+          "distance": 1.3497715403384871,
+          "length": 70,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40012,
+          "distance": 21.80755224662369,
+          "length": 207,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": 21.673294584590238,
+          "length": 202,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": 0.6432358999579818,
+          "length": 39,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "henneberg_n8_2tube_187": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n8_2tube_187/seed_1/job_0030_eb4c0c235976/checkpoints/step_10000000.pt",
+      "model_sha256": "f13895df7b4caad2069489516bfc2a3b7d4236e8b6616a5ae2636590dab4d54b",
+      "records": [
+        {
+          "path": "clean/12.json",
+          "sha256": "1fb8bbd69a7bb6ac0c126b1cd9db75a07a18b5ae1b049113c571f074ee598bd4"
+        },
+        {
+          "path": "confirm/54.json",
+          "sha256": "4e9c7dec8790a7887c89aa80c7a31dc6c55774bf67984cf45f313fd40eea11fa"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 20000,
+          "distance": -0.5961719645163039,
+          "length": 30,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20001,
+          "distance": -0.05928997212783815,
+          "length": 55,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20002,
+          "distance": -0.6709756055723274,
+          "length": 60,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20003,
+          "distance": 0.06816656918626643,
+          "length": 29,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20004,
+          "distance": -0.5674648659290251,
+          "length": 31,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20005,
+          "distance": -0.1671713157371767,
+          "length": 43,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20006,
+          "distance": -0.37505228169998356,
+          "length": 40,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20007,
+          "distance": -0.29285359872468275,
+          "length": 31,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20008,
+          "distance": 0.25230969378708257,
+          "length": 52,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20009,
+          "distance": -0.5686125522783974,
+          "length": 46,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20010,
+          "distance": -0.15085994397236102,
+          "length": 41,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20011,
+          "distance": -0.6097858174679459,
+          "length": 29,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20012,
+          "distance": -0.5622927913589966,
+          "length": 49,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20013,
+          "distance": -0.6281555869404708,
+          "length": 29,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20014,
+          "distance": 0.28380082092400305,
+          "length": 36,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40000,
+          "distance": 36.31575128186996,
+          "length": 249,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": 2.084829674658341,
+          "length": 84,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40002,
+          "distance": 2.718917101842465,
+          "length": 79,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": 38.85594726968424,
+          "length": 321,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 8.164836816000035,
+          "length": 106,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": 2.2313652819826784,
+          "length": 63,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": 28.58410770396742,
+          "length": 217,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": 0.9152821892323977,
+          "length": 84,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40008,
+          "distance": 5.814046660682464,
+          "length": 172,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40009,
+          "distance": 34.625289482501564,
+          "length": 287,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": 49.07727074968309,
+          "length": 323,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40011,
+          "distance": 3.0999772440330937,
+          "length": 119,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40012,
+          "distance": 7.752135824197398,
+          "length": 169,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": 3.287844793743592,
+          "length": 84,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": 26.026096969446712,
+          "length": 203,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "henneberg_n8_3tube_11": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n8_3tube_11/seed_1/job_0042_1f7140449efa/checkpoints/step_10000000.pt",
+      "model_sha256": "2d117477462b137e0b44ca7490b3d35f96b4986b0ab195b9e0adcfca6d267748",
+      "records": [
+        {
+          "path": "clean/13.json",
+          "sha256": "60eb5b80a48097efa5ab39d8e293df9845f9f629119ae01a4046ed4a0594663d"
+        },
+        {
+          "path": "confirm/12.json",
+          "sha256": "90ff7c670d6d5c56fda972a74006f6c28db6d62780f8facfec843299a7d3bad7"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 20000,
+          "distance": -0.32538354377738843,
+          "length": 11,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20001,
+          "distance": 0.02806650002490063,
+          "length": 50,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20002,
+          "distance": 0.13559301641093824,
+          "length": 50,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20003,
+          "distance": 0.1256892023346987,
+          "length": 15,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20004,
+          "distance": -0.3092973444081857,
+          "length": 11,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20005,
+          "distance": -0.091469198234372,
+          "length": 15,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20006,
+          "distance": 0.14336162624311433,
+          "length": 53,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20007,
+          "distance": 0.20750999989449292,
+          "length": 21,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20008,
+          "distance": 0.07476672125758732,
+          "length": 15,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20009,
+          "distance": -0.13234782295989117,
+          "length": 18,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20010,
+          "distance": -0.09339142336699124,
+          "length": 22,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20011,
+          "distance": -0.34277154089794437,
+          "length": 11,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20012,
+          "distance": -0.09237097549051865,
+          "length": 15,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20013,
+          "distance": -0.3387361152474624,
+          "length": 11,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20014,
+          "distance": -0.31225964954396335,
+          "length": 29,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40000,
+          "distance": 96.18486455465258,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40001,
+          "distance": 2.4046127174400547,
+          "length": 60,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40002,
+          "distance": 89.15894405597881,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40003,
+          "distance": 13.271297623916288,
+          "length": 253,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 2.054404935508434,
+          "length": 51,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": 30.06301381450958,
+          "length": 337,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": 91.57386978299262,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40007,
+          "distance": 3.251643555390583,
+          "length": 75,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40008,
+          "distance": 3.0594044588647082,
+          "length": 74,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40009,
+          "distance": 75.83933361523057,
+          "length": 923,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": 91.40293521584768,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40011,
+          "distance": 2.468858802752111,
+          "length": 70,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40012,
+          "distance": 2.1641516987262577,
+          "length": 52,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": 3.499778068468325,
+          "length": 73,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": 80.51494047764228,
+          "length": 860,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "henneberg_n8_3tube_34": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n8_3tube_34/seed_2/job_0049_713997ea50e4/checkpoints/step_9600000.pt",
+      "model_sha256": "e937cc1ba4756f8d2ade9bd104057966db34af160ba9cf2a61663ffb1b625eee",
+      "records": [
+        {
+          "path": "confirm/19.json",
+          "sha256": "129bb478f6f0119d261caf70caf0aace5228a6af138fe63661e8d9cdbb595def"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 40000,
+          "distance": 2.3475712403494136,
+          "length": 77,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": 91.15386665249245,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40002,
+          "distance": 2.0665273199568044,
+          "length": 102,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": 2.2922351930185485,
+          "length": 69,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 33.45578194764923,
+          "length": 354,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": 1.215331244302389,
+          "length": 47,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": 2.254416135103082,
+          "length": 92,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": 71.13781233773965,
+          "length": 798,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40008,
+          "distance": 92.45899641508876,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40009,
+          "distance": 93.68318414522862,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40010,
+          "distance": 1.7493847927984274,
+          "length": 89,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40011,
+          "distance": 86.56470876812949,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40012,
+          "distance": 92.65050192595506,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40013,
+          "distance": 95.38584180112488,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40014,
+          "distance": 88.95821182329111,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        }
+      ]
+    },
+    "henneberg_n8_3tube_60": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n8_3tube_60/seed_1/job_0033_7c56f16d1acf/checkpoints/step_10000000.pt",
+      "model_sha256": "3059ac76de83f93a1040182fe3f5c582b126d3e4daa218cb9a04a1ac99b0e797",
+      "records": [
+        {
+          "path": "clean/15.json",
+          "sha256": "41721d3d562804227cc4fe4ff68f255f5033b3d03b14ea8b6a4389cd13c5f35b"
+        },
+        {
+          "path": "confirm/5.json",
+          "sha256": "416c68a20449710267601e5c69796742a2e0ab9ec1f1ac613fab0b644ad71772"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 20000,
+          "distance": 0.16677072592900177,
+          "length": 44,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20001,
+          "distance": -0.061293654659763,
+          "length": 62,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20002,
+          "distance": -0.10460337789221685,
+          "length": 26,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20003,
+          "distance": 0.1113650309212525,
+          "length": 25,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20004,
+          "distance": 0.025548377425025803,
+          "length": 40,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20005,
+          "distance": -0.12873128371593257,
+          "length": 37,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20006,
+          "distance": -0.27914676824274565,
+          "length": 35,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20007,
+          "distance": -0.2496950649672921,
+          "length": 83,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20008,
+          "distance": 0.10690078088976374,
+          "length": 23,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20009,
+          "distance": 0.13792412178666896,
+          "length": 21,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20010,
+          "distance": -0.09680573782106494,
+          "length": 36,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20011,
+          "distance": -0.09451069137607604,
+          "length": 35,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20012,
+          "distance": 0.12102467572866704,
+          "length": 23,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20013,
+          "distance": -0.030772295562532026,
+          "length": 35,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20014,
+          "distance": 0.37568531142241135,
+          "length": 26,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40000,
+          "distance": 60.048695359612424,
+          "length": 606,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": 81.58159722537113,
+          "length": 829,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40002,
+          "distance": -0.5821843698858837,
+          "length": 39,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": 55.49473572260869,
+          "length": 500,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 59.19717223656355,
+          "length": 515,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": 55.62610715028638,
+          "length": 524,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": 52.81235104955179,
+          "length": 522,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": 55.42786552041321,
+          "length": 487,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40008,
+          "distance": 0.8840447305331535,
+          "length": 49,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40009,
+          "distance": 63.658710994814626,
+          "length": 576,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": 53.949633840632195,
+          "length": 496,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40011,
+          "distance": 0.8390753530812233,
+          "length": 53,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40012,
+          "distance": 71.35258780990522,
+          "length": 676,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": 53.58055944480384,
+          "length": 509,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": 15.304157031106513,
+          "length": 142,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "henneberg_n8_3tube_85": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n8_3tube_85/seed_1/job_0045_3073240bd791/checkpoints/step_10000000.pt",
+      "model_sha256": "c9914ae24007bda94aee067396d59ebd3905457bacadb8d139b47f17914e9d75",
+      "records": [
+        {
+          "path": "clean/16.json",
+          "sha256": "aa113689aadb4f005851e0e2d1d562a09f143ab2681bcef65e3b510866d551d8"
+        },
+        {
+          "path": "confirm/20.json",
+          "sha256": "f12ab50913a681d508db185a192bac8f0264af462d0630c19a5d60f94eb2825a"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 20000,
+          "distance": 53.745244831907485,
+          "length": 658,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20001,
+          "distance": 75.92285866487582,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20002,
+          "distance": 28.308605269887906,
+          "length": 401,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20003,
+          "distance": 23.72958548747438,
+          "length": 362,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20004,
+          "distance": 32.6800417198837,
+          "length": 482,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20005,
+          "distance": 8.763610491475628,
+          "length": 167,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20006,
+          "distance": 55.3964812334178,
+          "length": 838,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20007,
+          "distance": 6.702056902172521,
+          "length": 119,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20008,
+          "distance": 19.559593421972718,
+          "length": 268,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20009,
+          "distance": 46.29527233566371,
+          "length": 621,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20010,
+          "distance": 23.733615657384615,
+          "length": 301,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20011,
+          "distance": 10.629011226478895,
+          "length": 159,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20012,
+          "distance": 12.123702588686198,
+          "length": 175,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20013,
+          "distance": 10.1544914142808,
+          "length": 127,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20014,
+          "distance": 30.150518532656328,
+          "length": 500,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40000,
+          "distance": 1.7833336230165315,
+          "length": 44,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": 0.5585695828732788,
+          "length": 12,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40002,
+          "distance": 11.449215630988753,
+          "length": 209,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": 13.440955819290316,
+          "length": 242,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 51.146035808486396,
+          "length": 731,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": 28.74659269032134,
+          "length": 429,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": 1.5168342842790856,
+          "length": 22,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": 6.112598438334179,
+          "length": 126,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40008,
+          "distance": 26.620322144224435,
+          "length": 397,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40009,
+          "distance": 0.651436350847299,
+          "length": 12,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": 8.713204485148019,
+          "length": 127,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40011,
+          "distance": 60.28655436052766,
+          "length": 853,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40012,
+          "distance": 45.07638953506369,
+          "length": 643,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": 12.146034115327154,
+          "length": 183,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": 3.057938369355683,
+          "length": 44,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "usevitch_212365307": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-usevitch_212365307/seed_1/job_0036_643f312ebf89/checkpoints/step_10000000.pt",
+      "model_sha256": "ffe0f06b4649fa5412ad8bc0e8250e17abee7ce721f55fb7cfb6963b1e65a6bb",
+      "records": [
+        {
+          "path": "clean/17.json",
+          "sha256": "19078abf4de7bb086740f4311c03a6bc119f127284ade0abd74d6a4105a1c05a"
+        },
+        {
+          "path": "confirm/24.json",
+          "sha256": "271ae5486243b0e60c74f7a5c9b9968ad3cafcf3b521f5bf4ed5668c1b0a61c0"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 20000,
+          "distance": 1.2069334589466039,
+          "length": 58,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20001,
+          "distance": 100.77715096579249,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20002,
+          "distance": 97.10047348512994,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20003,
+          "distance": 55.92035128199882,
+          "length": 609,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20004,
+          "distance": 56.47891249601702,
+          "length": 572,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20005,
+          "distance": 102.46314523748742,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20006,
+          "distance": 0.6300952647502186,
+          "length": 28,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20007,
+          "distance": 1.592703253918649,
+          "length": 77,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20008,
+          "distance": 95.95827099444077,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20009,
+          "distance": 3.16352127557714,
+          "length": 112,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20010,
+          "distance": 104.91328778781235,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20011,
+          "distance": 8.355596839052698,
+          "length": 110,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20012,
+          "distance": 2.8094517040173708,
+          "length": 71,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 20013,
+          "distance": 95.9334018702774,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 20014,
+          "distance": 78.96830460395343,
+          "length": 803,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40000,
+          "distance": 98.5632324615278,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40001,
+          "distance": 2.179989131396376,
+          "length": 34,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40002,
+          "distance": 0.644782382011909,
+          "length": 31,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": 0.8297329201546935,
+          "length": 46,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40004,
+          "distance": 3.094496613160713,
+          "length": 95,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40005,
+          "distance": 97.21789107069348,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40006,
+          "distance": 57.022255534346286,
+          "length": 621,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40007,
+          "distance": 1.4912406790033237,
+          "length": 38,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40008,
+          "distance": 8.531837748018011,
+          "length": 120,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40009,
+          "distance": 3.1885325631468535,
+          "length": 69,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40010,
+          "distance": 3.24778360485514,
+          "length": 108,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40011,
+          "distance": 102.99618980583185,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40012,
+          "distance": 102.92849626300946,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40013,
+          "distance": 73.70620539625735,
+          "length": 792,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40014,
+          "distance": 3.430736818490286,
+          "length": 97,
+          "terminated": true,
+          "truncated": false
+        }
+      ]
+    },
+    "usevitch_60243677150_p1": {
+      "policy_config": {
+        "obs_dim": 6,
+        "action_dim": 1,
+        "node_action_dim": 1,
+        "use_virtual_node": true,
+        "use_control_graph": true,
+        "truss_realistic": false,
+        "truss_graph_view": "auto",
+        "obs_norm": true,
+        "normalize_observations": true,
+        "speed": 0.05,
+        "action_low": -1.0,
+        "action_high": 1.0,
+        "log_std_min": -10.0,
+        "log_std_max": 2.0,
+        "mpl_dims": [
+          128,
+          128
+        ],
+        "message_hidden_dims": [
+          256,
+          256
+        ],
+        "action_head_hidden_dims": [],
+        "mpl_skip_connections": true,
+        "message_attention": true,
+        "head_hidden_dims": [
+          256,
+          256
+        ],
+        "num_q": 2,
+        "critic_readout": "physical_mean_virtual_node",
+        "graph_features": {
+          "node_roles": false,
+          "edge_roles": false,
+          "edge_distance": false
+        },
+        "control_node_observation_source": "connector_ball"
+      },
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-usevitch_60243677150_p1/seed_3/job_0041_270d7b261bbe/checkpoints/step_10000000.pt",
+      "model_sha256": "ef0fd51ec73efcb2d91b82049c6904ce6ced5087acec500167ea16c6d92c8f9b",
+      "records": [
+        {
+          "path": "confirm/83.json",
+          "sha256": "6fe80d91befef13a0acee59284a4f057155329a23059cba833818f8878aae17c"
+        }
+      ],
+      "episodes": [
+        {
+          "seed": 40000,
+          "distance": 22.972685867323253,
+          "length": 655,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40001,
+          "distance": 89.10756594504748,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40002,
+          "distance": 44.186294615967746,
+          "length": 657,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40003,
+          "distance": 62.17454228765043,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40004,
+          "distance": 88.87266416451668,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40005,
+          "distance": 54.85569883729963,
+          "length": 969,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40006,
+          "distance": 51.116210611549874,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40007,
+          "distance": 89.31094860862578,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40008,
+          "distance": 55.74996135075018,
+          "length": 952,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40009,
+          "distance": 89.23576133667595,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40010,
+          "distance": 85.62098248603272,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40011,
+          "distance": 59.45625031449082,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40012,
+          "distance": 33.94758251771479,
+          "length": 440,
+          "terminated": true,
+          "truncated": false
+        },
+        {
+          "seed": 40013,
+          "distance": 91.22274652009558,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        },
+        {
+          "seed": 40014,
+          "distance": 94.18749725914974,
+          "length": 1000,
+          "terminated": false,
+          "truncated": true
+        }
+      ]
+    }
+  },
+  "environment": {
+    "max_steps": 1000,
+    "nsubsteps": 100,
+    "speed": 0.05,
+    "action_low": -1.0,
+    "action_high": 1.0,
+    "obs_norm": true,
+    "normalize_observations": true,
+    "physical_parameters_enabled": true,
+    "physical_parameters": {
+      "node_radius": 0.1,
+      "box_size": [
+        0.05,
+        0.05,
+        0.1
+      ],
+      "min_node_center_z": 0.15,
+      "active_node_mass": 0.1,
+      "passive_node_mass": 0.1,
+      "node_mass": 0.1,
+      "connector_radius": 0.05,
+      "connector_mass": 0.05,
+      "rod_radius": 0.025,
+      "rod_mass": 0.05,
+      "triangle_body_mass": 0.01,
+      "triangle_body_gravcomp": 1.0,
+      "hinge_position_kp": 10.0,
+      "hinge_damping": 1.0,
+      "hinge_force_range": [
+        -100.0,
+        100.0
+      ],
+      "hinge_ctrl_range": [
+        -3.141592653589793,
+        3.141592653589793
+      ],
+      "connect_constraint_solref": [
+        0.01,
+        1.0
+      ],
+      "connect_constraint_solimp": [
+        0.95,
+        0.99,
+        0.001,
+        0.5,
+        2.0
+      ],
+      "default_edge_tendon_range": [
+        0.5,
+        2.0
+      ],
+      "default_route_tendon_range": [
+        0.5,
+        10.0
+      ],
+      "edge_tendon_width": 0.05,
+      "route_tendon_width": 0.02,
+      "perimeter_constraint_tendon_width": 0.0001,
+      "actuator_ctrl_range": [
+        -0.1,
+        0.1
+      ],
+      "default_actuator_range": [
+        0.0,
+        3.0
+      ],
+      "abstract_actuator_kp": 1000.0,
+      "realistic_actuator_kp": 1000.0,
+      "actuator_dampratio": 1.0,
+      "realistic_actuator_nominal_mass": 0.1,
+      "tendon_range_min_factor": 0.5,
+      "tendon_range_max_factor": 2.0,
+      "actuator_range_min_factor": 0.0,
+      "actuator_range_max_factor": 3.0,
+      "realistic_node_clone_offset": 0.5,
+      "connector_rod_length": 0.2886751345948129,
+      "orientation_weld_solref": [
+        0.2,
+        5.0
+      ],
+      "orientation_weld_solimp": [
+        0.2,
+        0.3,
+        0.001,
+        0.5,
+        2.0
+      ],
+      "orientation_weld_torquescale": 6000.0,
+      "tendon_constraint_solref": [
+        0.02,
+        1.0
+      ],
+      "tendon_constraint_solimp": [
+        0.9,
+        0.95,
+        0.001
+      ]
+    },
+    "domain_randomization_params": {
+      "broken_nodes": {
+        "enabled": false,
+        "probability": 0.1,
+        "regime_fraction": 0.3,
+        "schedule": "interleaved"
+      },
+      "length_scale": {
+        "enabled": false,
+        "min": 0.75,
+        "max": 2.0
+      },
+      "length_scale_min": 0.75,
+      "length_scale_max": 2.0,
+      "body_mass_multiplier": {
+        "enabled": false,
+        "min": 0.8,
+        "max": 1.2
+      },
+      "abstract_node_mass_multiplier": {
+        "enabled": false,
+        "min": 0.8,
+        "max": 1.2
+      },
+      "body_inertia_multiplier": {
+        "enabled": false,
+        "min": 0.8,
+        "max": 1.2
+      },
+      "dof_damping_multiplier": {
+        "enabled": false,
+        "min": 0.8,
+        "max": 1.2
+      },
+      "dof_armature": {
+        "enabled": false,
+        "min": 0.0,
+        "max": 0.02
+      },
+      "dof_frictionloss": {
+        "enabled": false,
+        "min": 0.0,
+        "max": 0.1
+      },
+      "actuator_gain_multiplier": {
+        "enabled": false,
+        "min": 0.8,
+        "max": 1.2
+      },
+      "actuator_bias_multiplier": {
+        "enabled": false,
+        "min": 0.8,
+        "max": 1.2
+      },
+      "actuator_dynprm_multiplier": {
+        "enabled": false,
+        "min": 0.8,
+        "max": 1.2
+      },
+      "geom_friction_slide": {
+        "enabled": false,
+        "min": 0.6,
+        "max": 1.4
+      },
+      "geom_friction_torsional": {
+        "enabled": false,
+        "min": 0.001,
+        "max": 0.01
+      },
+      "geom_friction_rolling": {
+        "enabled": false,
+        "min": 5e-05,
+        "max": 0.001
+      },
+      "tendon_stiffness": {
+        "enabled": false,
+        "min": 0.0,
+        "max": 100.0
+      },
+      "tendon_damping": {
+        "enabled": false,
+        "min": 0.0,
+        "max": 2.0
+      },
+      "tendon_armature": {
+        "enabled": false,
+        "min": 0.0,
+        "max": 0.02
+      },
+      "tendon_frictionloss": {
+        "enabled": false,
+        "min": 0.0,
+        "max": 0.1
+      },
+      "gravity_z": {
+        "enabled": false,
+        "min": -10.5,
+        "max": -9.1
+      },
+      "initial_translation_x": {
+        "enabled": true,
+        "min": -1.0,
+        "max": 1.0
+      },
+      "initial_translation_y": {
+        "enabled": true,
+        "min": -1.0,
+        "max": 1.0
+      },
+      "initial_yaw": {
+        "enabled": true,
+        "min": -3.141592653589793,
+        "max": 3.141592653589793
+      },
+      "hinge_position_kp": {
+        "enabled": false,
+        "min": 8.0,
+        "max": 12.0
+      },
+      "physical_parameters": {
+        "node_radius": {
+          "enabled": false,
+          "min": 0.08,
+          "max": 0.12
+        },
+        "box_size": {
+          "enabled": false,
+          "min": [
+            0.04,
+            0.04,
+            0.08
+          ],
+          "max": [
+            0.06,
+            0.06,
+            0.12
+          ]
+        },
+        "min_node_center_z": {
+          "enabled": false,
+          "min": 0.12,
+          "max": 0.18
+        },
+        "active_node_mass": {
+          "enabled": false,
+          "min": 0.08,
+          "max": 0.12
+        },
+        "passive_node_mass": {
+          "enabled": false,
+          "min": 0.08,
+          "max": 0.12
+        },
+        "node_mass": {
+          "enabled": false,
+          "min": 0.08,
+          "max": 0.12
+        },
+        "connector_radius": {
+          "enabled": false,
+          "min": 0.04,
+          "max": 0.06
+        },
+        "connector_mass": {
+          "enabled": false,
+          "min": 0.04,
+          "max": 0.06
+        },
+        "rod_radius": {
+          "enabled": false,
+          "min": 0.02,
+          "max": 0.03
+        },
+        "rod_mass": {
+          "enabled": false,
+          "min": 0.04,
+          "max": 0.06
+        },
+        "triangle_body_mass": {
+          "enabled": false,
+          "min": 0.008,
+          "max": 0.012
+        },
+        "triangle_body_gravcomp": {
+          "enabled": false,
+          "min": 0.8,
+          "max": 1.2
+        },
+        "hinge_position_kp": {
+          "enabled": false,
+          "min": 8.0,
+          "max": 12.0
+        },
+        "hinge_damping": {
+          "enabled": false,
+          "min": 0.8,
+          "max": 1.2
+        },
+        "hinge_force_range": {
+          "enabled": false,
+          "min": [
+            -120.0,
+            80.0
+          ],
+          "max": [
+            -80.0,
+            120.0
+          ]
+        },
+        "hinge_ctrl_range": {
+          "enabled": false,
+          "min": [
+            -3.455751918948773,
+            2.827433388230814
+          ],
+          "max": [
+            -2.827433388230814,
+            3.455751918948773
+          ]
+        },
+        "connect_constraint_solref": {
+          "enabled": false,
+          "min": [
+            0.008,
+            0.8
+          ],
+          "max": [
+            0.012,
+            1.2
+          ]
+        },
+        "connect_constraint_solimp": {
+          "enabled": false,
+          "min": [
+            0.76,
+            0.792,
+            0.0008,
+            0.4,
+            1.6
+          ],
+          "max": [
+            1.0,
+            1.0,
+            0.0012,
+            0.6,
+            2.4
+          ]
+        },
+        "default_edge_tendon_range": {
+          "enabled": false,
+          "min": [
+            0.4,
+            1.6
+          ],
+          "max": [
+            0.6,
+            2.4
+          ]
+        },
+        "default_route_tendon_range": {
+          "enabled": false,
+          "min": [
+            0.4,
+            8.0
+          ],
+          "max": [
+            0.6,
+            12.0
+          ]
+        },
+        "edge_tendon_width": {
+          "enabled": false,
+          "min": 0.04,
+          "max": 0.06
+        },
+        "route_tendon_width": {
+          "enabled": false,
+          "min": 0.016,
+          "max": 0.024
+        },
+        "perimeter_constraint_tendon_width": {
+          "enabled": false,
+          "min": 8e-05,
+          "max": 0.00012
+        },
+        "actuator_ctrl_range": {
+          "enabled": false,
+          "min": [
+            -0.12,
+            0.08
+          ],
+          "max": [
+            -0.08,
+            0.12
+          ]
+        },
+        "default_actuator_range": {
+          "enabled": false,
+          "min": [
+            0.0,
+            2.4
+          ],
+          "max": [
+            0.0,
+            3.6
+          ]
+        },
+        "abstract_actuator_kp": {
+          "enabled": false,
+          "min": 4000.0,
+          "max": 6000.0
+        },
+        "realistic_actuator_kp": {
+          "enabled": false,
+          "min": 800.0,
+          "max": 1200.0
+        },
+        "actuator_dampratio": {
+          "enabled": false,
+          "min": 0.8,
+          "max": 1.2
+        },
+        "realistic_actuator_nominal_mass": {
+          "enabled": false,
+          "min": 0.08,
+          "max": 0.12
+        },
+        "tendon_range_min_factor": {
+          "enabled": false,
+          "min": 0.4,
+          "max": 0.6
+        },
+        "tendon_range_max_factor": {
+          "enabled": false,
+          "min": 1.6,
+          "max": 2.4
+        },
+        "actuator_range_min_factor": {
+          "enabled": false,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "actuator_range_max_factor": {
+          "enabled": false,
+          "min": 2.4,
+          "max": 3.6
+        },
+        "realistic_node_clone_offset": {
+          "enabled": false,
+          "min": 0.4,
+          "max": 0.6
+        },
+        "connector_rod_length": {
+          "enabled": false,
+          "min": 0.23094010767585033,
+          "max": 0.34641016151377546
+        },
+        "orientation_weld_solref": {
+          "enabled": false,
+          "min": [
+            0.16,
+            4.0
+          ],
+          "max": [
+            0.24,
+            6.0
+          ]
+        },
+        "orientation_weld_solimp": {
+          "enabled": false,
+          "min": [
+            0.16,
+            0.24,
+            0.0008,
+            0.4,
+            1.6
+          ],
+          "max": [
+            0.24,
+            0.36,
+            0.0012,
+            0.6,
+            2.4
+          ]
+        },
+        "orientation_weld_torquescale": {
+          "enabled": false,
+          "min": 4800.0,
+          "max": 7200.0
+        },
+        "tendon_constraint_solref": {
+          "enabled": false,
+          "min": [
+            0.016,
+            0.8
+          ],
+          "max": [
+            0.024,
+            1.2
+          ]
+        },
+        "tendon_constraint_solimp": {
+          "enabled": false,
+          "min": [
+            0.72,
+            0.76,
+            0.0008
+          ],
+          "max": [
+            1.0,
+            1.0,
+            0.0012
+          ]
+        }
+      },
+      "action_noise": {
+        "enabled": false,
+        "std": 0.1,
+        "clip_low": -1.0,
+        "clip_high": 1.0,
+        "apply_to_seed_actions": false
+      },
+      "observation_noise": {
+        "enabled": false,
+        "std": 0.02,
+        "clip_low": null,
+        "clip_high": null
+      }
+    },
+    "critical_eig_threshold": 0.01,
+    "rho": 0.5,
+    "forward_weight": 19.65175423,
+    "energy_weight": 0.1,
+    "alive_bonus": 0.1,
+    "rigidity_weight": 0.1,
+    "slip_weight": 0.1215063801500649,
+    "slip_height": 0.1879452990963082,
+    "use_control_graph": true,
+    "truss_realistic": false,
+    "truss_graph_view": "auto",
+    "control_node_observation_source": "connector_ball",
+    "domain_randomization": true,
+    "eval_domain_randomization": true
+  }
+}

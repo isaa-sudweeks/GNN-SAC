@@ -1,0 +1,32 @@
+# Audit-selected teachers for the 19 development topologies; N7 stays reserved.
+# Use distillation=kl_paper_v4 with any of the development CV definitions.
+# Override distillation.teacher_root when the checkpoint tree moves.
+defaults:
+  - kl
+  - _self_
+
+# October 14 audit: five paired distance improvements plus two exploratory
+# survival alternatives (n6_3tube_1 and n8_3tube_34). Native MuJoCo evidence only.
+# Paper-v3 tensor_replay copies preserve teacher weights and compact legacy replay.
+teacher_root: /home/isuds/nobackup/autodelete/GNN-SAC/truss-graph
+teachers:
+  tetrahedron: ${distillation.teacher_root}/paper-v4-tetrahedron/seed_1/job_0000_d699b420c3d8/checkpoints/step_10000000.pt
+  henneberg_n5_1tube_1: ${distillation.teacher_root}/paper-v4-henneberg_n5_1tube_1/seed_1/job_0003_138070075220/checkpoints/step_10000000.pt
+  # Retained N6 source; the October audit still found strong reset sensitivity.
+  henneberg_n6_1tube_1: ${distillation.teacher_root}/paper-v4-henneberg_n6_1tube_1/seed_3/job_0008_5f11f797288b/checkpoints/step_9801216.pt
+  henneberg_n6_1tube_2: ${distillation.teacher_root}/paper-v4-henneberg_n6_1tube_2/seed_1/job_0009_9321629a089b/checkpoints/step_10000000.pt
+  henneberg_n6_2tube_1: ${distillation.teacher_root}/paper-v3-henneberg_n6_2tube_1/seed_2/job_0013_bac8c12821a6/checkpoints/step_9600000_tensor_replay.pt
+  henneberg_n6_3tube_1: ${distillation.teacher_root}/paper-v4-henneberg_n6_3tube_1/seed_3/job_0017_8dfc89778f25/checkpoints/step_9901056.pt
+  octahedron: ${distillation.teacher_root}/paper-v4-octahedron/seed_3/job_0020_edca45628497/checkpoints/step_10000000.pt
+  henneberg_n8_1tube_13: ${distillation.teacher_root}/paper-v4-henneberg_n8_1tube_13/seed_1/job_0054_555692b2b293/checkpoints/step_10000000.pt
+  henneberg_n8_1tube_57: ${distillation.teacher_root}/paper-v3-henneberg_n8_1tube_57/seed_3/job_0011_c53a71829c7b/checkpoints/step_9701376_tensor_replay.pt
+  henneberg_n8_1tube_69: ${distillation.teacher_root}/paper-v4-henneberg_n8_1tube_69/seed_1/job_0051_343a43712bdf/checkpoints/step_10000000.pt
+  henneberg_n8_2tube_127: ${distillation.teacher_root}/paper-v4-henneberg_n8_2tube_127/seed_2/job_0025_dced0234241a/checkpoints/step_9701376.pt
+  henneberg_n8_2tube_134: ${distillation.teacher_root}/paper-v4-henneberg_n8_2tube_134/seed_1/job_0027_d91cbdbb67de/checkpoints/step_9600000.pt
+  henneberg_n8_2tube_187: ${distillation.teacher_root}/paper-v4-henneberg_n8_2tube_187/seed_1/job_0030_eb4c0c235976/checkpoints/step_10000000.pt
+  henneberg_n8_3tube_11: ${distillation.teacher_root}/paper-v4-henneberg_n8_3tube_11/seed_1/job_0042_1f7140449efa/checkpoints/step_10000000.pt
+  henneberg_n8_3tube_34: ${distillation.teacher_root}/paper-v4-henneberg_n8_3tube_34/seed_2/job_0049_713997ea50e4/checkpoints/step_9600000.pt
+  henneberg_n8_3tube_60: ${distillation.teacher_root}/paper-v4-henneberg_n8_3tube_60/seed_1/job_0033_7c56f16d1acf/checkpoints/step_10000000.pt
+  henneberg_n8_3tube_85: ${distillation.teacher_root}/paper-v4-henneberg_n8_3tube_85/seed_1/job_0045_3073240bd791/checkpoints/step_10000000.pt
+  usevitch_212365307: ${distillation.teacher_root}/paper-v4-usevitch_212365307/seed_1/job_0036_643f312ebf89/checkpoints/step_10000000.pt
+  usevitch_60243677150_p1: ${distillation.teacher_root}/paper-v4-usevitch_60243677150_p1/seed_3/job_0041_270d7b261bbe/checkpoints/step_10000000.pt

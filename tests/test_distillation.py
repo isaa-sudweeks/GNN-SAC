@@ -917,6 +917,9 @@ class DistillationTrainingTest(unittest.TestCase):
             settings = dict(work_dir=tmp, steps=8, seed_steps=1, pretrain_steps=1,
                             batch_size=2, buffer_size=16, eval_freq=100, eval_episodes=1,
                             max_steps=2, nsubsteps=1, normalize_rewards=False,
+                            domain_randomization=True, eval_domain_randomization=True,
+                            domain_randomization_params=dict(length_scale=dict(enabled=False),
+                                initial_yaw=dict(enabled=True, min=-0.1, max=0.1)),
                             save_video=False, enable_wandb=False, save_agent=False,
                             save_csv=False, checkpoint_freq=0, replay_ratio=1, episodic=True,
                             mpl_dims=[8], message_hidden_dims=[8], head_hidden_dims=[8],
@@ -959,6 +962,7 @@ class DistillationTrainingTest(unittest.TestCase):
                 agent = GNNSAC(cfg)
                 trainer = OnlineTrainer(cfg=cfg, env=env, agent=agent,
                                         buffer=GNNBuffer(cfg), logger=Logger(cfg))
+                self.assertTrue(trainer._evaluation_cfg.domain_randomization)
                 trainer.train()
                 self.assertEqual(trainer.distillation.completed_updates, 2)
                 self.assertEqual(trainer.distillation.stage, "online")

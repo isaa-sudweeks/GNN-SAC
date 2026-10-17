@@ -63,3 +63,12 @@ domain_randomization_params:
   and writes machine-readable results.
 - `scripts/run_domain_randomization_training_smoke.py` runs a three-seed
   training smoke test for each randomization family.
+
+## Evaluation reset distribution
+
+Evaluation disables domain randomization by default. Set
+`eval_domain_randomization=true` to build evaluation environments using the
+configured `domain_randomization_params`. This affects all enabled randomization
+fields, so explicitly disable sensing/action noise and unwanted physics changes
+when matching a clean audit. The performance-decay pilot retains only audited
+initial translation and yaw randomization in both training and evaluation.

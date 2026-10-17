@@ -32,6 +32,15 @@ def _get(cfg, key, default=None):
     return cfg.get(key, default) if hasattr(cfg, "get") else getattr(cfg, key, default)
 
 
+def model_state_sha256(state: dict) -> str:
+    """Match the audit's hash of sorted model tensor names and raw CPU values."""
+    digest = hashlib.sha256()
+    for name, tensor in sorted(state.items()):
+        digest.update(name.encode())
+        digest.update(tensor.detach().cpu().contiguous().numpy().tobytes())
+    return digest.hexdigest()
+
+
 def enabled(cfg) -> bool:
     return bool(_get(_get(cfg, "distillation", {}), "enabled", False))
 
@@ -449,7 +458,14 @@ class Distillation:
                 self.sources[task] = {"path": str(path), "sha256": digest}
                 if not all(key in state for key in ("config", "agent", "buffer")):
                     raise ValueError("Distillation teachers require full trainer checkpoints with config and replay.")
+                references = _get(_get(options, "performance_decay", {}), "references", {})
+                if _get(_get(references, topology, {}), "teacher_model_sha256") is not None:
+                    self.sources[task]["model_sha256"] = model_state_sha256(state["agent"]["model"])
                 teacher_cfg = SimpleNamespace(**state["config"])
+                policy_reference = _get(_get(references, topology, {}), "policy_config", {})
+                for key, expected in policy_reference.items():
+                    if _get(teacher_cfg, key) != expected:
+                        raise ValueError(f"Teacher policy config differs from audit for {topology!r}: {key}.")
                 self._validate_config(teacher_cfg, topology, state["agent"])
                 self.teacher_configs[task] = teacher_cfg
                 self.schema_pairs[task] = {

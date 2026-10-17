@@ -265,8 +265,8 @@ class RandomPartitionTest(unittest.TestCase):
 
         self.assertEqual(len(jobs), 10)
         for job in jobs:
-            self.assertEqual(len(job["heldout_topologies"]), 2)
-            self.assertEqual(len(job["training_topologies"]), 8)
+            self.assertIn(len(job["heldout_topologies"]), (3, 4))
+            self.assertEqual(len(job["training_topologies"]) + len(job["heldout_topologies"]), 19)
             self.assertFalse(set(job["heldout_topologies"]) & set(job["training_topologies"]))
             self.assertFalse(set(job["training_topologies"]) & set(loaded["final_test"]))
 

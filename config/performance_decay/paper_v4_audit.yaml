@@ -1,0 +1,1199 @@
+# @package _global_
+
+# Matched October 14 native audit; see docs/usage/performance_decay_pilot.md.
+max_steps: 1000
+nsubsteps: 100
+speed: 0.05
+action_low: -1.0
+action_high: 1.0
+obs_norm: true
+normalize_observations: true
+physical_parameters_enabled: true
+physical_parameters:
+  node_radius: 0.1
+  box_size:
+  - 0.05
+  - 0.05
+  - 0.1
+  min_node_center_z: 0.15
+  active_node_mass: 0.1
+  passive_node_mass: 0.1
+  node_mass: 0.1
+  connector_radius: 0.05
+  connector_mass: 0.05
+  rod_radius: 0.025
+  rod_mass: 0.05
+  triangle_body_mass: 0.01
+  triangle_body_gravcomp: 1.0
+  hinge_position_kp: 10.0
+  hinge_damping: 1.0
+  hinge_force_range:
+  - -100.0
+  - 100.0
+  hinge_ctrl_range:
+  - -3.141592653589793
+  - 3.141592653589793
+  connect_constraint_solref:
+  - 0.01
+  - 1.0
+  connect_constraint_solimp:
+  - 0.95
+  - 0.99
+  - 0.001
+  - 0.5
+  - 2.0
+  default_edge_tendon_range:
+  - 0.5
+  - 2.0
+  default_route_tendon_range:
+  - 0.5
+  - 10.0
+  edge_tendon_width: 0.05
+  route_tendon_width: 0.02
+  perimeter_constraint_tendon_width: 0.0001
+  actuator_ctrl_range:
+  - -0.1
+  - 0.1
+  default_actuator_range:
+  - 0.0
+  - 3.0
+  abstract_actuator_kp: 1000.0
+  realistic_actuator_kp: 1000.0
+  actuator_dampratio: 1.0
+  realistic_actuator_nominal_mass: 0.1
+  tendon_range_min_factor: 0.5
+  tendon_range_max_factor: 2.0
+  actuator_range_min_factor: 0.0
+  actuator_range_max_factor: 3.0
+  realistic_node_clone_offset: 0.5
+  connector_rod_length: 0.2886751345948129
+  orientation_weld_solref:
+  - 0.2
+  - 5.0
+  orientation_weld_solimp:
+  - 0.2
+  - 0.3
+  - 0.001
+  - 0.5
+  - 2.0
+  orientation_weld_torquescale: 6000.0
+  tendon_constraint_solref:
+  - 0.02
+  - 1.0
+  tendon_constraint_solimp:
+  - 0.9
+  - 0.95
+  - 0.001
+domain_randomization_params:
+  broken_nodes:
+    enabled: false
+    probability: 0.1
+    regime_fraction: 0.3
+    schedule: interleaved
+  length_scale:
+    enabled: false
+    min: 0.75
+    max: 2.0
+  length_scale_min: 0.75
+  length_scale_max: 2.0
+  body_mass_multiplier:
+    enabled: false
+    min: 0.8
+    max: 1.2
+  abstract_node_mass_multiplier:
+    enabled: false
+    min: 0.8
+    max: 1.2
+  body_inertia_multiplier:
+    enabled: false
+    min: 0.8
+    max: 1.2
+  dof_damping_multiplier:
+    enabled: false
+    min: 0.8
+    max: 1.2
+  dof_armature:
+    enabled: false
+    min: 0.0
+    max: 0.02
+  dof_frictionloss:
+    enabled: false
+    min: 0.0
+    max: 0.1
+  actuator_gain_multiplier:
+    enabled: false
+    min: 0.8
+    max: 1.2
+  actuator_bias_multiplier:
+    enabled: false
+    min: 0.8
+    max: 1.2
+  actuator_dynprm_multiplier:
+    enabled: false
+    min: 0.8
+    max: 1.2
+  geom_friction_slide:
+    enabled: false
+    min: 0.6
+    max: 1.4
+  geom_friction_torsional:
+    enabled: false
+    min: 0.001
+    max: 0.01
+  geom_friction_rolling:
+    enabled: false
+    min: 5.0e-05
+    max: 0.001
+  tendon_stiffness:
+    enabled: false
+    min: 0.0
+    max: 100.0
+  tendon_damping:
+    enabled: false
+    min: 0.0
+    max: 2.0
+  tendon_armature:
+    enabled: false
+    min: 0.0
+    max: 0.02
+  tendon_frictionloss:
+    enabled: false
+    min: 0.0
+    max: 0.1
+  gravity_z:
+    enabled: false
+    min: -10.5
+    max: -9.1
+  initial_translation_x:
+    enabled: true
+    min: -1.0
+    max: 1.0
+  initial_translation_y:
+    enabled: true
+    min: -1.0
+    max: 1.0
+  initial_yaw:
+    enabled: true
+    min: -3.141592653589793
+    max: 3.141592653589793
+  hinge_position_kp:
+    enabled: false
+    min: 8.0
+    max: 12.0
+  physical_parameters:
+    node_radius:
+      enabled: false
+      min: 0.08
+      max: 0.12
+    box_size:
+      enabled: false
+      min:
+      - 0.04
+      - 0.04
+      - 0.08
+      max:
+      - 0.06
+      - 0.06
+      - 0.12
+    min_node_center_z:
+      enabled: false
+      min: 0.12
+      max: 0.18
+    active_node_mass:
+      enabled: false
+      min: 0.08
+      max: 0.12
+    passive_node_mass:
+      enabled: false
+      min: 0.08
+      max: 0.12
+    node_mass:
+      enabled: false
+      min: 0.08
+      max: 0.12
+    connector_radius:
+      enabled: false
+      min: 0.04
+      max: 0.06
+    connector_mass:
+      enabled: false
+      min: 0.04
+      max: 0.06
+    rod_radius:
+      enabled: false
+      min: 0.02
+      max: 0.03
+    rod_mass:
+      enabled: false
+      min: 0.04
+      max: 0.06
+    triangle_body_mass:
+      enabled: false
+      min: 0.008
+      max: 0.012
+    triangle_body_gravcomp:
+      enabled: false
+      min: 0.8
+      max: 1.2
+    hinge_position_kp:
+      enabled: false
+      min: 8.0
+      max: 12.0
+    hinge_damping:
+      enabled: false
+      min: 0.8
+      max: 1.2
+    hinge_force_range:
+      enabled: false
+      min:
+      - -120.0
+      - 80.0
+      max:
+      - -80.0
+      - 120.0
+    hinge_ctrl_range:
+      enabled: false
+      min:
+      - -3.455751918948773
+      - 2.827433388230814
+      max:
+      - -2.827433388230814
+      - 3.455751918948773
+    connect_constraint_solref:
+      enabled: false
+      min:
+      - 0.008
+      - 0.8
+      max:
+      - 0.012
+      - 1.2
+    connect_constraint_solimp:
+      enabled: false
+      min:
+      - 0.76
+      - 0.792
+      - 0.0008
+      - 0.4
+      - 1.6
+      max:
+      - 1.0
+      - 1.0
+      - 0.0012
+      - 0.6
+      - 2.4
+    default_edge_tendon_range:
+      enabled: false
+      min:
+      - 0.4
+      - 1.6
+      max:
+      - 0.6
+      - 2.4
+    default_route_tendon_range:
+      enabled: false
+      min:
+      - 0.4
+      - 8.0
+      max:
+      - 0.6
+      - 12.0
+    edge_tendon_width:
+      enabled: false
+      min: 0.04
+      max: 0.06
+    route_tendon_width:
+      enabled: false
+      min: 0.016
+      max: 0.024
+    perimeter_constraint_tendon_width:
+      enabled: false
+      min: 8.0e-05
+      max: 0.00012
+    actuator_ctrl_range:
+      enabled: false
+      min:
+      - -0.12
+      - 0.08
+      max:
+      - -0.08
+      - 0.12
+    default_actuator_range:
+      enabled: false
+      min:
+      - 0.0
+      - 2.4
+      max:
+      - 0.0
+      - 3.6
+    abstract_actuator_kp:
+      enabled: false
+      min: 4000.0
+      max: 6000.0
+    realistic_actuator_kp:
+      enabled: false
+      min: 800.0
+      max: 1200.0
+    actuator_dampratio:
+      enabled: false
+      min: 0.8
+      max: 1.2
+    realistic_actuator_nominal_mass:
+      enabled: false
+      min: 0.08
+      max: 0.12
+    tendon_range_min_factor:
+      enabled: false
+      min: 0.4
+      max: 0.6
+    tendon_range_max_factor:
+      enabled: false
+      min: 1.6
+      max: 2.4
+    actuator_range_min_factor:
+      enabled: false
+      min: 0.0
+      max: 0.0
+    actuator_range_max_factor:
+      enabled: false
+      min: 2.4
+      max: 3.6
+    realistic_node_clone_offset:
+      enabled: false
+      min: 0.4
+      max: 0.6
+    connector_rod_length:
+      enabled: false
+      min: 0.23094010767585033
+      max: 0.34641016151377546
+    orientation_weld_solref:
+      enabled: false
+      min:
+      - 0.16
+      - 4.0
+      max:
+      - 0.24
+      - 6.0
+    orientation_weld_solimp:
+      enabled: false
+      min:
+      - 0.16
+      - 0.24
+      - 0.0008
+      - 0.4
+      - 1.6
+      max:
+      - 0.24
+      - 0.36
+      - 0.0012
+      - 0.6
+      - 2.4
+    orientation_weld_torquescale:
+      enabled: false
+      min: 4800.0
+      max: 7200.0
+    tendon_constraint_solref:
+      enabled: false
+      min:
+      - 0.016
+      - 0.8
+      max:
+      - 0.024
+      - 1.2
+    tendon_constraint_solimp:
+      enabled: false
+      min:
+      - 0.72
+      - 0.76
+      - 0.0008
+      max:
+      - 1.0
+      - 1.0
+      - 0.0012
+  action_noise:
+    enabled: false
+    std: 0.1
+    clip_low: -1.0
+    clip_high: 1.0
+    apply_to_seed_actions: false
+  observation_noise:
+    enabled: false
+    std: 0.02
+    clip_low: null
+    clip_high: null
+critical_eig_threshold: 0.01
+rho: 0.5
+forward_weight: 19.65175423
+energy_weight: 0.1
+alive_bonus: 0.1
+rigidity_weight: 0.1
+slip_weight: 0.1215063801500649
+slip_height: 0.1879452990963082
+use_control_graph: true
+truss_realistic: false
+truss_graph_view: auto
+control_node_observation_source: connector_ball
+domain_randomization: true
+eval_domain_randomization: true
+distillation:
+  performance_decay:
+    references:
+      tetrahedron:
+        distance: 14.214684648858613
+        survival: 0.36666666666666664
+        horizon: 1000
+        teacher_model_sha256: 5196b45bc4ecf1ef52570641cd536cecf9bd0875040591fea33f8eae1cafbe94
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n5_1tube_1:
+        distance: 30.97060428679383
+        survival: 0.5333333333333333
+        horizon: 1000
+        teacher_model_sha256: 87cedc93edaf37c7dbf7193ca5b2ad03d7298f1af8b2c26bd4326394f6062417
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n6_1tube_1:
+        distance: 22.05320596884085
+        survival: 0.23333333333333334
+        horizon: 1000
+        teacher_model_sha256: dc8ab437c870a0d43ad4f8ff495c7f94f30a9236919711a193b6efac75a30272
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n6_1tube_2:
+        distance: 7.007990182240715
+        survival: 0
+        horizon: 1000
+        teacher_model_sha256: e0147f42a4d3f5cc7c00d64553e5216562c87affc20db490cdffffae06794b95
+        eligible: false
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n6_2tube_1:
+        distance: 48.06916744988308
+        survival: 0.8666666666666667
+        horizon: 1000
+        teacher_model_sha256: cb30ae82f5d9d9bb93a7a3d6aef7d37235cb6774ad581b0d74be2a8f0e90efb5
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: null
+      henneberg_n6_3tube_1:
+        distance: 39.969940729802445
+        survival: 0.7333333333333333
+        horizon: 1000
+        teacher_model_sha256: a2c4452e7419b6dd08296b4145f000ad3b2e1a962f6b08ac9462a42b78b64110
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      octahedron:
+        distance: 47.32205105154961
+        survival: 0.8
+        horizon: 1000
+        teacher_model_sha256: b8802a1546f9255f3ad2642b96ae15283109bbbac249217f45bdd6ff428275a9
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n8_1tube_13:
+        distance: -0.44781188536240063
+        survival: 0
+        horizon: 1000
+        teacher_model_sha256: 6b8ce3c6f4bca23280309059a6cca8c647a1e2d19ebd9244ba3753a26a8b3c31
+        eligible: false
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n8_1tube_57:
+        distance: 42.93468148868836
+        survival: 0.13333333333333333
+        horizon: 1000
+        teacher_model_sha256: 71c5142ac29c4ac768a0e7e65d3df9b4660398fb804787686ab1c399de01186e
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: null
+      henneberg_n8_1tube_69:
+        distance: -0.1332975124854134
+        survival: 0
+        horizon: 1000
+        teacher_model_sha256: b0838a75386bf0780b90b01c710d42df1bf20ee5cc9a3b5c1ed469e6fa5c9506
+        eligible: false
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n8_2tube_127:
+        distance: 48.10990325196624
+        survival: 0.3333333333333333
+        horizon: 1000
+        teacher_model_sha256: 261c9899c16161ba17a2f4fcd5c0951ecce7d13a695ade25c014d8e2827fbaa8
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n8_2tube_134:
+        distance: 6.7218912998898634
+        survival: 0
+        horizon: 1000
+        teacher_model_sha256: 50cdc82aa999effb4f7ff13654d066d015ae6386b091f5c4c4e782daec94d2ca
+        eligible: false
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n8_2tube_187:
+        distance: 8.16364299436991
+        survival: 0
+        horizon: 1000
+        teacher_model_sha256: f13895df7b4caad2069489516bfc2a3b7d4236e8b6616a5ae2636590dab4d54b
+        eligible: false
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n8_3tube_11:
+        distance: 19.51963376100533
+        survival: 0.13333333333333333
+        horizon: 1000
+        teacher_model_sha256: 2d117477462b137e0b44ca7490b3d35f96b4986b0ab195b9e0adcfca6d267748
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n8_3tube_34:
+        distance: 50.491624782815194
+        survival: 0.4666666666666667
+        horizon: 1000
+        teacher_model_sha256: e937cc1ba4756f8d2ade9bd104057966db34af160ba9cf2a61663ffb1b625eee
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n8_3tube_60:
+        distance: 22.63915897497544
+        survival: 0
+        horizon: 1000
+        teacher_model_sha256: 3059ac76de83f93a1040182fe3f5c582b126d3e4daa218cb9a04a1ac99b0e797
+        eligible: false
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      henneberg_n8_3tube_85:
+        distance: 23.64002350054341
+        survival: 0.03333333333333333
+        horizon: 1000
+        teacher_model_sha256: c9914ae24007bda94aee067396d59ebd3905457bacadb8d139b47f17914e9d75
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      usevitch_212365307:
+        distance: 45.51150011703586
+        survival: 0.3333333333333333
+        horizon: 1000
+        teacher_model_sha256: ffe0f06b4649fa5412ad8bc0e8250e17abee7ce721f55fb7cfb6963b1e65a6bb
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball
+      usevitch_60243677150_p1:
+        distance: 67.46782618152605
+        survival: 0.6666666666666666
+        horizon: 1000
+        teacher_model_sha256: ef0fd51ec73efcb2d91b82049c6904ce6ced5087acec500167ea16c6d92c8f9b
+        eligible: true
+        policy_config:
+          obs_dim: 6
+          action_dim: 1
+          node_action_dim: 1
+          use_virtual_node: true
+          use_control_graph: true
+          truss_realistic: false
+          truss_graph_view: auto
+          obs_norm: true
+          normalize_observations: true
+          speed: 0.05
+          action_low: -1.0
+          action_high: 1.0
+          log_std_min: -10.0
+          log_std_max: 2.0
+          mpl_dims:
+          - 128
+          - 128
+          message_hidden_dims:
+          - 256
+          - 256
+          action_head_hidden_dims: []
+          mpl_skip_connections: true
+          message_attention: true
+          head_hidden_dims:
+          - 256
+          - 256
+          num_q: 2
+          critic_readout: physical_mean_virtual_node
+          graph_features:
+            node_roles: false
+            edge_roles: false
+            edge_distance: false
+          control_node_observation_source: connector_ball

@@ -218,9 +218,14 @@ forward displacement; `survival` is the fraction of episodes reaching the full
 `horizon` in control steps. Evaluate the frozen teacher under the same simulator,
 physics, reset distribution, horizon, and deterministic policy settings as the
 student's nominal evaluation, using multiple resets. The loader checks the
-checkpoint SHA-256 and positive finite reference performance; it cannot verify
+checkpoint SHA-256 (or `teacher_model_sha256` for the audited model tensor hash)
+and eligible reference performance. Optional `policy_config` fields are checked
+against the checkpoint, and all references enter resume compatibility. It cannot verify
 that externally supplied audit metrics were measured under matching conditions.
-Zero-distance or zero-survival teachers are unsuitable references and are rejected.
+For zero/negative-distance or zero-survival teachers, set `eligible: false` in
+that reference: the topology retains the global schedule and cannot trigger
+ratio-based release. Leaving such a reference eligible is an error. This does
+not disable its imitation; keep that change for a separate controlled comparison.
 Extra reference entries are ignored and never become scheduling inputs.
 
 At each online evaluation, a topology qualifies when student distance is at least
@@ -259,3 +264,7 @@ budgets. Compare development-held-out distance and survival plus mean/worst
 training-topology performance. Keep final-test topologies outside tuning and
 schedule inputs. These thresholds are experimental defaults, not validated
 performance improvements.
+
+The ready paired ORC experiment is documented in
+[performance_decay_pilot.md](performance_decay_pilot.md). It uses the existing
+`kl_paper_v4` teachers and their October 14 audit instead of synthetic references.

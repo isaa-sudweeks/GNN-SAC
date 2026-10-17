@@ -21,6 +21,8 @@
   random-fold topology cross-validation
 - [distillation.md](usage/distillation.md): multi-teacher Gaussian KL
   distillation into one GNN student
+- [performance_decay_pilot.md](usage/performance_decay_pilot.md): audit-backed
+  global versus adaptive KL decay pilot on ORC
 - [replay.md](usage/replay.md): tensor vs legacy replay, storage placement,
   checkpoint conversion
 - [padded_mlp_baseline.md](usage/padded_mlp_baseline.md): fixed-width MLP

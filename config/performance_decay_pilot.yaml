@@ -1,0 +1,37 @@
+# @package _global_
+defaults:
+  - config
+  - performance_decay: paper_v4_audit
+  - override distillation: kl_paper_v4
+  - override cross_validation: random_5fold
+  - override sac_backend: gnn
+  - override sim_backend: mjx
+  - override platform: supercomputer
+  - _self_
+
+exp_name: performance-decay-random-fold1-v1
+run_root: /home/isuds/nobackup/autodelete/GNN-SAC/runs/performance-decay-v1
+cross_validation:
+  held_out_group: fold_1
+# parse_cfg scales steps by the 15 training topologies: 30M total transitions.
+steps: 2000000
+eval_freq: 1000000
+eval_episodes: 15
+num_envs: 1530 # 102 parallel environments per training topology.
+wandb_name: ${exp_name}-adaptive_${distillation.performance_decay.enabled}-seed_${seed}
+save_video: false
+# Keep teacher conventions but avoid introducing an unrelated graph feature change.
+graph_features:
+  node_roles: true
+  edge_roles: false
+  edge_distance: false
+distillation:
+  decay_steps: null
+  decay_fraction: 1.0 # Global KL deadline: end of the 30M-transition budget.
+  cache_dir: ${run_root}/distillation_cache/paper-v4
+  performance_decay:
+    enabled: true
+    distance_ratio: 0.9
+    survival_tolerance: 0.0
+    patience: 3
+    release_steps: 100000

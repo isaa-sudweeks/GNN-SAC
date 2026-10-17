@@ -96,6 +96,7 @@ class OnlineTrainer(Trainer):
         if (
             (eval_task is not None and eval_task != self.cfg.task)
             or has_domain_randomization
+            or bool(getattr(self.cfg, "eval_domain_randomization", False))
             or topology_bucket_metadata is not None
             or uses_distinct_eval_backend
             or bool(self._eval_heldout_topologies)
@@ -103,7 +104,7 @@ class OnlineTrainer(Trainer):
             from copy import deepcopy
             from env import make_env
             eval_cfg = deepcopy(self.cfg)
-            eval_cfg.domain_randomization = False
+            eval_cfg.domain_randomization = bool(getattr(self.cfg, "eval_domain_randomization", False))
             eval_cfg.mujoco_backend = eval_backend
             if training_backend == "mjx" and eval_backend == "mujoco":
                 # Native evaluation needs one independent environment per task,

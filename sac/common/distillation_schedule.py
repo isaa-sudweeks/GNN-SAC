@@ -22,12 +22,24 @@ class PerformanceDecay:
             distance = float(ref["distance"])
             survival = float(ref["survival"])
             horizon = int(ref["horizon"])
-            if (not math.isfinite(distance) or distance <= 0
-                    or not math.isfinite(survival) or not 0 < survival <= 1 or horizon <= 0
-                    or ref.get("teacher_sha256") != sources[task]["sha256"]):
+            eligible = bool(ref.get("eligible", True))
+            file_hash = ref.get("teacher_sha256")
+            model_hash = ref.get("teacher_model_sha256")
+            if (not math.isfinite(distance) or not math.isfinite(survival)
+                    or not 0 <= survival <= 1 or horizon <= 0
+                    or (eligible and (distance <= 0 or survival <= 0))
+                    or (file_hash is None and model_hash is None)
+                    or (file_hash is not None and file_hash != sources[task]["sha256"])
+                    or (model_hash is not None and model_hash != sources[task].get("model_sha256"))):
                 raise ValueError(f"Invalid or mismatched performance reference for {topology!r}.")
             self.references[task] = dict(distance=distance, survival=survival, horizon=horizon,
-                                         teacher_sha256=ref["teacher_sha256"])
+                                         eligible=eligible)
+            if "policy_config" in ref:
+                self.references[task]["policy_config"] = dict(ref["policy_config"])
+            if file_hash is not None:
+                self.references[task]["teacher_sha256"] = file_hash
+            if model_hash is not None:
+                self.references[task]["teacher_model_sha256"] = model_hash
         self.settings = dict(distance_ratio=self.ratio, survival_tolerance=self.tolerance,
                              patience=self.patience, release_steps=self.release_steps,
                              references=self.references)
@@ -42,7 +54,7 @@ class PerformanceDecay:
         if step <= state["last_step"] or state["release_start"] is not None:
             return
         state["last_step"] = step
-        qualifies = (horizon == ref["horizon"] and math.isfinite(distance)
+        qualifies = (ref["eligible"] and horizon == ref["horizon"] and math.isfinite(distance)
                      and math.isfinite(survival) and 0 <= survival <= 1
                      and distance >= self.ratio * ref["distance"]
                      and survival >= ref["survival"] - self.tolerance)
@@ -51,6 +63,8 @@ class PerformanceDecay:
             state["release_start"] = step
 
     def multiplier(self, task: str, step: int) -> float:
+        if not self.references[task]["eligible"]:
+            return 1.0
         start = self.progress[task]["release_start"]
         return 1.0 if start is None else max(0.0, 1.0 - max(0, step - start) / self.release_steps)
 
