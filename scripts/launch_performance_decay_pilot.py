@@ -131,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     deadline = (cfg.distillation.decay_steps if cfg.distillation.decay_steps is not None
                 else cfg.steps * cfg.distillation.decay_fraction)
     payload = dict(command=command, job_count=2 * len(seeds),
+                   slurm_partition=OmegaConf.load(ROOT / "config/performance_decay_pilot.yaml").hydra.launcher.partition,
                    teachers_verified=not args.dry_run,
                    total_transitions_per_job=int(cfg.steps), global_decay_steps=int(deadline),
                    training_topologies=list(cfg.truss_topologies),

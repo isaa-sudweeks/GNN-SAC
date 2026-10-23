@@ -20,6 +20,12 @@ eval_episodes: 15
 num_envs: 1530 # 102 parallel environments per training topology.
 wandb_name: ${exp_name}-adaptive_${distillation.performance_decay.enabled}-seed_${seed}
 save_video: false
+# CUDA 13 cannot compile for ORC's P100/V100 nodes. These x86 GPU
+# partitions currently provide A100, H100/H200, B200, or L40S devices.
+# Keep this in the preset (not CLI overrides) to preserve resume job IDs.
+hydra:
+  launcher:
+    partition: cs,cssp1,cs2,cs3,dw,dwmatrix,eng,m13l,m13h
 # Keep teacher conventions but avoid introducing an unrelated graph feature change.
 graph_features:
   node_roles: true

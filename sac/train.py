@@ -37,6 +37,7 @@ if sys.version_info >= (3, 14):
         argparse._ActionsContainer._check_help = _check_help_compat
 
 from common.parser import capture_launch_command, parse_cfg
+from common.gpu_runtime import require_supported_mjx_gpu
 from common.seed import set_seed
 from common.buffer import Buffer
 from env import make_env
@@ -61,6 +62,7 @@ def run_training(cfg, trial=None):
 
     if getattr(cfg, 'device', 'cuda') == 'cuda':
         assert torch.cuda.is_available(), "CUDA not available, please run on a GPU"
+    require_supported_mjx_gpu(cfg)
     assert cfg.steps > 0, "Number of steps must be positive"
     cfg = parse_cfg(cfg)
     if sac_backend in {"gnn", "padded_mlp"} and str(getattr(cfg, "mujoco_backend", "mujoco")).lower() == "mjx":

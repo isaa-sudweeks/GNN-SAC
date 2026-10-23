@@ -40,6 +40,21 @@ resume their own checkpoints. W&B names include the arm and seed. The inherited
 supercomputer preset uses offline W&B logging, standby QoS, account `nusey`, one
 GPU, and 128 GB RAM per job. This launcher does not start a W&B uploader.
 
+The pilot restricts Slurm to `cs,cssp1,cs2,cs3,dw,dwmatrix,eng,m13l,m13h`.
+The October 22 inventory lists A100, H100/H200, B200, or L40S GPUs in these
+x86 partitions. CUDA 13 requires compute capability 7.5 or newer, so the
+V100 (`msg`) and P100 (`m9g`) partitions are unsuitable. The untyped `m8g`
+and ARM `mgh` partitions are also omitted. The training entry point checks
+the allocated GPU before constructing environments and reports unsupported
+hardware directly. The earlier `ptxas too old` message on `msg-1-1` was
+preceded by `ptxas does not support CC 7.0`: it was a hardware mismatch,
+not an outdated bundled assembler.
+
+These resource settings live in the preset, preserving the original CLI
+overrides, run directories, and resume identities. Relaunch with the same
+command above; existing checkpoints are reused where available. Changing
+resource settings does not guarantee immediate standby GPU availability.
+
 The exact submitted command is:
 
 ```bash

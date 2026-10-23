@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import torch
+from hydra import compose, initialize_config_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 for path in (ROOT, ROOT / "sac"):
@@ -15,11 +16,22 @@ for path in (ROOT, ROOT / "sac"):
 
 from common.distillation import Distillation, model_state_sha256
 from common.distillation_schedule import PerformanceDecay
+from common.parser import multirun_id
 from scripts.launch_performance_decay_pilot import main, pilot_config, validate_audit
 from tests.test_distillation import setup
 
 
 class PerformanceDecayPilotTest(unittest.TestCase):
+    def test_supported_gpu_partitions_preserve_resume_identity(self):
+        with initialize_config_dir(config_dir=str(ROOT / "config"), version_base=None):
+            cfg = compose(config_name="performance_decay_pilot", return_hydra_config=True,
+                          overrides=["distillation.performance_decay.enabled=False", "seed=1"])
+        self.assertEqual(set(cfg.hydra.launcher.partition.split(",")),
+                         {"cs", "cssp1", "cs2", "cs3", "dw", "dwmatrix", "eng", "m13l", "m13h"})
+        self.assertEqual(cfg.hydra.launcher.gpus_per_node, 1)
+        self.assertEqual(multirun_id(0, cfg.hydra.job.override_dirname),
+                         "job_0000_e7f312a7eed8")
+
     def test_audit_covers_selected_checkpoints_and_isolates_final_test(self):
         cfg = pilot_config([])
         with patch("scripts.launch_performance_decay_pilot.torch.load", side_effect=AssertionError("Teacher opened during dry run")):
