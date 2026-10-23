@@ -31,6 +31,11 @@ hydra:
       - export TMPDIR=${run_root}/tmp/$SLURM_JOB_ID-$SLURM_ARRAY_TASK_ID
       - export TORCHINDUCTOR_CACHE_DIR=${run_root}/cache/torchinductor-$SLURM_JOB_ID-$SLURM_ARRAY_TASK_ID
       - mkdir -p "$TMPDIR" "$TORCHINDUCTOR_CACHE_DIR"
+    # Positive allowlist: the CUDA 13 JAX wheels require SM >= 7.5.
+    # ORC msg/V100 (SM 7.0), m9g/P100, and m8g/K80 are incompatible.
+    # Only x86 GPU pools: cs/cssp1/dw/dwmatrix=A100, cs2=H100,
+    # cs3=B200, eng/m13h=H200, m13l=L40S. Do not admit ARM mgh nodes.
+    partition: cs,cssp1,cs2,cs3,eng,dw,dwmatrix,m13l,m13h
     timeout_min: 1440
     nodes: 1
     tasks_per_node: 1
@@ -43,7 +48,7 @@ hydra:
     qos: standby
     account: nusey
     additional_parameters:
-      # CUDA 13 does not support the Pascal P100 GPUs on ORC's m9g nodes.
+      # Extra defense if the positive partition allowlist is overridden.
       exclude: m9g-[1-2]-[1-20]
       # Explicitly propagate the original sweep command captured by the
       # launcher process into every Submitit worker.

@@ -262,3 +262,11 @@ evaluation success metrics remain unchanged; the SGS outcome is logged under
 `sgs/success/...`. This is a new comparison, not directly comparable to the
 from-scratch eight-topology pilot because the training split and teacher
 initialization differ.
+
+## ORC GPU placement fix
+
+The October 22 sweep failed on `msg-1-1` (V100, SM 7.0), which the CUDA 13
+JAX wheels do not support. `platform=supercomputer` now uses a positive
+compatible-partition allowlist; pull the branch and rerun the same command.
+See [cluster GPU compatibility](cluster_and_resume.md#supercomputer-platform-submititslurm).
+No experiment hyperparameters or dependency versions were changed by this fix.

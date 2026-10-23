@@ -62,6 +62,24 @@ The hash comes from the job's Hydra overrides, and the job number separates
 duplicate configurations within one sweep. A requeued job keeps its directory,
 so it resumes only its own checkpoint and W&B run.
 
+**GPU compatibility.** The locked Linux environment uses JAX's CUDA 13 wheels,
+which require NVIDIA compute capability **7.5 or newer**. The default partition
+allowlist is `cs,cssp1,cs2,cs3,eng,dw,dwmatrix,m13l,m13h` (A100, H100, B200,
+H200, and L40S pools). This excludes `msg` (V100, SM 7.0), `m9g` (P100),
+`m8g` (K80), and ARM `mgh` nodes. Excluding P100 nodes alone is insufficient:
+the October 22 SGS array landed on `msg-1-1` and failed in CUDA 13 `ptxas`.
+See [JAX's GPU requirements](https://docs.jax.dev/en/latest/installation.html#nvidia-gpu).
+The existing P100 node exclusion remains an additional safeguard. If overriding
+`hydra.launcher.partition`, select a compatible x86 GPU partition, for example
+`hydra.launcher.partition=m13h`. Driver/compiler compatibility still needs to
+hold on the allocated node; the partition policy addresses hardware eligibility.
+
+After pulling this fix, rerun the same sweep command to apply the new partition
+policy. Jobs already submitted retain their original Slurm request; updating
+Git does not change them. A Slurm `COMPLETED` state alone does not prove training
+succeeded: Submitit can record a Python exception in its result pickle even when
+the wrapper exits zero. Check the worker error/result and saved training step.
+
 **Storage and account.** Set `GNN_SAC_RUN_ROOT` to put runs on shared persistent
 storage. The default Slurm account is `nusey`. Override cluster-specific values
 on the command line:

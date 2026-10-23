@@ -309,5 +309,40 @@ assert isinstance(launcher, BaseFilteringSlurmLauncher)
             self.assertEqual(launcher._is_complete(cfg, checkpoint_dir), (True, 400))
 
 
+class Cuda13PartitionTest(unittest.TestCase):
+    def test_resolved_platform_renders_only_compatible_gpu_partitions(self):
+        from hydra import compose, initialize_config_dir
+        from submitit.slurm.slurm import _make_sbatch_string
+
+        with initialize_config_dir(config_dir=str(ROOT / "config"), version_base=None):
+            cfg = compose(config_name="config", overrides=["platform=supercomputer"],
+                          return_hydra_config=True)
+        # Validate the effective launcher and generated sbatch directive, not
+        # just the YAML text. msg/V100 caused the SGS ptxas failure.
+        launcher = cfg.hydra.launcher
+        supported = {"cs", "cssp1", "cs2", "cs3", "eng", "dw", "dwmatrix", "m13l", "m13h"}
+        partitions = set(launcher.partition.split(","))
+        self.assertTrue(partitions)
+        self.assertTrue(partitions <= supported)
+        self.assertTrue(partitions.isdisjoint({"msg", "m9g", "m8g", "mgh"}))
+        self.assertEqual(launcher.gpus_per_node, 1)
+        with tempfile.TemporaryDirectory() as directory:
+            script = _make_sbatch_string(command="true", folder=directory,
+                partition=launcher.partition, gpus_per_node=launcher.gpus_per_node,
+                cpus_per_task=launcher.cpus_per_task,
+                additional_parameters=dict(launcher.additional_parameters))
+        self.assertIn(f"#SBATCH --partition={launcher.partition}", script)
+        self.assertIn("#SBATCH --gpus-per-node=1", script)
+
+    def test_explicit_partition_override_remains_available(self):
+        from hydra import compose, initialize_config_dir
+
+        with initialize_config_dir(config_dir=str(ROOT / "config"), version_base=None):
+            cfg = compose(config_name="config",
+                overrides=["platform=supercomputer", "hydra.launcher.partition=m13h"],
+                return_hydra_config=True)
+        self.assertEqual(cfg.hydra.launcher.partition, "m13h")
+
+
 if __name__ == "__main__":
     unittest.main()
