@@ -1,0 +1,38 @@
+# @package _global_
+
+# Frozen 19-topology development folds matching the audited kl_paper_v4 teachers.
+# Imported from the existing teacher-audit workflow; preserves its fold membership.
+# Separate from this branch's older ten-topology random_5fold definition.
+cross_validation:
+  enabled: true
+  name: sgs_teacher_5fold
+  groups:
+    fold_0:
+    - henneberg_n8_2tube_127
+    - henneberg_n8_2tube_134
+    - tetrahedron
+    - usevitch_212365307
+    fold_1:
+    - henneberg_n6_1tube_1
+    - henneberg_n6_3tube_1
+    - henneberg_n8_2tube_187
+    - henneberg_n8_3tube_11
+    fold_2:
+    - henneberg_n6_1tube_2
+    - henneberg_n8_1tube_57
+    - henneberg_n8_3tube_60
+    - henneberg_n8_3tube_85
+    fold_3:
+    - henneberg_n6_2tube_1
+    - henneberg_n8_1tube_69
+    - henneberg_n8_3tube_34
+    - usevitch_60243677150_p1
+    fold_4:
+    - henneberg_n5_1tube_1
+    - henneberg_n8_1tube_13
+    - octahedron
+  final_test:
+  - henneberg_n7_1tube_3
+  - henneberg_n7_3tube_1
+  - usevitch_1514879
+  held_out_group: null

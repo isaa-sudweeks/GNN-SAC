@@ -186,3 +186,12 @@ replay/shard handling, held-out exclusion, both actor optimizers, zero-weight
 baseline equivalence, offline resume, and a short two-topology native MuJoCo
 training smoke test using generated fixture teachers. This validates mechanics;
 it does not establish transfer performance for trained specialist checkpoints.
+
+## Audited teachers with SGS
+
+`distillation=kl_paper_v4` supplies the existing 19-development-topology teacher
+mapping. Pair it with `cross_validation=sgs_teacher_5fold`; the older
+`random_5fold` on this branch includes two identifiers absent from that mapping.
+See the [distilled SGS comparison](sgs.md#distilled-sgs-comparison-recommended-when-retaining-teacher-guidance)
+for a four-mode, three-seed command. The preset imports recorded teacher paths;
+verify current ORC file availability before launching.

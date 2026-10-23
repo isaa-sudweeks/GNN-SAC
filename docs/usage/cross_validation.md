@@ -73,3 +73,10 @@ Some node counts have a single development topology (4, 5, and 9 nodes), so a
 random fold that holds one of them out is still an unseen-size fold. Compare
 per-topology `eval/<topology>_episode_reward` against the matching
 `node_count_loso` run rather than only the fold aggregate.
+
+## Teacher-compatible SGS folds
+
+`sgs_teacher_5fold` freezes the 19-topology fold membership from the audited
+teacher workflow and pairs with `distillation=kl_paper_v4`. It does not replace
+this branch's ten-topology `random_5fold`. Both definitions reserve the N7
+final-test set. See the [distilled SGS comparison](sgs.md#distilled-sgs-comparison-recommended-when-retaining-teacher-guidance).

@@ -209,3 +209,56 @@ validation point. A training-only improvement establishes acquisition benefit,
 not held-out morphology generalization. If one adaptive mode wins consistently,
 confirm it versus uniform on the remaining development folds before opening the
 final-test set.
+
+## Distilled SGS comparison (recommended when retaining teacher guidance)
+
+The `kl_paper_v4` teacher mapping and `sgs_teacher_5fold` split preserve the
+existing audited 19-topology development workflow. They are separate from this
+branch's older ten-topology `random_5fold`: two identifiers in that older split
+have no teacher in the audited mapping. Do not mix those definitions.
+
+Use `fold_1`: 15 training topologies and four held-out configurations (two
+six-node and two eight-node), retaining those node counts in training. N7 stays
+reserved. This evaluates configuration transfer, rather than holding out an
+entire node count. Run the following on ORC:
+
+```bash
+uv run python sac/train.py -m \
+  platform=supercomputer sac_backend=gnn sim_backend=mjx \
+  cross_validation=sgs_teacher_5fold cross_validation.held_out_group=fold_1 \
+  distillation=kl_paper_v4 \
+  sgs.mode=disabled,collection,replay,both seed=1,2,3 \
+  steps=1000000 max_steps=1000 num_envs=1530 \
+  sgs.distance_threshold=15.0 sgs.min_survival_steps=400 \
+  sgs.require_survival=false sgs.uniform_mix=0.0 \
+  distillation.pretrain_updates=10000 distillation.initial_weight=1.0 \
+  distillation.decay_fraction=0.5 \
+  domain_randomization=false eval_freq=100000 eval_episodes=10 \
+  checkpoint_freq=1000000 save_video=false \
+  exp_name=sgs-distilled-15m400-v1 \
+  'wandb_name=${exp_name}-${sgs.mode}-seed${seed}'
+```
+
+This submits 12 jobs, each with 10,000 offline distillation updates and **15
+million total online transitions** (1 million per training topology). The 1530
+slots divide into 15 fixed batches of 102. All arms use the same teachers,
+offline budget, and global online KL schedule; at this budget guidance decays
+to zero over 7.5 million total online transitions. SGS affects online collection
+and/or replay, not offline distillation sampling. The disabled arm still uses
+full distillation and is the matched control.
+
+The preset records absolute ORC teacher paths under
+`/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph`; override
+`distillation.teacher_root` if those checkpoints have moved. Configuration
+composition and teacher coverage can be validated locally, but current file
+availability and runtime checkpoint compatibility require an ORC preflight.
+Missing teachers fail during initialization. Target caches remain run-local by
+default, avoiding reliance on any preexisting shared cache.
+
+Compare final-checkpoint held-out distance and episode lengths across paired
+seeds as above, and confirm the 15 m/400-step success signal produces nonuniform
+probabilities before interpreting any difference as an SGS effect. Existing
+evaluation success metrics remain unchanged; the SGS outcome is logged under
+`sgs/success/...`. This is a new comparison, not directly comparable to the
+from-scratch eight-topology pilot because the training split and teacher
+initialization differ.
