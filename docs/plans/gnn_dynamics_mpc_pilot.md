@@ -1,5 +1,30 @@
 # GNN dynamics and MPC generalization pilot
 
+## Latest result — doubled training budget completed
+
+The user-authorized 4,000-update multi-step rerun completed in 404.871 CPU wall
+seconds. Same initialization/data/model/loss/seed as the 2,000-update run; shared
+first 2,000 logged training and validation values match exactly. The selected best
+checkpoint remains update 1,600, validation MAE 0.009325299; every model tensor is
+identical to the earlier selected model. Final-update validation MAE is 0.009768765.
+Averaged training curves now include every batch (25 from each source per 200-update
+interval). No sustained decline or new validation best appeared in the added budget.
+
+Source evaluation remains MAE 0.010498593 versus persistence 0.011837852 (11.31%
+reduction), zero of eight prediction screens passed. Repeated source ranking median
+Spearman -0.115522; both terminal evaluation cases remain collapse false negatives
+at horizon 10. No held-out pilot evaluation occurred. The requested duration test
+is complete; no further automatic extension. This result does not prove global
+convergence or rule out other optimization/data settings.
+
+Experiment 11 in Obsidian records the protocol, tensor/prefix equality checks,
+updated curves and outcomes. Generated run and comparison records are under
+`outputs/dynamics-pilot/model-source-multistep-4k-2026-10-23/` and
+`outputs/dynamics-pilot/model-source-multistep-4k-record-2026-10-23/`.
+All 44 affected pilot tests pass. Code/usage include fixed-budget stopping and
+interval/per-source averaged training losses; best and final weights are separate.
+
+
 
 ## User-authorized training-budget test — October 23, 2026
 
