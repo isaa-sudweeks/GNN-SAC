@@ -26,6 +26,8 @@
 - [padded_mlp_baseline.md](usage/padded_mlp_baseline.md): fixed-width MLP
   comparison baseline
 - [scripts.md](usage/scripts.md): launch, validation, benchmark, and figure scripts
+- [dynamics_pilot.md](usage/dynamics_pilot.md): source-only replay/state audit,
+  simulator branching, MPC diagnostics, and indexed evaluation collection
 
 ## Design
 
@@ -50,3 +52,5 @@
   first `mujoco-truss-gen` integration plan
 - [gpu_optimization_audit.md](archive/gpu_optimization_audit.md): July 2026
   performance audit with local measurements
+
+- [GNN dynamics and MPC pilot plan](plans/gnn_dynamics_mpc_pilot.md)
