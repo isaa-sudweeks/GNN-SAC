@@ -194,13 +194,17 @@ def fit_model(fitting: list[dict], validation: list[dict], settings: dict,
                     rollout_update_to_data_ratio=settings["updates"] * settings["batch_size"] * rollout_horizon / stats["fitting_transitions"],
                     sampling="cycle source topologies; uniformly sample fitting episodes and transitions within each",
                     update_to_data_ratio=settings["updates"] * settings["batch_size"] / stats["fitting_transitions"],
-                    stopping="maximum updates or patience checks without improved validation after minimum_updates",
+                    stopping=("fixed maximum updates; patience stopping disabled"
+                              if not settings.get("early_stopping", True)
+                              else "maximum updates or patience checks without improved validation after minimum_updates"),
                     evaluation="all valid recursive windows; nonfinite failures retained with count and fixed 100-diagonal error",
                     forbidden="evaluation probe seeds 8100–8103, held-out topologies, hidden actuator model inputs")
     (output / "fit-protocol.json").write_text(json.dumps(protocol, indent=2))
     started = time.perf_counter()
     best, stale, best_update = float("inf"), 0, 0
     history = []
+    interval_losses, interval_one_step, interval_rollout = [], [], []
+    interval_topologies: dict[str, list[float]] = {}
     for update in range(1, int(settings["updates"]) + 1):
         topology = topologies[(update - 1) % len(topologies)]
         choices = by_topology[topology]
@@ -209,20 +213,35 @@ def fit_model(fitting: list[dict], validation: list[dict], settings: dict,
         model.train(); optimizer.zero_grad(set_to_none=True)
         prediction = model(episode["state"][indices], episode["action"][indices], episode["graph"])
         loss = physical_graph_loss(prediction, episode["target"][indices], episode["graph"]["physical_mask"], model.delta_scale)
+        one_step_loss = loss
+        rollout_loss = loss.new_zeros(())
         if rollout_weight:
             count = len(episode["state"]) - rollout_horizon + 1
             if count < 1:
                 raise ValueError("Fitting episode shorter than rollout horizon")
             starts = torch.as_tensor(rng.integers(count, size=settings["batch_size"]), device=device)
-            loss = loss + rollout_weight * rollout_training_loss(model, episode, starts, rollout_horizon)
+            rollout_loss = rollout_training_loss(model, episode, starts, rollout_horizon)
+            loss = loss + rollout_weight * rollout_loss
         if not torch.isfinite(loss):
             raise FloatingPointError("Nonfinite fitting loss")
         loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(), 10.0); optimizer.step()
+        batch_loss = float(loss.detach())
+        interval_losses.append(batch_loss)
+        interval_one_step.append(float(one_step_loss.detach()))
+        interval_rollout.append(float(rollout_loss.detach()))
+        interval_topologies.setdefault(topology, []).append(batch_loss)
         if update % int(settings["evaluate_every"]) == 0 or update == int(settings["updates"]):
             measured = (validation_progress_loss(model, valid, rollout_horizon)
                         if rollout_weight else validation_loss(model, valid))
-            row = dict(update=update, train_loss=float(loss.detach()), validation_loss=measured,
+            row = dict(update=update, train_loss=batch_loss, validation_loss=measured,
+                       train_loss_mean=float(np.mean(interval_losses)),
+                       one_step_loss_mean=float(np.mean(interval_one_step)),
+                       rollout_loss_mean=float(np.mean(interval_rollout)),
+                       training_batches_averaged=len(interval_losses),
+                       train_loss_by_topology={name: dict(mean=float(np.mean(values)), batches=len(values))
+                                               for name, values in interval_topologies.items()},
                        wall_seconds=time.perf_counter() - started)
+            interval_losses.clear(); interval_one_step.clear(); interval_rollout.clear(); interval_topologies.clear()
             history.append(row); print(json.dumps(row), flush=True)
             if measured < best:
                 best, stale, best_update = measured, 0, update
@@ -231,8 +250,10 @@ def fit_model(fitting: list[dict], validation: list[dict], settings: dict,
             else:
                 stale += 1
             (output / "fit-history.json").write_text(json.dumps(history, indent=2))
-            if update >= settings["minimum_updates"] and stale >= settings["patience"]:
+            if settings.get("early_stopping", True) and update >= settings["minimum_updates"] and stale >= settings["patience"]:
                 break
+    torch.save(dict(model=model.state_dict(), settings=settings, statistics=stats,
+                    update=update, validation_loss=measured), output / "last-model.pt")
     saved = torch.load(output / "best-model.pt", map_location=device, weights_only=False)
     model.load_state_dict(saved["model"]); model.eval()
     result = dict(updates_completed=update, best_update=best_update, best_validation_loss=best,

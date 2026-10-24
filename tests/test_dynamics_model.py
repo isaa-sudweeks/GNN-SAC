@@ -110,6 +110,32 @@ class DynamicsModelTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'identities overlap'):
                 fit_model([fitting], [validation], {}, Path(folder))
 
+    def test_fixed_budget_overrides_patience_and_averages_all_source_batches(self):
+        import contextlib
+        import io
+        import json
+        fitting = [episode(), episode()]
+        fitting[0].update(seed=12000, topology='tetrahedron')
+        fitting[1].update(seed=12100, topology='henneberg_n6_1tube_2')
+        validation = episode(); validation.update(role='validation', seed=22000)
+        settings = dict(seed=2, width=8, layers=1, batch_size=2, updates=4,
+                        learning_rate=.001, weight_decay=0., evaluate_every=2,
+                        patience=1, minimum_updates=1, device='cpu', threads=1,
+                        early_stopping=False)
+        with tempfile.TemporaryDirectory() as folder, contextlib.redirect_stdout(io.StringIO()):
+            with patch('dynamics.training.validation_loss', return_value=1.):
+                _, result = fit_model(fitting, [validation], settings, Path(folder))
+            self.assertEqual(result['updates_completed'], 4)
+            for row in result['history']:
+                self.assertEqual(row['training_batches_averaged'], 2)
+                self.assertEqual(set(row['train_loss_by_topology']), {e['topology'] for e in fitting})
+                expected = np.mean([v['mean'] for v in row['train_loss_by_topology'].values()])
+                self.assertAlmostEqual(row['train_loss_mean'], expected)
+            final = torch.load(Path(folder) / 'last-model.pt', weights_only=False)
+            self.assertEqual(final['update'], 4)
+            protocol = json.loads((Path(folder) / 'fit-protocol.json').read_text())
+            self.assertIn('disabled', protocol['stopping'])
+
     def test_nonfinite_recursive_windows_are_retained_as_failures(self):
         e = episode(); e.update(role='evaluation', terminated=np.zeros(3, bool))
         model = ObservableDynamicsGNN(width=16)

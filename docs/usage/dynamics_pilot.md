@@ -186,3 +186,19 @@ pilot's one targeted repair; unsuccessful source gates stop the iteration.
 ```bash
 uv run python scripts/train_dynamics_model.py --config config/dynamics_model_multistep.yaml --output outputs/dynamics-pilot/model-source-multistep-2026-10-23
 ```
+
+## Fixed-budget longer-training test
+
+`early_stopping: false` runs the full configured update budget while retaining
+validation-only best-checkpoint selection. `last-model.pt` preserves final weights;
+it is separate from `best-model.pt`. Histories now retain `train_loss_mean`,
+one-step/rollout component means and per-source batch means/counts over each logging
+interval. The legacy `train_loss` field remains a single-batch snapshot.
+
+```bash
+uv run python scripts/train_dynamics_model.py --config config/dynamics_model_multistep_4k.yaml --output outputs/dynamics-pilot/model-source-multistep-4k-2026-10-23
+```
+
+The 4,000-update comparison starts from the same initialization as the earlier
+2,000-update multi-step run. It uses the same model/data/loss, with patience stopping
+disabled. It is not an optimizer-state resume from the repaired best checkpoint.

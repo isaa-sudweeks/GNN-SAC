@@ -1,6 +1,32 @@
 # GNN dynamics and MPC generalization pilot
 
-## Current outcome — source gate unsuccessful; iteration stopped
+
+## User-authorized training-budget test — October 23, 2026
+
+The user requested a run twice the previous length after reviewing learning curves.
+The earlier source-gate failure is a result for the tested budgets, not proof of
+optimization convergence. This authorization supersedes the previous stop decision
+for one fixed-budget test, without changing architecture, data, loss or holdout access.
+
+Run `config/dynamics_model_multistep_4k.yaml`: 4,000 multi-step updates starting from
+the same original first-model checkpoint as the 2,000-update repair, same seed 9321,
+batch 32, optimizer/learning rate and source split. This is a controlled longer rerun,
+not 4,000 extra updates from the repaired best checkpoint. Disable patience stopping
+so the requested budget is actually reached; select best checkpoint on source
+validation only and save final weights separately. Log interval means over every
+training batch and by source topology, plus one-step/rollout components, every 200
+updates. Compare the first 2,000 points with the earlier run to verify that logging
+changes preserved the training trajectory. Budget estimate: 7–9 CPU minutes fitting,
+plus source evaluation/ranking; within the original planning allocation.
+
+Evaluate the selected checkpoint recursively at 1/5/10/20 steps on the unchanged
+source validation/evaluation roles and repeat the same four-state tetrahedron ranking
+diagnostic. Preserve all original data, curves and model checkpoints. Source evaluation
+is development evidence; no held-out/final-test fitting or evaluation is included.
+Record protocol, metrics and updated curves in Obsidian Experiment 11, under
+`Research/06 Experiment Notebook/`. Generated files: `outputs/dynamics-pilot/model-source-multistep-4k-2026-10-23/`.
+
+## Prior outcome — source gate unsuccessful at initial budgets; superseded by authorized test
 
 Source model fitting and source diagnostics are complete. The single allowed
 multi-step repair improved progress prediction but passed zero of eight source
