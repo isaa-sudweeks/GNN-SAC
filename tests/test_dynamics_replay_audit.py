@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 import tempfile
 import torch
-from scripts.audit_dynamics_replay import audit_buffer, audit_checkpoint, valid_indices
+from scripts.audit_dynamics_replay import audit_buffer, audit_checkpoint, classify_label_contract, valid_indices
 
 
 class ReplayAuditTests(unittest.TestCase):
@@ -25,6 +25,27 @@ class ReplayAuditTests(unittest.TestCase):
         self.assertEqual(report['one_step_status'], 'candidate_pending_state_and_physics_audit')
         buffer['next_obs'][1][0, 0] = float('nan')
         self.assertEqual(audit_buffer(buffer, seed=4, sample_count=10)['one_step_status'], 'insufficient')
+
+    def test_noise_contract_does_not_reject_missing_targets(self):
+        report = classify_label_contract({'sim_backend': 'mujoco'})
+        self.assertFalse(report['fresh_nominal_fallback_justified'])
+        self.assertFalse(report['hidden_targets_required'])
+        self.assertFalse(report['nominal_native_eligible'])
+        self.assertEqual(report['clean_label_status'], 'requires_collection_trace')
+
+    def test_noisy_observation_settings_justify_clean_label_fallback(self):
+        report = classify_label_contract({
+            'sim_backend': 'mjx', 'domain_randomization': True,
+            'domain_randomization_params': {
+                'observation_noise': {'enabled': True, 'std': 0.02},
+                'action_noise': {'enabled': True, 'std': 0.1}}})
+        self.assertTrue(report['fresh_nominal_fallback_justified'])
+        self.assertTrue(report['observation_noise_enabled'])
+        self.assertTrue(report['action_noise_enabled'])
+        report = classify_label_contract({
+            'sim_backend': 'mujoco', 'domain_randomization': True,
+            'domain_randomization_params': {'action_noise': {'enabled': True, 'std': 0.1}}})
+        self.assertFalse(report['fresh_nominal_fallback_justified'])
 
     def test_generic_specialist_identity_comes_from_config(self):
         buffer = dict(capacity=2, size=1, idx=1)

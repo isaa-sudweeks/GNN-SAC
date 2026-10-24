@@ -41,6 +41,7 @@
 ## Plans
 
 - [domain_randomization_test_plan.md](plans/domain_randomization_test_plan.md)
+- [GNN dynamics and MPC pilot plan](plans/gnn_dynamics_mpc_pilot.md)
 
 ## Archive
 
@@ -52,5 +53,3 @@
   first `mujoco-truss-gen` integration plan
 - [gpu_optimization_audit.md](archive/gpu_optimization_audit.md): July 2026
   performance audit with local measurements
-
-- [GNN dynamics and MPC pilot plan](plans/gnn_dynamics_mpc_pilot.md)

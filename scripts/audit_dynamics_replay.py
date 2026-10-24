@@ -99,6 +99,45 @@ def audit_buffer(buffer: dict, *, seed: int, sample_count: int) -> dict:
     }
 
 
+def classify_label_contract(config: dict) -> dict:
+    """Classify saved settings for a clean-state nominal-native fitting contract.
+
+    This is a settings screen, not proof of the historical collector executable,
+    clean labels, simulator parity, or practical prediction sufficiency.
+    """
+    randomization = bool(config.get('domain_randomization', False))
+    params = config.get('domain_randomization_params') or {}
+
+    def active(name: str) -> bool:
+        setting = params.get(name) or {}
+        return (randomization and bool(setting.get('enabled', False))
+                and float(setting.get('std', 0.0)) > 0)
+
+    observation_noise = active('observation_noise')
+    action_noise = active('action_noise')
+    backend = config.get('sim_backend', config.get('mujoco_backend'))
+    reasons = []
+    if observation_noise:
+        reasons.append('Saved settings enable observation noise; replay has no separate clean observation labels.')
+    if backend != 'mujoco':
+        reasons.append('Native MuJoCo equivalence is unverified for the saved collection backend.')
+    return {
+        'contract': 'clean_observable_state_nominal_native',
+        'saved_collection_backend': backend,
+        'observation_noise_enabled': observation_noise,
+        'action_noise_enabled': action_noise,
+        'clean_label_status': 'not_certified_noisy_saved_settings' if observation_noise else 'requires_collection_trace',
+        'nominal_native_eligible': False,
+        'fresh_nominal_fallback_justified': bool(reasons),
+        'reasons': reasons,
+        'hidden_targets_required': False,
+        'action_semantics': 'Owning trainer stores post-noise/projected normalized node commands; historical executable and environment routing still require provenance.',
+        'limits': ['Noise configuration is not a direct measurement of row corruption.',
+                   'Action noise alone does not invalidate commands saved after noise.',
+                   'Missing hidden actuator targets alone does not reject observable-input fitting.'],
+    }
+
+
 def digest(path: Path) -> str:
     result = hashlib.sha256()
     with path.open('rb') as stream:
@@ -146,7 +185,8 @@ def audit_checkpoint(path: Path, *, seed: int = 0, sample_count: int = 128) -> d
             'checkpoint_sha256': digest(path), 'audit_revision': revision,
             'torch_version': torch.__version__, 'config': config, 'tasks': reports,
             'excluded_without_row_inspection': excluded, 'elapsed_seconds': time.perf_counter() - started,
-            'full_checkpoint_keys': sorted(checkpoint.keys())}
+            'full_checkpoint_keys': sorted(checkpoint.keys()),
+            'label_contract': classify_label_contract(config)}
 
 
 def main() -> None:
