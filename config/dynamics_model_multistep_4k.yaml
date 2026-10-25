@@ -1,0 +1,22 @@
+# User-authorized fixed-budget extension: same initialization/data/seed as the 2k repair.
+seed: 9321
+width: 128
+layers: 3
+batch_size: 32
+updates: 4000
+learning_rate: 0.001
+weight_decay: 0.00001
+evaluate_every: 200
+patience: 5
+minimum_updates: 600
+horizons: [1, 5, 10, 20]
+device: cpu
+threads: 1
+
+initial_checkpoint: outputs/dynamics-pilot/model-source-2026-10-23/best-model.pt
+rollout_horizon: 10
+rollout_weight: 1.0
+repair: "One allowed targeted repair: planning-horizon training objective and checkpoint selection; no architecture/data changes"
+
+early_stopping: false
+experiment: "Double the 2k multi-step phase budget from identical starting weights; no architecture/data/loss changes"

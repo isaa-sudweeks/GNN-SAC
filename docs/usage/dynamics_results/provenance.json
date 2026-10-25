@@ -1,0 +1,46 @@
+{
+  "shared_source_2026-10-24.md": {
+    "source": "outputs/dynamics-pilot/online-multi-source-2026-10-24/report.md",
+    "source_sha256": "8ec138c246aa00e6515c7f651740a24f3baed298c91b2baf1ad8bb2ceeb0bbb5"
+  },
+  "gamma095_source_2026-10-25.md": {
+    "source": "outputs/dynamics-pilot/online-multi-gamma095-source-2026-10-24/report.md",
+    "source_sha256": "d4ea61435c3c6693caf69d4ce2b895df7f6161e5293e4aba2a268ff6aa08ce3a"
+  },
+  "discount_comparison_2026-10-25.md": {
+    "source": "outputs/dynamics-pilot/online-multi-gamma095-source-2026-10-24/discount-comparison/report.md",
+    "source_sha256": "2ffa84d42dc1a34f56cc8a1c7f86859a510f996d76c9eaa65c184781c3263785"
+  },
+  "frozen_diagnostic_2026-10-24.md": {
+    "source": "outputs/dynamics-pilot/online-multi-diagnostic-2026-10-24/report.md",
+    "source_sha256": "bf55754e50a4559254d50a10a3e94e738e5b7f2196c695cd921230e1dfecf3b9"
+  },
+  "figures/shared-learning-curves.svg": {
+    "source": "outputs/dynamics-pilot/online-multi-source-2026-10-24/learning-curves.svg",
+    "source_sha256": "9d4eeb531f32d53e0a45752116113250e385f51b0a0be9a512a2596d9bb435c8"
+  },
+  "figures/shared-fresh-final.svg": {
+    "source": "outputs/dynamics-pilot/online-multi-source-2026-10-24/fresh-final.svg",
+    "source_sha256": "b7050179c4a436e49cf3b299a28ea1e4ab9a0a45ec30f5fcaa4a3e97406a1b3f"
+  },
+  "figures/gamma095-learning-curves.svg": {
+    "source": "outputs/dynamics-pilot/online-multi-gamma095-source-2026-10-24/learning-curves.svg",
+    "source_sha256": "71cebafa2e81b63f5969279385154d3bdc0c5a3a31f077dee50f67786c88b17c"
+  },
+  "figures/gamma095-fresh-final.svg": {
+    "source": "outputs/dynamics-pilot/online-multi-gamma095-source-2026-10-24/fresh-final.svg",
+    "source_sha256": "2051e9cf5822483b38bb594f778b8e67b3270fa3f5d525a44a30fba774aa0303"
+  },
+  "figures/discount-comparison-learning-curves.svg": {
+    "source": "outputs/dynamics-pilot/online-multi-gamma095-source-2026-10-24/discount-comparison/learning-curves.svg",
+    "source_sha256": "ca603553897d24fa97b4a91836d0830f2b5f400a81e30cbcaff4d8f1d4489820"
+  },
+  "figures/diagnostic-gradient-cosines.svg": {
+    "source": "outputs/dynamics-pilot/online-multi-diagnostic-2026-10-24/gradient-cosines.svg",
+    "source_sha256": "bca0e293221c96da251a70c1d4f72e0b8d9efda5630ac13f966b8a4d817a5a55"
+  },
+  "figures/diagnostic-near-collapse-errors.svg": {
+    "source": "outputs/dynamics-pilot/online-multi-diagnostic-2026-10-24/near-collapse-errors.svg",
+    "source_sha256": "eaab29d54ed6aaf885927079c87720e02476fbd8e14b51fdfba2d106c108e7bc"
+  }
+}

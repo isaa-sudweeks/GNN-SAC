@@ -27,6 +27,11 @@
   comparison baseline
 - [scripts.md](usage/scripts.md): launch, validation, benchmark, and figure scripts
 
+- [Dynamics and MPC pilot](usage/dynamics_pilot.md): source collection, learned MPC,
+  restartable experiments and diagnostic commands
+- [Measured dynamics-MPC results](usage/dynamics_results/README.md): shared/separate
+  source learning, gamma comparison, frozen diagnostics and figures
+
 ## Design
 
 - [architecture.md](design/architecture.md): graph observation, networks, action
@@ -39,6 +44,17 @@
 ## Plans
 
 - [domain_randomization_test_plan.md](plans/domain_randomization_test_plan.md)
+
+## Dynamics experiment protocols
+
+Completed outcomes are recorded in each protocol; all retain source-only limits.
+
+- [Observable dynamics pilot](plans/gnn_dynamics_mpc_pilot.md)
+- [Online learned-MPC source experiment](plans/gnn_dynamics_online_pilot.md)
+- [Longer online learned-MPC experiment](plans/gnn_dynamics_online_long.md)
+- [Shared versus separate source dynamics](plans/gnn_dynamics_online_multi.md)
+- [Discount-only gamma .95 rerun](plans/gnn_dynamics_online_multi_gamma095.md)
+- [Frozen failure and gradient diagnostic](plans/gnn_dynamics_multi_diagnostic.md)
 
 ## Archive
 

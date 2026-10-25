@@ -1,0 +1,14 @@
+# First source-only observable dynamics baseline; no hidden actuator inputs.
+seed: 9321
+width: 128
+layers: 3
+batch_size: 64
+updates: 2000
+learning_rate: 0.001
+weight_decay: 0.00001
+evaluate_every: 200
+patience: 5
+minimum_updates: 600
+horizons: [1, 5, 10, 20]
+device: cpu
+threads: 1
