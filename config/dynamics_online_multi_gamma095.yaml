@@ -1,0 +1,49 @@
+topologies: [tetrahedron, henneberg_n6_2tube_1, henneberg_n8_3tube_64]
+seeds:
+- 0
+- 1
+- 2
+conditions:
+- shared
+- separate
+steps: 20000
+warmup: 160
+initial_updates: 160
+updates_per_step: 1
+batch_size: 32
+training_horizon: 5
+rollout_weight: 1.0
+width: 128
+layers: 3
+learning_rate: 0.001
+actor_learning_rate: 0.0003
+actor_delay: 2
+tau: 0.01
+gamma: 0.95
+reward_scale: 0.01
+exploration_std: 0.15
+episode_steps: 80
+evaluate_at:
+- 1600
+- 4000
+- 8000
+- 12000
+- 20000
+evaluation_episodes: 3
+speed: 0.05
+nsubsteps: 100
+cem:
+  horizon: 10
+  candidates: 16
+  iterations: 2
+  knots: 3
+  elite_fraction: 0.125
+  initial_std: 0.5
+  minimum_std: 0.05
+  update_fraction: 1.0
+objective:
+  effort_weight: 0.1
+  failure_cost: 1.0
+fresh_evaluation_episodes: 5
+checkpoint_every: 1000
+workers: 3

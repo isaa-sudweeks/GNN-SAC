@@ -1,0 +1,20 @@
+# Standalone diagnostic settings, loaded by scripts/run_simulator_mpc_pilot.py.
+# These are source development settings; they are not frozen holdout settings.
+topology: tetrahedron
+reset_seeds: [4100, 4101, 4102, 4103, 4104]
+planner_seed: 6100
+episode_steps: 40
+cem:
+  horizon: 10
+  candidates: 32
+  iterations: 2
+  knots: 3
+  elite_fraction: 0.125
+  initial_std: 0.5
+  minimum_std: 0.05
+  update_fraction: 1.0
+objective:
+  effort_weight: 0.1
+  failure_cost: 1.0
+  failure_cost_per_second: 1.0
+# Initial run is a cost benchmark; expand to 256 x 3 only after measuring it.

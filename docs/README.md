@@ -35,6 +35,11 @@
 - [Experiments18–19 measured results](usage/dynamics_results/failure_balanced_replay_2026-10-25.md):
   completed failure-balanced replay ablation and paired frozen control outcomes
 
+- [Dynamics and MPC pilot](usage/dynamics_pilot.md): source collection, learned MPC,
+  restartable experiments and diagnostic commands
+- [Measured dynamics-MPC results](usage/dynamics_results/README.md): shared/separate
+  source learning, gamma comparison, frozen diagnostics and figures
+
 ## Design
 
 - [architecture.md](design/architecture.md): graph observation, networks, action
@@ -53,6 +58,19 @@
   proposed matched comparison; not executed
 - [failure_balanced_replay.md](plans/failure_balanced_replay.md): reviewed
   Experiments18–19 sampling ablation and fixed source control protocol
+- [generalization_kickoff_prompt.md](plans/generalization_kickoff_prompt.md):
+  suggested request for the next matched comparison; not executed
+
+## Dynamics experiment protocols
+
+Completed outcomes are recorded in each protocol; all retain source-only limits.
+
+- [Observable dynamics pilot](plans/gnn_dynamics_mpc_pilot.md)
+- [Online learned-MPC source experiment](plans/gnn_dynamics_online_pilot.md)
+- [Longer online learned-MPC experiment](plans/gnn_dynamics_online_long.md)
+- [Shared versus separate source dynamics](plans/gnn_dynamics_online_multi.md)
+- [Discount-only gamma .95 rerun](plans/gnn_dynamics_online_multi_gamma095.md)
+- [Frozen failure and gradient diagnostic](plans/gnn_dynamics_multi_diagnostic.md)
 
 ## Archive
 

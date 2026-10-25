@@ -1,0 +1,24 @@
+# Predeclared nominal-source collection; evaluation episodes never select checkpoints.
+topologies:
+  - tetrahedron
+  - henneberg_n8_2tube_187
+  - henneberg_n6_2tube_1
+  - usevitch_210272254_p1
+  - henneberg_n5_1tube_1
+  - henneberg_n6_1tube_2
+  - henneberg_n8_3tube_64
+  - usevitch_60243677150_p1
+roles:
+  fitting: {episodes: 12, seed_base: 12000}
+  validation: {episodes: 4, seed_base: 22000}
+  evaluation: {episodes: 4, seed_base: 32000}
+steps: 80
+knots_every: 5
+amplitudes: [0.15, 0.5, 1.0]
+snapshot_every: 20
+speed: 0.05
+nsubsteps: 100
+capacity: 12800
+# Stop each episode at true termination/truncation; retain failures. No auto-reset pairs.
+# One batch per topology; stop collection after all declared episodes, not validation outcome.
+# Checkpoint/update policy belongs to the separately predeclared model training protocol.

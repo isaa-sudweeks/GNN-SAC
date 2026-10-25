@@ -1,0 +1,7 @@
+{
+  "file": "sac/dynamics/training.py",
+  "change": "Remove trailing whitespace only; Python AST is identical",
+  "experiment_source_sha256": "72f2edd81df4c160ef449a71dc3a20ef0d68a4305a90f110556b6580049d31c2",
+  "published_source_sha256": "8a4d2352ae78d3801762b8188aed10b0d2d602cebd93bc67865bade517679db9",
+  "preserved_experiment_sources": "Ignored outputs/dynamics-pilot/*/source-snapshot retain the original executed bytes"
+}

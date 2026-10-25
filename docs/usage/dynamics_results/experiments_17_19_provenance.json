@@ -1,0 +1,44 @@
+{
+  "implementation_baseline_revision": "3bea10554df7a25f4dbce503b77ae63dfa209840",
+  "source_sha256": {
+    "AGENTS.md": "b9dc0aa35e6023e5ad4718cbefaed88cbecb79e0846c862001df3943da6aaaf2",
+    "config/online_candidate_ranking.yaml": "5cda204190dfe2ebfecdb4384bb253bd87db39e33d4b85756a2ab7d649a33a2e",
+    "config/failure_balanced_replay.yaml": "bdfa560510684ac4a57c7443141639c8f28257c445e37cf4d046498c0b6d8dca",
+    "scripts/run_online_candidate_ranking.py": "3a905fdee457bbc4838f6c948355bc72cc2f7d4f6b0750610f26cba555ed6be9",
+    "scripts/report_online_candidate_ranking.py": "a28ba85a928161c08162fe0aab56f827e03332dc5d53ad1d35a68c8d177a8e63",
+    "scripts/run_failure_balanced_replay.py": "5efbb678d35533e6682e31fac2afce87d643cd1475d5ddb135f1b881df5c6f2d",
+    "scripts/failure_balanced_helpers.py": "9f8198d1889cc1819e6ad6dec0e1ff3eaa9fd77e8e23064d309b0f07b86e2ac5",
+    "scripts/report_failure_balanced_replay.py": "f729638b4df1c8fafae8ee9c927e63904d6e3dbbdb4956eb1f2fbaab7a4044d5",
+    "docs/plans/online_candidate_ranking.md": "034d8729645de38228db2cb5310df75648d4ee13d57b1f6d61dd13544856a584",
+    "docs/plans/failure_balanced_replay.md": "dac49d34332757f79ccebd3a82c0e4feb400add4fbbfea26f4afa51cef932e79",
+    "docs/usage/dynamics_results/online_candidate_ranking_2026-10-25.md": "9261229f0e8c9060491ef97087d06853aacbbc2d254f0f15013066085dc6247a",
+    "docs/usage/dynamics_results/failure_balanced_replay_2026-10-25.md": "009ea7a8680d5a71463607c26d63a9a2e73388bce04fbda356c6498ae5524eea",
+    "docs/plans/dynamics_vs_modelfree_generalization.md": "3dd497f5aa650001862537924848036d98c3862fd697bba0dfb41efc617c4171",
+    "docs/plans/generalization_kickoff_prompt.md": "e930f1fda2219e791bbd6e89d3571b74e079c4755b04531576aa2ac69a56831e"
+  },
+  "experiment17": {
+    "local_artifacts": "outputs/dynamics-pilot/online-candidate-ranking-2026-10-25",
+    "episodes": 36,
+    "states": 108,
+    "candidate_branches": 7884,
+    "independent_checks": 77157
+  },
+  "experiments18_19": {
+    "local_artifacts": "outputs/dynamics-pilot/failure-balanced-replay-2026-10-25",
+    "validation_episodes": 27,
+    "control_episodes": 135,
+    "candidate_branches": 1107,
+    "artifact_checks": 14386,
+    "frozen_forward_checks": 15488,
+    "added_shared_adam_updates": 36000
+  },
+  "no_unseen_or_model_free_comparison_executed": true,
+  "publication": "Measured reports and reproducibility code only; large generated data/checkpoints remain ignored. Executed plan/config/runner bytes preserved.",
+  "publication_validation": {
+    "tests_passed": 78,
+    "elapsed_seconds": 81.654,
+    "scope": "All57 native dynamics tests plus21 follow-up candidate/sampler/integration/reporting tests; no skipped tests.",
+    "command": "uv run --no-sync python: unittest discover tests/test_dynamics*.py plus tests.test_online_candidate_ranking, tests.test_failure_balanced_replay, tests.test_failure_balanced_integration, tests.test_failure_replay_reporting",
+    "runtime": "Existing c400 uv environment; integration runtime points to the merged publication checkout; original trusted campaign artifacts retained locally."
+  }
+}

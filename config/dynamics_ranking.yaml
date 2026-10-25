@@ -1,0 +1,19 @@
+# Small source development diagnostic; not the held-out ranking protocol.
+topologies: [tetrahedron]
+states_per_topology: 4
+snapshot_timestep: 20
+planner_seed: 51000
+collapse_threshold: 0.03
+cem:
+  horizon: 10
+  candidates: 32
+  iterations: 2
+  knots: 3
+  elite_fraction: 0.125
+  initial_std: 0.5
+  minimum_std: 0.05
+  update_fraction: 1.0
+objective:
+  effort_weight: 0.1
+  failure_cost: 1.0
+  failure_cost_per_second: 1.0
