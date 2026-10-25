@@ -1,5 +1,14 @@
 # Repository Guidelines
 
+## Mandatory Experiment Notebook Workflow
+
+- Before doing any repository work, including giving status or next-step advice, read the Obsidian experiment notebook in vault `My vault`, folder `Research/06 Experiment Notebook/`. Start with `GNN Dynamics and MPC Generalization Pilot.md`, list the folder for newer entries, and read the experiment notes relevant to the request. Use the official Obsidian CLI and the applicable Obsidian skills. Historical memory, another chat, and repository reports do not replace this check. Resolve historical pending/next-step statements against later completed entries.
+- If the notebook cannot be read, explicitly report the access problem and do not present an experiment history or recommendation as notebook-verified. Restore access before launching new experiments or making changes that depend on that history.
+- Before each new research experiment, record its question, relation to prior tests, fixed protocol, seeds/topologies, data roles, episode/planning/training horizons, metrics, compute estimate, stopping rules and claim limits in that same notebook folder. Link it from the parent index. Record material protocol changes and reviews before execution.
+- After every experiment or diagnostic, append measured results, failures, verification, artifact paths, interpretation and the next unresolved question to its note and update the parent index in the same folder. Include relevant software-test results with the experiment; standalone code validation must also be recorded there when it changes the experimental evidence or method. Preserve existing notes/embeds and verify saved Markdown by CLI readback. Do not call a research task complete until this reporting is verified, or explicitly report the access blocker and preserve the pending entry locally.
+- Keep raw replay, checkpoints and large generated outputs ignored in the repository; notebook entries should link to evidence and contain the readable protocol/results. Keep matching repository usage/design documentation current.
+- The research goal is to test whether learned robot dynamics generalizes across morphologies more effectively than model-free control. Source-only prediction, shared-versus-separate fitting, and source locomotion are prerequisites, not evidence of unseen-topology transfer or comparative superiority. Such claims require a source-trained model-free generalist comparator with matched train/held-out topology access, task/physics, evaluation starts and explicit interaction/compute accounting. Never use held-out specialists as the zero-shot baseline or tune on final-test robots.
+
 ## Project Structure & Module Organization
 
 - `sac/` contains the SAC implementations, graph and MLP actor-critic layers, replay buffers, trainers, and the `train.py` (all backends) and `gnn_infer.py` entry points. `gnn_train.py` is legacy (equivalent to `train.py sac_backend=gnn`); do not use it in new commands or docs.

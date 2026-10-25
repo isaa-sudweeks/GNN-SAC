@@ -1,0 +1,15 @@
+seeds: [0, 1, 2]
+arms: [uniform, balanced]
+rounds: 2000
+batch_size: 32
+failure_distance: 10
+failure_fraction: 0.5
+checkpoint_every: 500
+benchmark_rounds: 100
+validation_episodes: 3
+evaluation_episodes: 5
+validation_seed_base: 21000000
+evaluation_seed_base: 22000000
+episode_steps: 80
+workers: 3
+cap_seconds: 10800

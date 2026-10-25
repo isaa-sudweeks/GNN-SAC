@@ -26,6 +26,14 @@
 - [padded_mlp_baseline.md](usage/padded_mlp_baseline.md): fixed-width MLP
   comparison baseline
 - [scripts.md](usage/scripts.md): launch, validation, benchmark, and figure scripts
+- [online_candidate_ranking.md](usage/online_candidate_ranking.md): frozen online
+  shared/separate model candidate ranking and collapse diagnostics
+- [failure_balanced_replay.md](usage/failure_balanced_replay.md): sampling-only
+  shared-model continuation and paired frozen source control
+- [Experiment17 measured results](usage/dynamics_results/online_candidate_ranking_2026-10-25.md):
+  completed candidate-ranking experiment and independent audit
+- [Experiments18–19 measured results](usage/dynamics_results/failure_balanced_replay_2026-10-25.md):
+  completed failure-balanced replay ablation and paired frozen control outcomes
 
 ## Design
 
@@ -39,6 +47,12 @@
 ## Plans
 
 - [domain_randomization_test_plan.md](plans/domain_randomization_test_plan.md)
+- [online_candidate_ranking.md](plans/online_candidate_ranking.md): reviewed source
+  diagnostic supporting the dynamics-versus-model-free generalization question
+- [dynamics_vs_modelfree_generalization.md](plans/dynamics_vs_modelfree_generalization.md):
+  proposed matched comparison; not executed
+- [failure_balanced_replay.md](plans/failure_balanced_replay.md): reviewed
+  Experiments18–19 sampling ablation and fixed source control protocol
 
 ## Archive
 

@@ -1,0 +1,8 @@
+# Frozen diagnostic settings; learning/controller settings come from the campaign.
+reset_seed_base: 12300000
+trajectory_planner_seed_base: 14300000
+candidate_seed_base: 15300000
+episodes_per_seed_topology_generator: 2
+episode_steps: 80
+random_candidates: 8
+cap_seconds: 3600
