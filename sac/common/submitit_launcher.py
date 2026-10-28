@@ -94,6 +94,28 @@ def completed_checkpoint_step(checkpoint_dir: Path) -> int | None:
     return highest_step
 
 
+def completed_offline_distillation(checkpoint_dir: Path, cfg: Any) -> bool:
+    """Recognize completed offline-only jobs without loading teacher/replay tensors."""
+    try:
+        metadata = json.loads((checkpoint_dir / "latest.metadata.json").read_text())
+        progress = metadata["distillation"]
+        requested = int(OmegaConf.select(cfg, "distillation.pretrain_updates", default=0))
+        return (
+            metadata.get("format_version") == _CHECKPOINT_METADATA_VERSION
+            and metadata.get("step") == 0
+            and metadata.get("checkpoint") == "distillation_complete.pt"
+            and progress.get("offline_only") is True
+            and progress.get("stage") == "complete"
+            and requested > 0
+            and progress.get("completed_updates") == requested
+            and progress.get("pretrain_updates") == requested
+            and (checkpoint_dir / "distillation_complete.pt").is_file()
+            and (checkpoint_dir / "latest.pt").is_file()
+        )
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
 class FilteringSlurmLauncher(SlurmLauncher):
     """Submitit launcher that omits sweep jobs with completed checkpoints."""
 
@@ -127,6 +149,9 @@ class FilteringSlurmLauncher(SlurmLauncher):
             return False, None
         if str(cfg.get("resume_from_checkpoint", "")).lower() != "latest":
             return False, None
+        if bool(OmegaConf.select(cfg, "distillation.offline_only", default=False)):
+            complete = completed_offline_distillation(checkpoint_dir, cfg)
+            return complete, 0 if complete else None
         target_steps = effective_topology_learning_value(cfg, "steps")
         saved_step = completed_checkpoint_step(checkpoint_dir)
         return saved_step is not None and saved_step >= target_steps, saved_step

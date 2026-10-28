@@ -167,7 +167,7 @@ class OnlineTrainer(Trainer):
             if distillation.checkpoint_freq and distillation.completed_updates % distillation.checkpoint_freq == 0:
                 self.save_checkpoint(identifier="distillation")
         distillation.finish_pretraining(self.agent)
-        self.logger.log({"step": self._step, "stage": "online",
+        self.logger.log({"step": self._step, "stage": distillation.stage,
                          "offline_updates": distillation.completed_updates}, "distillation")
         self._evaluate_and_log()
         if distillation.checkpoint_freq:
@@ -819,6 +819,19 @@ class OnlineTrainer(Trainer):
         """
         self._run_distillation_pretraining()
         self._ensure_performance_profiler()
+        if getattr(getattr(self, "distillation", None), "offline_only", False):
+            if self.distillation.stage != "complete":
+                raise RuntimeError("Offline-only distillation did not reach completion.")
+            # Offline pretraining evaluates once after its final actor update.
+            # A completed resume retains that evaluation and never enters SAC.
+            if self._best_eval_metrics is None:
+                self._evaluate_and_log()
+            self.save_checkpoint(identifier="distillation_complete")
+            self.performance_profiler.finalize(global_step=self._step)
+            self.logger.finish(self.agent)
+            if self.eval_env is not self.env:
+                self.eval_env.close()
+            return self._best_eval_metrics
         num_envs = int(getattr(self.env, "num_envs", getattr(self.cfg, "num_envs", 1)))
         buckets = self._vector_collection_buckets()
         if buckets is not None:

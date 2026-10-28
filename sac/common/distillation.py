@@ -17,12 +17,14 @@ from torch_geometric.nn import global_mean_pool
 from env.mujoco_gen.topology_envs import base_regime_task, is_broken_regime_task
 
 from common.gnn_actor_critic import GNNActorCritic
+from common.padded_mlp_actor_critic import PaddedMLPActorCritic
 from common.graph_transforms import (
     graph_feature_flags,
     graph_feature_schema,
     graph_signature_compatible,
     graph_structure_signature as graph_signature,
     policy_action_mask,
+    physical_node_mask,
     prepare_graph,
 )
 
@@ -136,6 +138,30 @@ def replay_contract_observation(replay: dict, first: Data) -> Data:
 TARGET_CACHE_FORMAT = "gnn-sac-distillation-targets-v3"
 
 
+def _policy_contract(config) -> dict:
+    """Describe model-specific input semantics for target reuse and resume."""
+    backend = str(_get(config, "sac_backend", "gnn"))
+    if backend not in {"gnn", "padded_mlp"}:
+        raise ValueError("Distillation supports only GNN and padded MLP policies.")
+    contract = {
+        "backend": backend,
+        "obs_dim": int(config.obs_dim),
+        "action_dim": int(config.action_dim),
+        "use_virtual_node": bool(_get(config, "use_virtual_node", False)),
+        "graph_features": graph_feature_schema(config),
+    }
+    if backend == "padded_mlp":
+        contract["padded_mlp_schema"] = _padded_schema(config)
+    return contract
+
+
+def _padded_schema(config) -> dict:
+    return dict(version=1, max_nodes=int(config.padded_mlp_max_nodes),
+                node_feature_dim=int(config.obs_dim),
+                node_action_dim=int(config.node_action_dim),
+                physical_mask=True, action_mask=True, rigidity=True)
+
+
 def _prepare_graph_for(config, graph: Data, *, owner: str) -> Data:
     """Build one policy's graph view and identify missing source metadata."""
     try:
@@ -153,12 +179,29 @@ def _prepare_graph_for(config, graph: Data, *, owner: str) -> Data:
 
 
 def _validate_action_alignment(teacher_graph: Data, student_graph: Data) -> None:
-    """Require the two feature views to preserve action rows and their order."""
-    teacher_mask = policy_action_mask(teacher_graph).detach().cpu()
-    student_mask = policy_action_mask(student_graph).detach().cpu()
-    if (teacher_graph.x.size(0) != student_graph.x.size(0)
-            or not torch.equal(teacher_graph.edge_index.detach().cpu(),
-                               student_graph.edge_index.detach().cpu())
+    """Prove both views preserve raw physical row identity and action order.
+
+    ``prepare_graph`` appends architectural nodes and never permutes physical
+    rows. Compare physical masks and edges in those original row coordinates;
+    virtual nodes/edges may differ but can never be active policy actions.
+    """
+    def physical_contract(graph):
+        physical = physical_node_mask(graph).detach().cpu()
+        actions = policy_action_mask(graph).detach().cpu()
+        count = int(physical.sum())
+        if (physical.ndim != 1 or physical.numel() != graph.x.size(0)
+                or actions.shape != physical.shape or count == 0
+                or not physical[:count].all() or physical[count:].any()
+                or actions[~physical].any()):
+            raise ValueError("Teacher/student views do not preserve physical action ordering.")
+        edges = graph.edge_index.detach().cpu()
+        physical_edges = edges[:, (edges < count).all(dim=0)]
+        return count, actions[:count], physical_edges
+
+    teacher_count, teacher_mask, teacher_edges = physical_contract(teacher_graph)
+    student_count, student_mask, student_edges = physical_contract(student_graph)
+    if (teacher_count != student_count
+            or not torch.equal(teacher_edges, student_edges)
             or not torch.equal(teacher_mask, student_mask)):
         raise ValueError(
             "Teacher and student graph views differ in topology or policy action ordering."
@@ -247,6 +290,8 @@ class ObservationShards:
             kwargs["physical_node_mask"] = self.static["physical_node_mask"].repeat(count)
         if "edge_attr" in shard:
             kwargs["edge_attr"] = shard["edge_attr"].index_select(0, indices).flatten(0, 1).contiguous()
+        if "rigidity" in shard:
+            kwargs["rigidity"] = shard["rigidity"].index_select(0, indices).contiguous()
         batch = Batch(**kwargs)
         batch._num_graphs = count
         object.__setattr__(batch, "_policy_action_count_cache", int(teacher_mean.size(0)))
@@ -330,7 +375,10 @@ class ObservationShards:
                         mean, log_std = teacher.policy_distribution(batch)
                     if not torch.isfinite(mean).all() or not torch.isfinite(log_std).all():
                         raise ValueError("Nonfinite teacher distribution parameters while building cache.")
-                    masks = [policy_action_mask(graph).to(device) for graph in graphs]
+                    # Place teacher rows into the student's physical-node slots;
+                    # a teacher may append an extra virtual node to its view.
+                    student_graphs = student_prepared[start:start + target_batch_size]
+                    masks = [policy_action_mask(graph).to(device) for graph in student_graphs]
                     counts = [int(mask.sum()) for mask in masks]
                     if sum(counts) != int(mean.size(0)):
                         raise ValueError("Teacher targets do not align with replay action masks.")
@@ -353,6 +401,13 @@ class ObservationShards:
                     "teacher_mean": torch.cat(means).contiguous(),
                     "teacher_log_std": torch.cat(log_stds).contiguous(),
                 }
+                rigidities = [getattr(graph, "rigidity", None) for graph in student_prepared]
+                if any(value is not None for value in rigidities):
+                    if any(value is None for value in rigidities):
+                        raise ValueError("Prepared replay inconsistently provides rigidity.")
+                    payload["rigidity"] = torch.stack([
+                        torch.as_tensor(value).cpu().reshape(1) for value in rigidities
+                    ]).contiguous()
                 edge_attrs = [
                     getattr(graph, "edge_attr", None) for graph in student_prepared
                 ]
@@ -393,13 +448,17 @@ class Distillation:
         self.cfg = cfg
         self.device = torch.device(device if device is not None else _get(cfg, "device", "cuda"))
         options = _get(cfg, "distillation", {})
-        if _get(cfg, "sac_backend", "gnn") != "gnn":
-            raise ValueError("Distillation currently requires a GNN student.")
+        student_contract = _policy_contract(cfg)
+        self.offline_only = bool(_get(options, "offline_only", False))
         self.pretrain_updates = int(_get(options, "pretrain_updates", 0))
+        if self.offline_only and (not enabled(cfg) or self.pretrain_updates <= 0):
+            raise ValueError("Offline-only distillation requires enabled=true and positive pretrain_updates.")
         self.batch_size = int(_get(options, "batch_size", 256))
         self.initial_weight = float(_get(options, "initial_weight", 1.0))
         duration = _get(options, "decay_steps")
-        self.decay_steps = float(duration if duration is not None else float(_get(options, "decay_fraction", 0.5)) * cfg.steps)
+        self.decay_steps = (1.0 if self.offline_only else float(
+            duration if duration is not None else float(_get(options, "decay_fraction", 0.5)) * cfg.steps
+        ))
         self.checkpoint_freq = int(_get(options, "checkpoint_freq", 1000))
         self.log_freq = int(_get(options, "log_freq", 100))
         shard_size = int(_get(options, "shard_size", 4096))
@@ -417,7 +476,7 @@ class Distillation:
         # performance choices and may safely change across a resume.
         self.settings = dict(pretrain_updates=self.pretrain_updates, batch_size=self.batch_size,
                              initial_weight=self.initial_weight, decay_steps=self.decay_steps,
-                             shard_size=shard_size)
+                             shard_size=shard_size, offline_only=self.offline_only)
         self.completed_updates = 0
         self.stage = "offline" if self.pretrain_updates else "online"
         self.step = 0
@@ -425,8 +484,10 @@ class Distillation:
         self.teachers, self.teacher_configs = {}, {}
         self.datasets, self.sources = {}, {}
         self.schema_pairs = {}
+        self.policy_contracts = {}
         self._dataset_plans = {}
         self.replay_signatures = {}
+        self._replay_contracts_bound = False
         self.pending_samples = {}
         self.metrics = {}
         mapping = _get(options, "teachers", {})
@@ -455,8 +516,20 @@ class Distillation:
                     "teacher": graph_feature_schema(teacher_cfg),
                     "student": graph_feature_schema(self.cfg),
                 }
-                teacher = GNNActorCritic(teacher_cfg)
-                teacher.load_state_dict(state["agent"]["model"])
+                self.policy_contracts[task] = {
+                    "teacher": _policy_contract(teacher_cfg),
+                    "student": student_contract,
+                }
+                model_class = (PaddedMLPActorCritic
+                               if _get(teacher_cfg, "sac_backend", "gnn") == "padded_mlp"
+                               else GNNActorCritic)
+                teacher = model_class(teacher_cfg)
+                try:
+                    teacher.load_state_dict(state["agent"]["model"])
+                except RuntimeError as exc:
+                    raise ValueError(
+                        f"Teacher checkpoint weights do not match its policy configuration for {topology!r}."
+                    ) from exc
                 teacher.requires_grad_(False).eval()
                 # Keep the module's train/eval contract while releasing critics.
                 teacher._Qs = torch.nn.ModuleList()
@@ -491,12 +564,14 @@ class Distillation:
                         "teacher_graph_feature_schema": self.schema_pairs[task]["teacher"],
                         "student_graph_feature_schema": self.schema_pairs[task]["student"],
                         "use_virtual_node": bool(_get(self.cfg, "use_virtual_node", False)),
+                        "policy_contracts": self.policy_contracts[task],
                     }
                     contract_hash = hashlib.sha256(
                         json.dumps(contract, sort_keys=True).encode()
                     ).hexdigest()[:16]
                     directory = cache / f"{digest}-targets-v3-{contract_hash}-s{shard_size}"
-                    if self.schema_pairs[task]["teacher"] == self.schema_pairs[task]["student"]:
+                    if (self._legacy_gnn_contract(task)
+                            and self.schema_pairs[task]["teacher"] == self.schema_pairs[task]["student"]):
                         legacy_contract = {
                             "format": TARGET_CACHE_FORMAT,
                             "source_sha256": digest,
@@ -567,19 +642,22 @@ class Distillation:
             self.datasets[task].prefetch(specification)
 
     def _validate_config(self, teacher, topology: str, agent_state: dict) -> None:
-        if _get(teacher, "sac_backend", "gnn") != "gnn":
-            raise ValueError("Distillation currently requires GNN teachers.")
+        backend = _policy_contract(teacher)["backend"]
         teacher_topologies = _get(teacher, "truss_topologies") or [_get(teacher, "truss_topology")]
         if isinstance(teacher_topologies, str):
             teacher_topologies = [teacher_topologies]
         if list(teacher_topologies) != [topology]:
             raise ValueError(f"Teacher topology does not match {topology!r}.")
-        saved = agent_state.get("graph_feature_schema")
-        if saved is not None and saved != graph_feature_schema(teacher):
-            raise ValueError("Teacher checkpoint graph schema differs from its config.")
-        if saved is None and any(graph_feature_flags(teacher).values()):
-            raise ValueError("Teacher checkpoint is missing its graph feature schema.")
-        defaults = dict(obs_dim=None, action_dim=None, use_virtual_node=False,
+        if backend == "padded_mlp":
+            if agent_state.get("padded_mlp_schema") != _padded_schema(teacher):
+                raise ValueError("Teacher checkpoint padded MLP schema differs from its config.")
+        else:
+            saved = agent_state.get("graph_feature_schema")
+            if saved is not None and saved != graph_feature_schema(teacher):
+                raise ValueError("Teacher checkpoint graph schema differs from its config.")
+            if saved is None and any(graph_feature_flags(teacher).values()):
+                raise ValueError("Teacher checkpoint is missing its graph feature schema.")
+        defaults = dict(obs_dim=None, action_dim=None,
                         use_control_graph=False, truss_realistic=False, truss_graph_view="auto",
                         obs_norm=True,
                         normalize_observations=True, speed=0.05, action_low=-1.0, action_high=1.0)
@@ -628,17 +706,25 @@ class Distillation:
                 raise ValueError(f"No graph signature available for replay task {task!r}.")
             signatures[task] = self.replay_signatures[base_task]
         setter(signatures)
+        self._replay_contracts_bound = True
 
     @property
     def weight(self) -> float:
+        if self.offline_only:
+            return 0.0
         return self.initial_weight * max(0.0, 1.0 - self.step / self.decay_steps)
+
+    def _legacy_gnn_contract(self, task: str) -> bool:
+        pair = self.policy_contracts[task]
+        return (pair["teacher"]["backend"] == pair["student"]["backend"] == "gnn"
+                and pair["teacher"]["use_virtual_node"] == pair["student"]["use_virtual_node"])
 
     def loss(self, student, task: str, obs: Data,
              raw_observations: list[Data] | None = None) -> torch.Tensor:
         if task not in self.teachers:
             raise ValueError(f"No teacher for replay task {task!r}.")
         teacher = self.teachers[task]
-        if self.schema_pairs[task]["teacher"] == self.schema_pairs[task]["student"]:
+        if self.policy_contracts[task]["teacher"] == self.policy_contracts[task]["student"]:
             teacher_obs = obs
         else:
             if raw_observations is None:
@@ -650,12 +736,31 @@ class Distillation:
                 raise ValueError(
                     "Raw replay observations do not align with the student task batch."
                 )
+            # Production replay enforces task structure and mask subsets on
+            # insertion/load. Both preparation transforms have already been
+            # proven to preserve physical action order at setup. Repeating
+            # those CPU checks for every sampled CUDA graph would synchronize
+            # the device hundreds of times per topology per actor update.
+            # Keep defensive validation for standalone, unbound diagnostics.
+            if not self._replay_contracts_bound:
+                for raw in raw_observations:
+                    if not graph_signature_compatible(
+                        graph_signature(raw), self.replay_signatures[task],
+                        allow_action_subset=True,
+                    ):
+                        raise ValueError("Raw replay observation differs from the teacher task contract.")
             prepared = [self.prepare_teacher(task, graph) for graph in raw_observations]
+            if not self._replay_contracts_bound:
+                for teacher_graph, raw in zip(prepared, raw_observations):
+                    _validate_action_alignment(teacher_graph, self.prepare_student(raw))
             teacher_obs = Batch.from_data_list(prepared)
+            action_count = getattr(obs, "_policy_action_count_cache", None)
+            if action_count is None:
+                action_count = int(policy_action_mask(obs).sum())
             object.__setattr__(
                 teacher_obs,
                 "_policy_action_count_cache",
-                sum(int(policy_action_mask(graph).sum()) for graph in prepared),
+                int(action_count),
             )
             teacher_obs = teacher_obs.to(self.device, non_blocking=True)
         with torch.no_grad():
@@ -706,7 +811,7 @@ class Distillation:
         # Clear Adam moments without changing any optimizer settings or weights.
         agent.pi_optim.state.clear()
         agent.pi_optim.zero_grad(set_to_none=True)
-        self.stage = "online"
+        self.stage = "complete" if self.offline_only else "online"
         for dataset in self.datasets.values():
             dataset.close()
         self.datasets.clear()
@@ -716,12 +821,14 @@ class Distillation:
         return dict(stage=self.stage, completed_updates=self.completed_updates,
                     sources=self.sources, settings=self.settings, generator=self.generator.get_state(),
                     schema_pairs=self.schema_pairs,
+                    policy_contracts=self.policy_contracts,
                     pending_samples=_copy_sample_specs(self.pending_samples))
 
     def load_state_dict(self, state: dict) -> None:
         saved_settings = state.get("settings", {})
         saved_semantic_settings = {
-            key: saved_settings.get(key) for key in self.settings
+            key: saved_settings.get(key, False if key == "offline_only" else None)
+            for key in self.settings
         }
         if state["sources"] != self.sources or saved_semantic_settings != self.settings:
             raise ValueError("Distillation teacher sources or schedule/settings changed during resume.")
@@ -737,15 +844,22 @@ class Distillation:
                 )
         elif saved_schema_pairs != self.schema_pairs:
             raise ValueError("Distillation teacher/student graph feature schemas changed during resume.")
+        saved_contracts = state.get("policy_contracts")
+        if saved_contracts is None:
+            if any(not self._legacy_gnn_contract(task) for task in self.policy_contracts):
+                raise ValueError("Legacy distillation checkpoint lacks backend/input preparation contracts.")
+        elif saved_contracts != self.policy_contracts:
+            raise ValueError("Distillation backend/input preparation contracts changed during resume.")
         stage, completed = state["stage"], int(state["completed_updates"])
-        if stage not in {"offline", "online"} or not 0 <= completed <= self.pretrain_updates:
+        stages = {"offline", "complete"} if self.offline_only else {"offline", "online"}
+        if stage not in stages or not 0 <= completed <= self.pretrain_updates:
             raise ValueError("Invalid distillation checkpoint stage/progress.")
-        if stage == "online" and completed != self.pretrain_updates:
+        if stage != "offline" and completed != self.pretrain_updates:
             raise ValueError("Online checkpoint has incomplete offline distillation.")
         self.stage, self.completed_updates = stage, completed
         self.generator.set_state(state["generator"])
         self.pending_samples = _copy_sample_specs(state.get("pending_samples", {}))
-        if stage == "online":
+        if stage != "offline":
             for dataset in self.datasets.values():
                 dataset.close()
             self.datasets.clear()

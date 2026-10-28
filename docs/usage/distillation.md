@@ -1,11 +1,13 @@
 # Multi-teacher Gaussian KL distillation
 
-Distillation is optional and disabled by default. It supports GNN teachers and
-a GNN student with different network widths, depths, and configurable graph
-feature schemas. Each teacher uses the schema saved in its checkpoint, while
-the student uses the resolved run configuration. Topology, base observation
-width, virtual-node use, action order, normalization, and control conventions
-must still match.
+Distillation is optional and disabled by default. It supports `gnn` and
+`padded_mlp` teachers and students, including GNN specialists teaching a padded
+MLP. Each teacher uses its checkpoint's input schema; the student uses the
+resolved run configuration. Topology, physical action order, base observation
+width, normalization and control conventions must match. Virtual-node use and
+graph feature flags may differ: each policy gets its own prepared view of the
+same raw physical graph. Padded MLPs require virtual nodes and optional graph
+features disabled. Flat actuator-action `mlp` experts are unsupported.
 
 ## Start a run
 
@@ -54,9 +56,55 @@ Offline `distillation.pretrain_updates` is unrelated to the existing
 Student replay starts empty, critics are initialized normally, and the seed-data
 SAC phase retains its existing behavior.
 
+## Padded students and offline-only training
+
+Use `sac_backend=padded_mlp` with the same teacher mapping and split controls:
+
+```bash
+uv run python sac/train.py sac_backend=padded_mlp distillation=kl \
+  'truss_topologies=[tetrahedron,octahedron]' \
+  '+distillation.teachers={tetrahedron:/path/to/tetrahedron.pt,octahedron:/path/to/octahedron.pt}'
+```
+
+The morphology names above are a runnable example, not a selected paper split.
+Both teacher backends require full specialist trainer checkpoints with replay.
+Padded teachers additionally require a matching saved padded-input schema.
+Teacher and student capacities may differ if both accommodate the physical
+graphs. No actuator-to-node policy conversion is inferred.
+
+To distill without collecting online SAC data, add:
+
+```bash
+distillation.offline_only=true steps=0
+```
+
+This requires enabled distillation and positive `pretrain_updates`. It evaluates
+the distilled student, writes `checkpoints/distillation_complete.pt`,
+`latest.pt` and agent-only companions, and stops with zero collected training
+transitions and zero SAC updates. Evaluation episodes are separate from training
+interactions. The completion checkpoint/export is written even when periodic
+checkpointing and ordinary final agent saving are disabled. Online decay is
+unused in this mode.
+
+Resume offline-only work with its original config and `resume_from_checkpoint`.
+A completed resume does not repeat offline updates or start online training.
+For a fresh online fine-tuning run, load the exported weights explicitly:
+
+```bash
+uv run python sac/train.py sac_backend=padded_mlp distillation=disabled \
+  truss_topology=tetrahedron \
+  init_from_agent=/path/to/student/checkpoints/latest.agent.pt
+```
+
+Repeat the student's architecture, capacity and environment settings. This
+loads model weights and alpha with fresh optimizers, replay and counters.
+`init_from_agent` and `resume_from_checkpoint` are mutually exclusive. Keep
+distillation enabled with the teacher mapping in the fresh run if online KL
+guidance is desired.
+
 ## Objective and data
 
-`GNNActorCritic.policy_distribution(obs)` exposes the pre-squash diagonal
+Both actor-critic backends' `policy_distribution(obs)` expose the pre-squash diagonal
 Gaussian mean and log standard deviation, in active-node order. Distillation
 minimizes analytic **KL(teacher || student)**, matching both parameters. Because
 both policies use the same invertible `tanh` squash, this is also their squashed
@@ -138,8 +186,10 @@ Inference uses the ordinary student export and requires no teacher artifacts.
 the student. Distillation prepares two views of the same raw graph: the teacher
 view produces the Gaussian target, and the student view receives gradients.
 Online KL therefore retains the raw student replay observations alongside the
-ordinary student-prepared learner batch. Equal-schema runs reuse the learner
-batch directly and do not perform the extra teacher preparation.
+ordinary student-prepared learner batch. Runs with identical complete input
+contracts (backend, dimensions, graph features, virtual-node use and padded
+schema where applicable) reuse the learner batch directly. Feature flags alone
+do not establish compatible teacher inputs.
 
 For example, specialists trained without node identification can supervise a
 student that appends actuated/passive node roles:
@@ -158,12 +208,14 @@ edge roles require the student's raw replay to retain them. Missing metadata
 fails during compatibility validation with the affected policy and schema.
 Distillation never guesses semantic roles.
 
-Target-cache contracts include both feature schemas and both prepared graph
-signatures, so incompatible pairs cannot share tensors. Existing v2 caches
-remain reusable for equal-schema teacher/student pairs; mismatched pairs receive
-their own schema-pair-keyed v2 cache. New checkpoints persist the resolved
-schema pairs. Legacy distillation checkpoints remain loadable only for the
-equal-schema case that older code supported.
+Target-cache contracts include both feature schemas, both prepared graph
+signatures and complete policy input contracts, so incompatible pairs cannot
+share tensors. Caches use the v3 target format, including rigidity for padded
+students. Supported earlier v3 equal-schema GNN cache contracts remain reusable
+when teacher/student virtual-node use matches. New checkpoints persist feature
+schema pairs and policy input contracts. Legacy checkpoints without input
+contracts remain loadable only for the corresponding previously supported
+GNN-to-GNN preparation conventions.
 
 ## Metrics and validation
 
