@@ -1,8 +1,8 @@
 # GNN versus padded-MLP experts: baseline review
 
-Review date: 2026-10-28. Status: preparation; no production run launched and
-no final paper tag created. The user selected the existing GNN versus padded
-MLP specialists, and requires approval before archiving branches.
+Review date: 2026-10-28. Status: locally validated code baseline; no production
+run launched. The user selected existing GNN versus padded-MLP specialists,
+approved the paper branch/tag workflow, and approved all listed archive candidates.
 
 ## Candidate code baseline
 
@@ -25,10 +25,13 @@ older `distillation.pt` for existing runs. Optional metadata reconstruction is
 also false by default. Named ablation presets explicitly opt into their features;
 ordinary GNN and padded-MLP launches do not.
 
-`sim-to-real` is retained unchanged at both its local and remote tips. No branch
-has been archived or deleted. Source branches for the four integrations are
-also retained pending the user's review. The final paper tag still requires
-qualification of the eventual production configuration.
+`sim-to-real` is retained unchanged at both its local and remote tips. The 72
+approved local archive candidates have been removed after verifying annotated
+local recovery tags. The 10 approved remote candidates and all four integrated
+source branches remain in place. Public recovery-tag publication and integration
+publication are pending explicit export approval. The local paper branch and
+`paper-experts-v1` tag identify this code baseline; production qualification and
+experiment settings remain pending. See [paper reproducibility](../usage/paper_reproducibility.md).
 
 The question for this stage is: **How well can each architecture learn a
 separate expert policy for each robot in a declared morphology set?** Each
@@ -92,13 +95,14 @@ Most other local branches are implementation/review ancestors of merged PRs.
 Squash merging means ancestry alone cannot establish that a feature is missing.
 Do not merge those branches just because `git log main..branch` is nonempty.
 The proposed archive preserves both local-only work and differing remote tips;
-attached branches remain in place. No archive operation has been performed.
+attached branches remain in place. Local archive operations are recorded in
+the inventory; remote archives await public recovery-tag publication.
 
 ## Before selecting the final paper commit
 
-1. Review the revised archive list. The four requested feature branches are
-   integrated; no archive action is authorized yet. Recheck remote heads before
-   any approved cleanup.
+1. Complete publication of the approved integration and recovery tags once
+   explicit permission for the public export is granted, then finish the 10
+   approved remote archives. Recheck remote tips before removal.
 2. Declare morphology IDs, seeds, simulator (native or MJX/Warp), abstract or
    realistic physical models, control interval and randomization distribution.
    The validator's historical 13-topology list is not an approved paper set.

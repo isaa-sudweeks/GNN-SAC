@@ -9,6 +9,8 @@
 
 ## Usage
 
+- [paper_reproducibility.md](usage/paper_reproducibility.md): paper branch,
+  fixed code tags, run provenance and submission releases
 - [configuration.md](usage/configuration.md): config groups, environments,
   topology selection, realistic models, graph features
 - [training.md](usage/training.md): backends, update scheduling, multi-topology
