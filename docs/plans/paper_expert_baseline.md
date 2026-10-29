@@ -134,6 +134,22 @@ record describes the original PR #40 baseline before the four integrations:
   and recounted trainable parameters as recorded above.
 - `git diff --check`: passed.
 
+Post-integration validation on the completed merge resolutions:
+
+- `uv run --no-sync python -m unittest discover -s tests -v`: **426 tests
+  run; 424 passed and 2 CUDA-only tests skipped**, in 359.631 seconds.
+- Includes explicit checks that optional graph features, CV and distillation
+  remain disabled by default for both backends, tube-GNN teacher to padded-MLP
+  target alignment, completion-checkpoint selection, and tube offline/online
+  training. Tube membership and route lengths are also checked across the
+  configured development morphologies.
+- `uv run --no-sync python scripts/validate_padded_mlp_topologies.py`: **passed**
+  for the historical 13-topology capacity contract after integration.
+- All four approved source tips are ancestors of the preparation branch.
+  Both local and remote `sim-to-real` tips remain
+  `939bb0295c05b674efe246b3f6f2b6a53d7b52ab`.
+- `git diff dcd910c..HEAD --check`: passed.
+
 No production experiments were launched. The Obsidian notebook was read for
 branch inclusion decisions; no new experiment was performed or recorded there.
 
