@@ -38,6 +38,10 @@
 
 ## Plans
 
+- [paper_expert_baseline.md](plans/paper_expert_baseline.md): GNN versus
+  padded-MLP expert baseline review, branch decisions and production gates
+- [paper_branch_inventory.md](plans/paper_branch_inventory.md): exact local
+  and remote branch tips and proposed archive actions (approval required)
 - [mlp_paper_readiness.md](plans/mlp_paper_readiness.md): MLP audit, distillation
   gaps, implementation phases and paper launch acceptance gates
 - [domain_randomization_test_plan.md](plans/domain_randomization_test_plan.md)
