@@ -19,10 +19,13 @@ and GPU pilots in [the baseline plan](../plans/paper_expert_baseline.md) are sti
 required before production. If subsequent fixes are needed, create a new version
 such as `paper-experts-v2`; keep the original tag and existing run records.
 
-These references are initially local. Public publication and the merge into
-GitHub `main` remain pending explicit approval for that export. Local cleanup
-recovery tags also remain unpublished; see the
-[branch inventory](../plans/paper_branch_inventory.md).
+The paper branch and annotated tag are published on the project
+[GitHub repository](https://github.com/isaa-sudweeks/GNN-SAC).
+`paper-experts-v1` remains fixed at
+`a1519b5f1c8439f6882ea1f18ee1e7b187db8256`; later documentation and experiment
+work can advance the paper branch. Integration into `main` is tracked by the
+preparation PR containing this documentation. All 82 cleanup recovery tags are
+also published and verified; see the [branch inventory](../plans/paper_branch_inventory.md).
 
 ## Before each production run
 

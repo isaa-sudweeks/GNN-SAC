@@ -1,6 +1,6 @@
 # GNN versus padded-MLP experts: baseline review
 
-Review date: 2026-10-28. Status: locally validated code baseline; no production
+Review date: 2026-10-28. Status: published, locally validated code baseline; no production
 run launched. The user selected existing GNN versus padded-MLP specialists,
 approved the paper branch/tag workflow, and approved all listed archive candidates.
 
@@ -26,11 +26,11 @@ also false by default. Named ablation presets explicitly opt into their features
 ordinary GNN and padded-MLP launches do not.
 
 `sim-to-real` is retained unchanged at both its local and remote tips. The 72
-approved local archive candidates have been removed after verifying annotated
-local recovery tags. The 10 approved remote candidates and all four integrated
-source branches remain in place. Public recovery-tag publication and integration
-publication are pending explicit export approval. The local paper branch and
-`paper-experts-v1` tag identify this code baseline; production qualification and
+approved local candidates and 10 approved remote candidates are archived; all
+82 annotated recovery tags are published and verified on origin. All four
+integrated source branches remain in place. The paper branch and
+`paper-experts-v1` tag are published; the tag remains fixed at
+`a1519b5f1c8439f6882ea1f18ee1e7b187db8256`. Production qualification and
 experiment settings remain pending. See [paper reproducibility](../usage/paper_reproducibility.md).
 
 The question for this stage is: **How well can each architecture learn a
@@ -66,11 +66,11 @@ The padded MLP is about 4.9% larger overall. The pre-PR-40 YAML claimed a
 0.2% match to a 2,078,008-parameter GNN; PR #40 already removed that stale
 claim. This review records the current counts without changing model widths.
 
-## Remaining origin branches
+## Branch review and cleanup decisions
 
 These are decisions about inclusion in this experiment, not claims that an
 excluded feature is incorrect or scientifically uninteresting. Proposed
-archival preserves exact committed tips and requires the user's approval.
+archival preserves exact committed tips and was explicitly approved by the user.
 The [full inventory](paper_branch_inventory.md) includes every local and
 remote ref, exact SHAs, worktree exclusions and the proposed recovery process.
 
@@ -82,9 +82,9 @@ remote ref, exact SHAs, worktree exclusions and the proposed recovery process.
 | `optimization/timing` | PCGrad optimization/profiling lineage; main already contains PCGrad optimization from PR #19 and subphase profiling. | No wholesale merge of the old branch; archive candidate. |
 | `reward_function` | Adds a danger-zone barrier reward and additional evaluation diagnostics. Its local descendant also contains a virtual-node action fix already present in main's critic mapping. | Keep existing objective for paired experts; archive candidate, including distinct local/remote tips. |
 | `experiments/lagrangian-rigidity`, `experiments/1-sample`, `experiments/safety_logging`, `experiments/safety_surrogates` | Constrained safety objectives, curriculum and surrogate penalties; these alter the learning objective or introduce additional experimental conditions. | Separate ablations; archive candidates. |
-| `experiments/diversity` | Adds farthest-point/random-teacher CV utilities and changes split configuration. | Merged by user request for future general-controller work; retain source branch pending review. No CV enabled by default. |
-| `codex/signed-routing-ablation` | Adds signed routing features and a controlled transfer study on top of diversity/CV work. | Merged by user request; retain source branch pending review. Signed routing is off by default. |
-| `codex/tube-virtual-nodes`, `codex/implement-tube-virtual-nodes` | Tube-specific graph nodes, tube-physics experiments and teacher/student fidelity diagnostics. | Both merged by user request; retain source branches pending review. Tube nodes and tube physics are off by default. |
+| `experiments/diversity` | Adds farthest-point/random-teacher CV utilities and changes split configuration. | Merged by user request for future general-controller work; retain source branch per user decision. No CV enabled by default. |
+| `codex/signed-routing-ablation` | Adds signed routing features and a controlled transfer study on top of diversity/CV work. | Merged by user request; retain source branch per user decision. Signed routing is off by default. |
+| `codex/tube-virtual-nodes`, `codex/implement-tube-virtual-nodes` | Tube-specific graph nodes, tube-physics experiments and teacher/student fidelity diagnostics. | Both merged by user request; retain source branches per user decision. Tube nodes and tube physics are off by default. |
 | `claude/robot-topology-distribution-9e3b7a` | Analysis pipeline plus committed figures/data and legacy requirements edits. Local descendants contain different analysis corrections. | Do not merge the old analysis branch wholesale; remote/archive candidates preserved separately. Retain the attached local analysis worktree. |
 | `sim-to-real` | Hardware inference, tracker mapping, serial commands and session diagnostics; not the simulator training baseline. A local tracker-analysis branch contains additional replay safeguards. | Leave both local and remote `sim-to-real` branches unchanged, per user instruction. |
 | `codex/per-topology-distillation-decay` | Adaptive teacher release; notebook records incomplete runs and concerning post-release declines. | Exclude from scratch experts; retain branch because it has an attached research worktree. |
@@ -94,15 +94,15 @@ remote ref, exact SHAs, worktree exclusions and the proposed recovery process.
 Most other local branches are implementation/review ancestors of merged PRs.
 Squash merging means ancestry alone cannot establish that a feature is missing.
 Do not merge those branches just because `git log main..branch` is nonempty.
-The proposed archive preserves both local-only work and differing remote tips;
-attached branches remain in place. Local archive operations are recorded in
-the inventory; remote archives await public recovery-tag publication.
+The completed archive preserves both local-only work and differing remote tips;
+attached branches remain in place. The inventory records all recovery tags and
+completed local/remote operations. The table above retains the original review
+recommendations; every archive candidate in that table has now been archived.
 
 ## Before selecting the final paper commit
 
-1. Complete publication of the approved integration and recovery tags once
-   explicit permission for the public export is granted, then finish the 10
-   approved remote archives. Recheck remote tips before removal.
+1. Use the published code-baseline tag and paper branch with the run-record
+   workflow. Branch cleanup and recovery-tag publication are complete.
 2. Declare morphology IDs, seeds, simulator (native or MJX/Warp), abstract or
    realistic physical models, control interval and randomization distribution.
    The validator's historical 13-topology list is not an approved paper set.
