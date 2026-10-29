@@ -1,14 +1,39 @@
-# Paper baseline branch inventory
+# Revised paper baseline branch inventory
 
-Snapshot: 2026-10-28, after `git fetch origin --prune`.
+Snapshot: 2026-10-28, after fetching origin and integrating the four user-approved branches.
+No branch has been archived or deleted. **Archive candidates require explicit user approval.**
 
-Candidate base: `dcd910c1d5793f59e2f62760986a4a28f1336624` (PR #40). No branches have been archived or deleted.
-The user must approve the archive list before tags, branch removals, or PR closures.
+## Decisions already made
+
+| Branch | User decision | Current status |
+|---|---|---|
+| `experiments/diversity` | Merge for future shared control | Integrated; source branches retained. |
+| `codex/signed-routing-ablation` | Merge, off by default | Integrated; `graph_features.edge_direction=false`. |
+| `codex/tube-virtual-nodes` | Merge, off by default | Integrated design assessment; source branches retained. |
+| `codex/implement-tube-virtual-nodes` | Merge, off by default | Integrated; `graph_features.tube_nodes=false`, `graph_features.tube_physics=false`. |
+| `sim-to-real` | Leave as is | Both local and remote tips unchanged; excluded from archive candidates. |
+
+## Remaining remote archive candidates
+
+| Branch | Reason to exclude from the current baseline |
+|---|---|
+| `claude/robot-topology-distribution-9e3b7a` | Older analysis/figure pipeline; attached local analysis descendant retained. |
+| `codex/add-configurable-multihead-attention` | Additional architecture variant; existing scalar attention retained. |
+| `codex/batched-mjx-rollouts` | Older alternate rollout implementation; main already has tensor-batched collection. |
+| `experiments/1-sample` | Safety-horizon sampling is a separate objective/curriculum experiment. |
+| `experiments/graph-identity-features` | Historical implementation; semantic graph features already available in main. |
+| `experiments/lagrangian-rigidity` | Separate constrained safety objective. |
+| `experiments/safety_logging` | Diagnostics built on the constrained safety branch. |
+| `experiments/safety_surrogates` | Separate surrogate safety penalties. |
+| `optimization/timing` | Historical PCGrad optimization/profiling work; existing main implementation retained. |
+| `reward_function` | Additional barrier reward and diagnostics would change the baseline objective. |
 
 All local branches and live origin branches are listed below. `origin/HEAD` is a symbolic alias and is omitted.
-Ahead/behind counts describe commit ancestry, not missing features: squash merges can leave historical commits ahead.
+Ahead/behind counts are relative to the starting main commit `dcd910c1d5793f59e2f62760986a4a28f1336624`, before integration.
+Counts describe ancestry, not missing features: squash merges can leave historical commits ahead.
 Local and remote tips can differ; preserve each exact SHA separately.
-Branches attached to existing worktrees are retained, including ongoing research outside this paper baseline.
+Branches attached to existing worktrees are retained. Related local hardware branches remain separately listed for review;
+the user-protected `sim-to-real` branch itself is excluded from cleanup.
 No worktree will be removed or modified by the proposed cleanup.
 
 ## Proposed archive procedure
@@ -22,44 +47,48 @@ Restore a branch using `git switch -c <branch> <archive-tag>`.
 
 ## Origin branches
 
+21 total; **10 archive candidates**.
+
 | Branch | Exact tip | Behind / ahead | Proposed action |
 |---|---|---|---|
 | `claude/robot-topology-distribution-9e3b7a` | `b5e4525a2cc36bbcbb7daf8aa38a50d614e8cc56` | 6 / 1 | archive candidate |
 | `codex/add-configurable-multihead-attention` | `69f36f17387ccdaaf4567d1a5ac3eb485f345297` | 11 / 1 | archive candidate |
 | `codex/batched-mjx-rollouts` | `21af5f32e125d833c76fad2029d0b1fadf902a98` | 73 / 4 | archive candidate |
-| `codex/dynamics-generalization-experiments` | `6b618955f425ad234d141c1dcd63025f3126963e` | 1 / 3 | keep |
-| `codex/gnn-dynamics-mpc-pilot` | `c1d9f141bacaaeebebce19b10b4463b339e6f85d` | 1 / 4 | keep |
-| `codex/implement-tube-virtual-nodes` | `962c6cd8e48d907b382631b5a7ae17469f34d643` | 1 / 13 | archive candidate |
-| `codex/per-topology-distillation-decay` | `243e8b6ea5f169d3e8da910777eab2531c76be76` | 1 / 3 | keep |
-| `codex/sgs-topology-sampling` | `12ef6b966d7fab040d69b9a494aa455b9d549856` | 1 / 3 | keep |
-| `codex/shared-dynamics-mpc-experiments` | `3bea10554df7a25f4dbce503b77ae63dfa209840` | 1 / 1 | keep |
-| `codex/signed-routing-ablation` | `ec1e6feea4cc8fe7c05211ca830b2ebefa2099a6` | 1 / 6 | archive candidate |
-| `codex/tube-virtual-nodes` | `c734e08b736c4d00189d60d0ab487070c068f4d2` | 1 / 7 | archive candidate |
+| `codex/dynamics-generalization-experiments` | `6b618955f425ad234d141c1dcd63025f3126963e` | 1 / 3 | keep attached worktree branch |
+| `codex/gnn-dynamics-mpc-pilot` | `c1d9f141bacaaeebebce19b10b4463b339e6f85d` | 1 / 4 | keep attached worktree branch |
+| `codex/implement-tube-virtual-nodes` | `962c6cd8e48d907b382631b5a7ae17469f34d643` | 1 / 13 | integrated; retain source branch |
+| `codex/per-topology-distillation-decay` | `243e8b6ea5f169d3e8da910777eab2531c76be76` | 1 / 3 | keep attached worktree branch |
+| `codex/sgs-topology-sampling` | `12ef6b966d7fab040d69b9a494aa455b9d549856` | 1 / 3 | keep attached worktree branch |
+| `codex/shared-dynamics-mpc-experiments` | `3bea10554df7a25f4dbce503b77ae63dfa209840` | 1 / 1 | keep attached worktree branch |
+| `codex/signed-routing-ablation` | `ec1e6feea4cc8fe7c05211ca830b2ebefa2099a6` | 1 / 6 | integrated; retain source branch |
+| `codex/tube-virtual-nodes` | `c734e08b736c4d00189d60d0ab487070c068f4d2` | 1 / 7 | integrated; retain source branch |
 | `experiments/1-sample` | `c973596709e92b03dcba54ab582a7a4be23663af` | 38 / 4 | archive candidate |
-| `experiments/diversity` | `59e288ba01bdd78cc5f61465fe5132c308cd0f40` | 1 / 2 | archive candidate |
+| `experiments/diversity` | `59e288ba01bdd78cc5f61465fe5132c308cd0f40` | 1 / 2 | integrated; retain source branch |
 | `experiments/graph-identity-features` | `36267f09db8118607fb90dac4b3bc93004769749` | 38 / 5 | archive candidate |
 | `experiments/lagrangian-rigidity` | `fa7d1562521744d607200cfd1ad19489454503c2` | 38 / 3 | archive candidate |
 | `experiments/safety_logging` | `f735d10f86d2d9137e46629791d04cbc0475a438` | 38 / 4 | archive candidate |
 | `experiments/safety_surrogates` | `fe7d2c776b95c61df8b5236f673aa6360eadd505` | 38 / 4 | archive candidate |
-| `main` | `dcd910c1d5793f59e2f62760986a4a28f1336624` | 0 / 0 | keep |
+| `main` | `dcd910c1d5793f59e2f62760986a4a28f1336624` | 0 / 0 | keep main |
 | `optimization/timing` | `36fa74b124e8bde2367a7f414beb6082a4bb812b` | 14 / 8 | archive candidate |
 | `reward_function` | `c043a0adf0d2a7e2fb447fda35367a5ee3620f04` | 39 / 4 | archive candidate |
-| `sim-to-real` | `939bb0295c05b674efe246b3f6f2b6a53d7b52ab` | 11 / 11 | archive candidate |
+| `sim-to-real` | `939bb0295c05b674efe246b3f6f2b6a53d7b52ab` | 11 / 11 | leave unchanged (user) |
 
 ## Local branches
+
+87 total; **72 archive candidates**.
 
 | Branch | Exact tip | Behind / ahead | Proposed action |
 |---|---|---|---|
 | `broken-node-interleaved-regime` | `f539129522fdffc112719ecf13f282ff08b2fabe` | 11 / 12 | archive candidate |
 | `claude/broken-node-rl-training-plan-4f6b6b` | `000146a60e757495e40047cbbbfa9f5766bf6464` | 11 / 9 | archive candidate |
-| `claude/config-distance-eval-audit-e71b37` | `096a683187557343bb6a9477afa771c890e71040` | 6 / 2 | keep |
+| `claude/config-distance-eval-audit-e71b37` | `096a683187557343bb6a9477afa771c890e71040` | 6 / 2 | keep attached worktree branch |
 | `claude/cross-validation-distillation-analysis-92645a` | `1995813d6c1b15fa8f6a8cbef469c7f6720e2782` | 6 / 0 | archive candidate |
 | `claude/cv-training-generalization-analysis-deefcf` | `1995813d6c1b15fa8f6a8cbef469c7f6720e2782` | 6 / 0 | archive candidate |
 | `claude/discount-factor-default-8f3900` | `31cba71bcdc7ec4849d5d41f11af0efa2b4bf25f` | 3 / 1 | archive candidate |
 | `claude/distillation-pr-chain-018592` | `7d7cb0ec5a051a307d696d98767501003bbf9109` | 11 / 14 | archive candidate |
 | `claude/distribution-plots-robot-topology-d95aa0` | `47b3657b26e98ea0bfe8cb65b9343b27932488e8` | 6 / 2 | archive candidate |
 | `claude/documentation-cleanup-proposal-2cbeaa` | `7ddeb70926423b28e655cafee4b5363051d49395` | 5 / 4 | archive candidate |
-| `claude/gpu-optimization-learning-regression-8895de` | `ed57cb4f6f47535a57ec28222222514aa96352da` | 1 / 0 | keep |
+| `claude/gpu-optimization-learning-regression-8895de` | `ed57cb4f6f47535a57ec28222222514aa96352da` | 1 / 0 | keep attached worktree branch |
 | `claude/gpu-utilization-training-ff5b72` | `9e20513a3adfeaef9b9497ed228af38fd6af7bf1` | 2 / 2 | archive candidate |
 | `claude/pensive-cartwright-51ab63` | `25ebbcd3ffc1d86a21115ea1e7b7fa878541be94` | 5 / 1 | archive candidate |
 | `claude/pr-35-comment-response-7a92fd` | `63f6c8b5200680a41a9aa0fa371cd6d956a06a2d` | 6 / 9 | archive candidate |
@@ -83,8 +112,8 @@ Restore a branch using `git switch -c <branch> <archive-tag>`.
 | `codex/diagnose-hydra-slurm-error` | `b0765f0880c3a8b65d438feeee91ffba2caf9d99` | 14 / 1 | archive candidate |
 | `codex/diagnose-wb-simulation-stall` | `c8d8ae799c567b7aa17a1e69ebf8645f8b319152` | 7 / 2 | archive candidate |
 | `codex/distillation-throughput` | `6d23290edab11210483eb92cbb70e70a3f9cbad7` | 11 / 3 | archive candidate |
-| `codex/dynamics-generalization-experiments` | `6b618955f425ad234d141c1dcd63025f3126963e` | 1 / 3 | keep |
-| `codex/dynamics-vs-control-experiment3` | `6b618955f425ad234d141c1dcd63025f3126963e` | 1 / 3 | keep |
+| `codex/dynamics-generalization-experiments` | `6b618955f425ad234d141c1dcd63025f3126963e` | 1 / 3 | keep attached worktree branch |
+| `codex/dynamics-vs-control-experiment3` | `6b618955f425ad234d141c1dcd63025f3126963e` | 1 / 3 | keep attached worktree branch |
 | `codex/few-shot-adaptation` | `ed57cb4f6f47535a57ec28222222514aa96352da` | 1 / 0 | archive candidate |
 | `codex/fix-dynamic-broken-node-replay` | `2de0e9658c1abf0b40982c3958bea93121412860` | 11 / 9 | archive candidate |
 | `codex/fix-gnn-action-head-optimization` | `f444e6adb73f2e08eda0f59f83c01132154f02f1` | 23 / 2 | archive candidate |
@@ -92,14 +121,14 @@ Restore a branch using `git switch -c <branch> <archive-tag>`.
 | `codex/fix-native-terminal-velocity-reward` | `f4eca4de2f51768e6739d4f3fe460d20c1b427d6` | 17 / 3 | archive candidate |
 | `codex/fix-reward-normalization-resume` | `fd0960f50cce768dd4cba900334fb9fee957f5ee` | 18 / 1 | archive candidate |
 | `codex/fix-vive-tracker-coordinate-map` | `800fa861f9c28194a967dbd10372a38fb3569904` | 24 / 4 | archive candidate |
-| `codex/gnn-dynamics-mpc-pilot` | `c1d9f141bacaaeebebce19b10b4463b339e6f85d` | 1 / 4 | keep |
+| `codex/gnn-dynamics-mpc-pilot` | `c1d9f141bacaaeebebce19b10b4463b339e6f85d` | 1 / 4 | keep attached worktree branch |
 | `codex/graph-identity-features-pr` | `f0ed1c824673d696c3327deaa7c96c2c9df5875a` | 34 / 6 | archive candidate |
-| `codex/implement-tube-virtual-nodes` | `962c6cd8e48d907b382631b5a7ae17469f34d643` | 1 / 13 | archive candidate |
+| `codex/implement-tube-virtual-nodes` | `962c6cd8e48d907b382631b5a7ae17469f34d643` | 1 / 13 | integrated; retain source branch |
 | `codex/jax` | `eb4c086e610d5fd9ce48e819574474b13161e420` | 79 / 0 | archive candidate |
 | `codex/mlp-paper-readiness` | `65f8750874a304803a6bb204677c30efb78e8d5c` | 1 / 1 | archive candidate |
 | `codex/padded_mlp` | `f11e088a318ee9c1a26f9d4ec0bb2e7a2fca12ce` | 24 / 1 | archive candidate |
-| `codex/paper-expert-baseline` | `dcd910c1d5793f59e2f62760986a4a28f1336624` | 0 / 0 | keep |
-| `codex/per-topology-distillation-decay` | `243e8b6ea5f169d3e8da910777eab2531c76be76` | 1 / 3 | keep |
+| `codex/paper-expert-baseline` | `3631552a6fb49f0bd48c2369ff538e26be437d89` | 0 / 18 | keep attached worktree branch |
+| `codex/per-topology-distillation-decay` | `243e8b6ea5f169d3e8da910777eab2531c76be76` | 1 / 3 | keep attached worktree branch |
 | `codex/pr10-conflict-resolution` | `2f98547400a5d5c8a883e925496971d8ad1df6a4` | 36 / 3 | archive candidate |
 | `codex/pr28-fix` | `d1575c180107c77bd1e34ba78f8177d4ca30ad94` | 11 / 14 | archive candidate |
 | `codex/pr9-p2` | `37b86610f637df87d4228520ad7cdbbd64a6d841` | 39 / 4 | archive candidate |
@@ -109,12 +138,12 @@ Restore a branch using `git switch -c <branch> <archive-tag>`.
 | `codex/resolve-pr11-conflicts` | `5040562abdfd44282c0be52795000450982a4bd2` | 22 / 6 | archive candidate |
 | `codex/safety-diagnostics` | `f735d10f86d2d9137e46629791d04cbc0475a438` | 38 / 4 | archive candidate |
 | `codex/scale-multitopology-learning-budgets` | `6960e8d22102a6e0b29b3013fae7819a833b655e` | 11 / 1 | archive candidate |
-| `codex/sgs-topology-sampling` | `12ef6b966d7fab040d69b9a494aa455b9d549856` | 1 / 3 | keep |
-| `codex/shared-dynamics-mpc-experiments` | `3bea10554df7a25f4dbce503b77ae63dfa209840` | 1 / 1 | keep |
-| `codex/signed-routing-ablation` | `ec1e6feea4cc8fe7c05211ca830b2ebefa2099a6` | 1 / 6 | archive candidate |
+| `codex/sgs-topology-sampling` | `12ef6b966d7fab040d69b9a494aa455b9d549856` | 1 / 3 | keep attached worktree branch |
+| `codex/shared-dynamics-mpc-experiments` | `3bea10554df7a25f4dbce503b77ae63dfa209840` | 1 / 1 | keep attached worktree branch |
+| `codex/signed-routing-ablation` | `ec1e6feea4cc8fe7c05211ca830b2ebefa2099a6` | 1 / 6 | integrated; retain source branch |
 | `codex/skip-completed-hydra-jobs` | `a3dfebe5480b9a90932084e8f1b0d6acc6da68b2` | 22 / 2 | archive candidate |
 | `codex/torchrl-replay-prototype` | `3496405227c2d535487d701874d436208cbe945e` | 11 / 9 | archive candidate |
-| `codex/tube-virtual-nodes` | `c734e08b736c4d00189d60d0ab487070c068f4d2` | 1 / 7 | archive candidate |
+| `codex/tube-virtual-nodes` | `c734e08b736c4d00189d60d0ab487070c068f4d2` | 1 / 7 | integrated; retain source branch |
 | `codex/update-mujocotrussgen-hinge-kp` | `51043af544081023f09fa444e7a499ef31142b9c` | 11 / 2 | archive candidate |
 | `codex/upgrade-mujocotrussgen-features` | `757562488daafd1ecd46da9001498e65d55605c5` | 12 / 1 | archive candidate |
 | `experiment/async_critic` | `82f6aa49c13e308d511170c5021de3d1dfd668e5` | 40 / 3 | archive candidate |
@@ -122,7 +151,7 @@ Restore a branch using `git switch -c <branch> <archive-tag>`.
 | `experiments/attention` | `7a3738e044ec66c6689a824602b01fdbbb5ed9aa` | 38 / 2 | archive candidate |
 | `experiments/critic_vnode` | `db87abb196f7e746d7065f7c93841ebb51999d49` | 39 / 3 | archive candidate |
 | `experiments/distillation` | `4b8b8412622bcf065b753163ea5244fd257c4434` | 11 / 6 | archive candidate |
-| `experiments/diversity` | `d3d8e5668c71d686ff46a93317e4754a28b5d322` | 1 / 1 | archive candidate |
+| `experiments/diversity` | `d3d8e5668c71d686ff46a93317e4754a28b5d322` | 1 / 1 | integrated; retain source branch |
 | `experiments/graph-identity-features` | `36267f09db8118607fb90dac4b3bc93004769749` | 38 / 5 | archive candidate |
 | `experiments/lagrangian-rigidity` | `91731e09fbcc3f26326c5ca0b6712ef5ce33508a` | 38 / 2 | archive candidate |
 | `experiments/multi_message_passing` | `36f630bb8ab20dec7c112a01dd9223d9bcc1fdf3` | 55 / 2 | archive candidate |
@@ -131,9 +160,9 @@ Restore a branch using `git switch -c <branch> <archive-tag>`.
 | `experiments/safety_logging` | `f735d10f86d2d9137e46629791d04cbc0475a438` | 38 / 4 | archive candidate |
 | `experiments/safety_surrogates` | `fe7d2c776b95c61df8b5236f673aa6360eadd505` | 38 / 4 | archive candidate |
 | `experiments/virtual_node` | `3bf3f105df44e26263be6d887cc7243c0e0a69ba` | 51 / 5 | archive candidate |
-| `main` | `ed57cb4f6f47535a57ec28222222514aa96352da` | 1 / 0 | keep |
+| `main` | `ed57cb4f6f47535a57ec28222222514aa96352da` | 1 / 0 | keep main |
 | `optimization/pcgrad` | `36fa74b124e8bde2367a7f414beb6082a4bb812b` | 14 / 8 | archive candidate |
 | `optimization/timing` | `36fa74b124e8bde2367a7f414beb6082a4bb812b` | 14 / 8 | archive candidate |
 | `reward_function` | `c043a0adf0d2a7e2fb447fda35367a5ee3620f04` | 39 / 4 | archive candidate |
-| `sim-to-real` | `939bb0295c05b674efe246b3f6f2b6a53d7b52ab` | 11 / 11 | archive candidate |
+| `sim-to-real` | `939bb0295c05b674efe246b3f6f2b6a53d7b52ab` | 11 / 11 | leave unchanged (user) |
 | `sim2real/hinge_randomizaton` | `3b1e8e6faf92a85e24663fb1c726b601f4e78b0e` | 11 / 7 | archive candidate |

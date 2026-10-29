@@ -6,13 +6,29 @@ MLP specialists, and requires approval before archiving branches.
 
 ## Candidate code baseline
 
-Use `dcd910c1d5793f59e2f62760986a4a28f1336624`, the current `origin/main`
-after PR #40, as the starting candidate. All repository PRs are currently
-merged or closed. PR #40 already contains padded specialist presets,
-capacity validation, simulator compatibility checks, and MLP distillation.
-There is no outstanding feature merge required to make the expert comparison
-possible. This is a code candidate, not evidence of good learning performance
-or qualification of the eventual production configuration.
+The starting point is `dcd910c1d5793f59e2f62760986a4a28f1336624` (main after
+PR #40). The user approved integrating the following branches for later shared
+controller studies while keeping the first expert comparison unchanged:
+
+| Approved integration | Source tip | Default behavior |
+|---|---|---|
+| `experiments/diversity` | `59e288b` | Adds selectable CV/teacher tools; `cross_validation=disabled` remains the default. |
+| `codex/signed-routing-ablation` | `ec1e6fe` | `graph_features.edge_direction=false`. |
+| `codex/tube-virtual-nodes` | `c734e08` | Retains the tube-node design assessment. |
+| `codex/implement-tube-virtual-nodes` | `962c6cd` | `graph_features.tube_nodes=false` and `graph_features.tube_physics=false`. |
+
+The branches form a dependency chain and have been merged in that order on
+`codex/paper-expert-baseline`. Merge resolution preserves PR #40's GNN/padded-MLP
+policy contracts, physical action ordering and offline-only completion flow.
+Tube diagnostics now prefer `distillation_complete.pt`, falling back to the
+older `distillation.pt` for existing runs. Optional metadata reconstruction is
+also false by default. Named ablation presets explicitly opt into their features;
+ordinary GNN and padded-MLP launches do not.
+
+`sim-to-real` is retained unchanged at both its local and remote tips. No branch
+has been archived or deleted. Source branches for the four integrations are
+also retained pending the user's review. The final paper tag still requires
+qualification of the eventual production configuration.
 
 The question for this stage is: **How well can each architecture learn a
 separate expert policy for each robot in a declared morphology set?** Each
@@ -63,11 +79,11 @@ remote ref, exact SHAs, worktree exclusions and the proposed recovery process.
 | `optimization/timing` | PCGrad optimization/profiling lineage; main already contains PCGrad optimization from PR #19 and subphase profiling. | No wholesale merge of the old branch; archive candidate. |
 | `reward_function` | Adds a danger-zone barrier reward and additional evaluation diagnostics. Its local descendant also contains a virtual-node action fix already present in main's critic mapping. | Keep existing objective for paired experts; archive candidate, including distinct local/remote tips. |
 | `experiments/lagrangian-rigidity`, `experiments/1-sample`, `experiments/safety_logging`, `experiments/safety_surrogates` | Constrained safety objectives, curriculum and surrogate penalties; these alter the learning objective or introduce additional experimental conditions. | Separate ablations; archive candidates. |
-| `experiments/diversity` | Adds farthest-point/random-teacher CV utilities and changes split configuration. | Not needed for per-morphology experts; archive candidate. Choose the paper morphology list explicitly. |
-| `codex/signed-routing-ablation` | Adds signed routing features and a controlled transfer study on top of diversity/CV work. | Separate architecture/input ablation; archive candidate. |
-| `codex/tube-virtual-nodes`, `codex/implement-tube-virtual-nodes` | Tube-specific graph nodes, tube-physics experiments and teacher/student fidelity diagnostics. | Separate architecture/physics studies; archive candidates. |
+| `experiments/diversity` | Adds farthest-point/random-teacher CV utilities and changes split configuration. | Merged by user request for future general-controller work; retain source branch pending review. No CV enabled by default. |
+| `codex/signed-routing-ablation` | Adds signed routing features and a controlled transfer study on top of diversity/CV work. | Merged by user request; retain source branch pending review. Signed routing is off by default. |
+| `codex/tube-virtual-nodes`, `codex/implement-tube-virtual-nodes` | Tube-specific graph nodes, tube-physics experiments and teacher/student fidelity diagnostics. | Both merged by user request; retain source branches pending review. Tube nodes and tube physics are off by default. |
 | `claude/robot-topology-distribution-9e3b7a` | Analysis pipeline plus committed figures/data and legacy requirements edits. Local descendants contain different analysis corrections. | Do not merge the old analysis branch wholesale; remote/archive candidates preserved separately. Retain the attached local analysis worktree. |
-| `sim-to-real` | Hardware inference, tracker mapping, serial commands and session diagnostics; not the simulator training baseline. A local tracker-analysis branch contains additional replay safeguards. | Archive candidates with separate tips; revisit deliberately for hardware work. |
+| `sim-to-real` | Hardware inference, tracker mapping, serial commands and session diagnostics; not the simulator training baseline. A local tracker-analysis branch contains additional replay safeguards. | Leave both local and remote `sim-to-real` branches unchanged, per user instruction. |
 | `codex/per-topology-distillation-decay` | Adaptive teacher release; notebook records incomplete runs and concerning post-release declines. | Exclude from scratch experts; retain branch because it has an attached research worktree. |
 | `codex/sgs-topology-sampling` | Adaptive collection/replay; notebook records incomplete runs and no established useful transfer. | Exclude from scratch experts; retain attached research branch. |
 | `codex/shared-dynamics-mpc-experiments`, `codex/dynamics-generalization-experiments`, `codex/gnn-dynamics-mpc-pilot` | Learned dynamics/MPC is a different controller and research question. | Exclude from the expert architecture baseline; retain attached research branches. |
@@ -80,8 +96,9 @@ attached branches remain in place. No archive operation has been performed.
 
 ## Before selecting the final paper commit
 
-1. Approve the merge/archive decisions. No additional feature merge is
-   recommended for this first experiment. Recheck remote heads before execution.
+1. Review the revised archive list. The four requested feature branches are
+   integrated; no archive action is authorized yet. Recheck remote heads before
+   any approved cleanup.
 2. Declare morphology IDs, seeds, simulator (native or MJX/Warp), abstract or
    realistic physical models, control interval and randomization distribution.
    The validator's historical 13-topology list is not an approved paper set.
@@ -103,7 +120,8 @@ attached branches remain in place. No archive operation has been performed.
 
 ## Validation
 
-The locked environment was installed with `uv sync --frozen`.
+The locked environment was installed with `uv sync --frozen`. The following
+record describes the original PR #40 baseline before the four integrations:
 
 - `uv run --no-sync python -m unittest discover -s tests -v`: **383 tests
   run; 381 passed and 2 CUDA-only tests skipped**, in 220.593 seconds.
