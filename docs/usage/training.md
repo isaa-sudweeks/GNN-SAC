@@ -13,6 +13,20 @@ uv run python sac/train.py sac_backend=gnn sim_backend=mjx 'truss_topologies=[oc
 `device` defaults to `cpu` (the supercomputer platform sets `cuda`). For quick
 local checks, add `enable_wandb=false`.
 
+For generated single-morphology flat specialists use `sac_backend=mlp
+task=truss-mlp truss_topology=tetrahedron`; the generic MLP default uses the
+legacy XML task. Use `padded_mlp` for the same node-control interface as the GNN,
+both for specialists and heterogeneous generalists. Startup rejects flat MLP
+graph inputs and heterogeneous flat-policy training. Padded runs validate
+training and held-out evaluation capacities before opening teacher checkpoints.
+See [padded_mlp_baseline.md](padded_mlp_baseline.md) for configuration validation.
+
+`init_from_agent=/path/to/export.pt` starts a fresh run from model/alpha weights;
+optimizers, replay and counters start fresh. Use `resume_from_checkpoint` for a
+full continuation instead; the two options cannot be combined. For pure offline
+imitation, use enabled distillation with `distillation.offline_only=true
+steps=0`; see [distillation.md](distillation.md).
+
 ## Update scheduling
 
 `replay_ratio` sets how many replay samples are consumed per newly collected

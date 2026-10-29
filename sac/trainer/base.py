@@ -246,6 +246,14 @@ class Trainer:
             "target_steps": target_steps,
             "checkpoint": f"{identifier}.pt",
         }
+        distillation = state_dict.get("distillation")
+        if distillation is not None:
+            metadata["distillation"] = {
+                "offline_only": bool(distillation.get("settings", {}).get("offline_only", False)),
+                "stage": distillation.get("stage"),
+                "completed_updates": int(distillation.get("completed_updates", 0)),
+                "pretrain_updates": int(distillation.get("settings", {}).get("pretrain_updates", 0)),
+            }
         metadata_tmp = checkpoint_dir / ".latest.metadata.tmp"
         metadata_path = checkpoint_dir / "latest.metadata.json"
         metadata_tmp.write_text(json.dumps(metadata, sort_keys=True) + "\n")

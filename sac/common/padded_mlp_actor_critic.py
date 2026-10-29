@@ -190,6 +190,22 @@ class PaddedMLPActorCritic(nn.Module):
             "entropy": -graph_log_prob,
         }
 
+    def policy_distribution(
+        self, obs, *, deterministic: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return pre-tanh Gaussian parameters in active physical-node order.
+
+        The actor has no dropout, so this interface is deterministic in either
+        module mode and retains gradients for offline or online distillation.
+        ``deterministic`` matches the graph-policy interface.
+        """
+        mean, log_std, dense_action_mask, _ = self._distribution(obs)
+        mask = dense_action_mask.unsqueeze(-1).expand_as(mean)
+        return (
+            mean[mask].view(-1, self.node_action_dim),
+            log_std[mask].view(-1, self.node_action_dim),
+        )
+
     def pi_mean(self, obs):
         mean, _, dense_action_mask, _ = self._distribution(obs)
         squashed_mean = torch.tanh(mean)

@@ -42,6 +42,19 @@ uv run python sac/train.py sac_backend=gnn resume_from_checkpoint=/path/to/run/c
 - `set_wandb_offline=true` forces offline logging. The supercomputer platform
   turns it on by default.
 
+Padded MLP checkpoints also validate the saved input capacity and node feature/
+action dimensions. Repeat the resolved architecture and environment settings
+when resuming or loading an export. `init_from_agent=/path/to/latest.agent.pt`
+loads model/alpha only for a fresh training run and cannot be combined with
+`resume_from_checkpoint`.
+
+Offline-only distillation writes `distillation_complete.pt` plus `latest.pt`
+and agent companions after its final evaluation, even with periodic saving
+disabled. Resume with `distillation.offline_only=true` to finish interrupted
+imitation or reopen a completed run without entering SAC. Completion metadata
+records the distillation stage and offline-update budget; the Slurm launcher
+uses that state to skip completed offline-only jobs resumed from `latest`.
+
 ## Supercomputer platform (Submitit/Slurm)
 
 `platform=supercomputer` launches Hydra multiruns through Submitit with

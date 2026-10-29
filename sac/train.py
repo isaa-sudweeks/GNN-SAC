@@ -49,6 +49,36 @@ capture_launch_command()
 torch.backends.cudnn.benchmark = True 
 torch.set_float32_matmul_precision('high')
 
+def validate_training_mode(cfg) -> None:
+    """Reject ambiguous initialization and invalid offline/online budgets."""
+    options = getattr(cfg, "distillation", {})
+    get_option = options.get if hasattr(options, "get") else lambda key, default=None: getattr(options, key, default)
+    offline_only = bool(get_option("offline_only", False))
+    if offline_only:
+        if not bool(get_option("enabled", False)) or int(get_option("pretrain_updates", 0)) <= 0:
+            raise ValueError("Offline-only mode requires enabled distillation and positive pretrain_updates.")
+        if int(cfg.steps) < 0:
+            raise ValueError("Offline-only mode requires steps >= 0.")
+    elif int(cfg.steps) <= 0:
+        raise ValueError("Number of steps must be positive for online training.")
+    if getattr(cfg, "init_from_agent", None) not in (None, "", "???") and getattr(
+        cfg, "resume_from_checkpoint", None
+    ) not in (None, "", "???", False):
+        raise ValueError("init_from_agent and resume_from_checkpoint are mutually exclusive.")
+
+
+def initialize_agent_from_export(agent, checkpoint_ref) -> None:
+    """Load model/alpha while preserving freshly created optimizers and replay."""
+    if checkpoint_ref in (None, "", "???"):
+        return
+    path = Path(checkpoint_ref).expanduser()
+    state = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(state, dict) and "agent" in state:
+        state = state["agent"]
+    agent.load(state)
+    print("Initialized agent from:", path)
+
+
 def run_training(cfg, trial=None):
     """
     Execute one training run and return the best objective value seen.
@@ -61,8 +91,11 @@ def run_training(cfg, trial=None):
 
     if getattr(cfg, 'device', 'cuda') == 'cuda':
         assert torch.cuda.is_available(), "CUDA not available, please run on a GPU"
-    assert cfg.steps > 0, "Number of steps must be positive"
     cfg = parse_cfg(cfg)
+    validate_training_mode(cfg)
+    from common.training_validation import validate_training_config, validate_padded_mlp_environment
+
+    validate_training_config(cfg)
     if sac_backend in {"gnn", "padded_mlp"} and str(getattr(cfg, "mujoco_backend", "mujoco")).lower() == "mjx":
         os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     set_seed(cfg.seed)
@@ -70,30 +103,32 @@ def run_training(cfg, trial=None):
     print(colored('Work dir:', 'yellow', attrs=['bold']), cfg.work_dir)
 
     env = make_env(cfg)
-    if sac_backend in {"gnn", "padded_mlp"}:
-        from common.tensor_gnn_buffer import make_gnn_buffer
-        if sac_backend == "gnn":
-            from gnn_sac import GNNSAC
-
-            agent = GNNSAC(cfg)
-        else:
-            from padded_mlp_sac import PaddedMLPSAC
-
-            agent = PaddedMLPSAC(cfg)
-        buffer = make_gnn_buffer(cfg)
-    else:
-        agent = SAC(cfg)
-        buffer = Buffer(cfg)
-    trainer = OnlineTrainer(
-        cfg = cfg,
-        env = env,
-        agent=agent,
-        logger=Logger(cfg),
-        buffer=buffer,
-        trial=trial,
-    )
-
+    trainer = None
     try:
+        validate_padded_mlp_environment(cfg, env)
+        if sac_backend in {"gnn", "padded_mlp"}:
+            from common.tensor_gnn_buffer import make_gnn_buffer
+            if sac_backend == "gnn":
+                from gnn_sac import GNNSAC
+
+                agent = GNNSAC(cfg)
+            else:
+                from padded_mlp_sac import PaddedMLPSAC
+
+                agent = PaddedMLPSAC(cfg)
+            buffer = make_gnn_buffer(cfg)
+        else:
+            agent = SAC(cfg)
+            buffer = Buffer(cfg)
+        initialize_agent_from_export(agent, getattr(cfg, "init_from_agent", None))
+        trainer = OnlineTrainer(
+            cfg=cfg,
+            env=env,
+            agent=agent,
+            logger=Logger(cfg),
+            buffer=buffer,
+            trial=trial,
+        )
         trainer.train()
         objective_value, objective_metric = trainer.best_objective()
         if trial is not None:
@@ -106,12 +141,14 @@ def run_training(cfg, trial=None):
         return objective_value
     except optuna.TrialPruned:
         cfg.optuna_trial_state = "pruned"
-        trainer.logger.finish()
+        if trainer is not None:
+            trainer.logger.finish()
         raise
     except Exception:
         if trial is not None:
             cfg.optuna_trial_state = "failed"
-        trainer.logger.finish()
+        if trainer is not None:
+            trainer.logger.finish()
         raise
     finally:
         env.close()

@@ -20,7 +20,7 @@
 - [cross_validation.md](usage/cross_validation.md): leave-one-group-out and
   random-fold topology cross-validation
 - [distillation.md](usage/distillation.md): multi-teacher Gaussian KL
-  distillation into one GNN student
+  distillation into GNN or padded MLP students, offline-only and online modes
 - [replay.md](usage/replay.md): tensor vs legacy replay, storage placement,
   checkpoint conversion
 - [padded_mlp_baseline.md](usage/padded_mlp_baseline.md): fixed-width MLP
@@ -38,6 +38,8 @@
 
 ## Plans
 
+- [mlp_paper_readiness.md](plans/mlp_paper_readiness.md): MLP audit, distillation
+  gaps, implementation phases and paper launch acceptance gates
 - [domain_randomization_test_plan.md](plans/domain_randomization_test_plan.md)
 
 ## Archive

@@ -20,6 +20,7 @@ for path in (ROOT, SAC_ROOT):
 from common.submitit_launcher import (
     FilteringSlurmLauncher,
     completed_checkpoint_step,
+    completed_offline_distillation,
     resolve_checkpoint_dir,
 )
 
@@ -74,6 +75,37 @@ def write_metadata_checkpoint(checkpoint_dir: Path, step: int, target_steps: int
 
 
 class CheckpointScanTest(unittest.TestCase):
+    def test_offline_completion_requires_stage_budget_and_files(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            directory = Path(tmp_dir)
+            cfg = OmegaConf.create({"distillation": {"pretrain_updates": 3}})
+            metadata = {
+                "format_version": 1, "step": 0, "target_steps": 0,
+                "checkpoint": "distillation_complete.pt",
+                "distillation": {"offline_only": True, "stage": "complete",
+                                 "completed_updates": 3, "pretrain_updates": 3},
+            }
+            (directory / "latest.metadata.json").write_text(json.dumps(metadata))
+            self.assertFalse(completed_offline_distillation(directory, cfg))
+            (directory / "latest.pt").touch()
+            (directory / "distillation_complete.pt").touch()
+            self.assertTrue(completed_offline_distillation(directory, cfg))
+            cfg.distillation.pretrain_updates = 4
+            self.assertFalse(completed_offline_distillation(directory, cfg))
+            cfg.distillation.pretrain_updates = 3
+            metadata["distillation"]["stage"] = "offline"
+            (directory / "latest.metadata.json").write_text(json.dumps(metadata))
+            self.assertFalse(completed_offline_distillation(directory, cfg))
+
+    def test_launcher_does_not_treat_zero_online_budget_as_offline_completion(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            directory = Path(tmp_dir)
+            cfg = sweep_cfg(directory, override_dirname="offline", steps=0)
+            cfg.distillation = {"offline_only": True, "pretrain_updates": 3}
+            write_legacy_checkpoint(directory, 0)
+            launcher = FilteringSlurmLauncher()
+            self.assertEqual(launcher._is_complete(cfg, directory), (False, None))
+
     def test_metadata_reports_saved_step_at_or_below_target(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             checkpoint_dir = Path(tmp_dir)

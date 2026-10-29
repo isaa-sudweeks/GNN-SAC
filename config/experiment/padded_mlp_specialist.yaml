@@ -1,0 +1,10 @@
+# @package _global_
+defaults:
+  - override /sac_backend: padded_mlp
+
+exp_name: padded-mlp-specialist
+mlp_training_mode: specialist
+# The caller chooses the morphology. No paper split is selected here.
+truss_topology: ???
+truss_topologies: null
+pcgrad: false

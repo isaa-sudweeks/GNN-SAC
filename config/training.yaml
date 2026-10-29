@@ -32,6 +32,7 @@ checkpoint_async: true # Write periodic checkpoints in a background thread; fina
 checkpoint_dir: checkpoints # Directory for resumable checkpoints, relative to work_dir unless absolute.
 checkpoint_keep_last: 3 # Number of numbered step checkpoints to keep; latest.pt is always retained.
 resume_from_checkpoint: null # Path to a checkpoint, or "latest" to load checkpoint_dir/latest.pt.
+init_from_agent: null # Initialize model/alpha from an export; keep fresh optimizers, replay and counters. Exclusive with resume.
 save_video: false # Whether to render and log video for the first evaluation episode.
 video_every_n_evals: 10 # Record video on the first evaluation, then every N evaluations.
 enable_wandb: true # Whether to send metrics, config, video, and artifacts to Weights & Biases.
