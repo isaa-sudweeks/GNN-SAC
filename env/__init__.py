@@ -86,7 +86,7 @@ def _configure_graph_feature_dims(cfg):
         + 2 * int(node_roles)
         + 2 * int(use_virtual_node)
     )
-    cfg.edge_feature_dim = 3 * int(edge_roles) + int(edge_distance)
+    cfg.edge_feature_dim = 3 * int(edge_roles) + int(edge_distance) + int(get_value("edge_direction", False))
 
 def _num_policy_actuators(env):
     mj_model = env.unwrapped.mj_model

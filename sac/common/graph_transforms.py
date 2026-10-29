@@ -25,18 +25,23 @@ def graph_feature_flags(config) -> dict[str, bool]:
         "use_node_roles": bool(_cfg_get(features, "node_roles", False)),
         "use_edge_roles": bool(_cfg_get(features, "edge_roles", False)),
         "use_edge_distance": bool(_cfg_get(features, "edge_distance", False)),
+        "use_edge_direction": bool(_cfg_get(features, "edge_direction", False)),
     }
 
 
 def graph_feature_schema(config) -> dict[str, object]:
     """Return the checkpointed feature contract for a GNN policy."""
     flags = graph_feature_flags(config)
-    return {
+    schema = {
         "node_roles": flags["use_node_roles"],
         "edge_roles": flags["use_edge_roles"],
         "edge_distance": flags["use_edge_distance"],
         "edge_role_vocabulary": list(EDGE_ROLE_NAMES),
     }
+    # Preserve the exact legacy schema for checkpoints without signed routing.
+    if flags["use_edge_direction"]:
+        schema["edge_direction"] = "controller_incidence_v1"
+    return schema
 
 
 def graph_input_dim(
@@ -53,9 +58,10 @@ def graph_input_dim(
     )
 
 
-def graph_edge_input_dim(*, use_edge_roles: bool, use_edge_distance: bool) -> int:
+def graph_edge_input_dim(*, use_edge_roles: bool, use_edge_distance: bool,
+                         use_edge_direction: bool = False) -> int:
     """Return the configured message-edge feature width."""
-    return (EDGE_ROLE_DIM if use_edge_roles else 0) + int(use_edge_distance)
+    return (EDGE_ROLE_DIM if use_edge_roles else 0) + int(use_edge_direction) + int(use_edge_distance)
 
 
 def _physical_edge_features(
@@ -63,6 +69,7 @@ def _physical_edge_features(
     *,
     use_edge_roles: bool,
     use_edge_distance: bool,
+    use_edge_direction: bool = False,
 ) -> torch.Tensor | None:
     edge_count = int(graph.edge_index.size(1))
     features = []
@@ -81,6 +88,17 @@ def _physical_edge_features(
         if roles.numel() and (int(roles.min()) < 0 or int(roles.max()) >= EDGE_ROLE_DIM - 1):
             raise ValueError("Raw edge roles must be tube=0 or connector=1; virtual edges are added internally.")
         features.append(F.one_hot(roles, num_classes=EDGE_ROLE_DIM).to(dtype=graph.x.dtype))
+
+    if use_edge_direction:
+        direction = getattr(graph, "edge_direction", None)
+        if direction is None:
+            raise ValueError("graph_features.edge_direction=true requires graph.edge_direction metadata.")
+        direction = torch.as_tensor(direction, device=graph.x.device).reshape(-1)
+        if direction.numel() != edge_count or not torch.isfinite(direction).all():
+            raise ValueError("Invalid edge-direction metadata length or nonfinite values.")
+        if not ((direction == -1) | (direction == 0) | (direction == 1)).all():
+            raise ValueError("Edge directions must be -1, 0, or +1.")
+        features.append(direction.to(graph.x.dtype).unsqueeze(-1))
 
     if use_edge_distance:
         if graph.x.ndim != 2 or graph.x.size(1) < 3:
@@ -103,6 +121,7 @@ def prepare_graph(
     use_node_roles: bool = False,
     use_edge_roles: bool = False,
     use_edge_distance: bool = False,
+    use_edge_direction: bool = False,
 ) -> Data:
     """Clone a graph and optionally append one rigidity-aware virtual node.
 
@@ -111,7 +130,7 @@ def prepare_graph(
     rigidity ratio, allowing global structural health to reach every physical
     node through one message-passing layer.
     """
-    if not (use_virtual_node or use_node_roles or use_edge_roles or use_edge_distance):
+    if not (use_virtual_node or use_node_roles or use_edge_roles or use_edge_distance or use_edge_direction):
         return graph
 
     prepared = graph.clone()
@@ -141,11 +160,13 @@ def prepare_graph(
         prepared,
         use_edge_roles=use_edge_roles,
         use_edge_distance=use_edge_distance,
+        use_edge_direction=use_edge_direction,
     )
     if edge_attr is not None:
         prepared.edge_attr = edge_attr
-    if "edge_role" in prepared:
-        del prepared.edge_role
+    for field in ("edge_role", "edge_direction"):
+        if field in prepared:
+            del prepared[field]
 
     if not use_virtual_node:
         return prepared
@@ -199,11 +220,14 @@ def graph_structure_signature(graph: Data) -> dict:
     mask = policy_action_mask(graph)
     if mask.ndim != 1 or mask.numel() != graph.x.size(0) or not mask.any():
         raise ValueError("Invalid teacher action mask.")
-    return {
+    signature = {
         "shape": list(graph.x.shape),
         "edges": graph.edge_index.detach().cpu().tolist(),
         "mask": mask.detach().cpu().tolist(),
     }
+    if getattr(graph, "edge_direction", None) is not None:
+        signature["edge_direction"] = graph.edge_direction.detach().cpu().tolist()
+    return signature
 
 
 def graph_signature_compatible(
@@ -219,6 +243,8 @@ def graph_signature_compatible(
     node on.
     """
     if candidate.get("shape") != reference.get("shape"):
+        return False
+    if candidate.get("edge_direction") != reference.get("edge_direction"):
         return False
     if candidate.get("edges") != reference.get("edges"):
         return False

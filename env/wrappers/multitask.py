@@ -126,7 +126,7 @@ class MultitaskWrapper(gym.Env):
         if not (isinstance(reference_obs, spaces.Dict) and isinstance(candidate_obs, spaces.Dict)):
             return False
         required = {"x", "edge_index"}
-        allowed = required | {"action_mask", "edge_role", "rigidity"}
+        allowed = required | {"action_mask", "edge_role", "edge_direction", "rigidity"}
         if not (
             required <= set(reference_obs.spaces) <= allowed
             and required <= set(candidate_obs.spaces) <= allowed
@@ -138,6 +138,13 @@ class MultitaskWrapper(gym.Env):
         candidate_edges = candidate_obs.spaces["edge_index"]
         reference_edge_role = reference_obs.spaces.get("edge_role")
         candidate_edge_role = candidate_obs.spaces.get("edge_role")
+        for field in ("edge_direction",):
+            left, right = reference_obs.spaces.get(field), candidate_obs.spaces.get(field)
+            if (left is None) != (right is None):
+                return False
+            if left is not None and (left.shape != (reference_edges.shape[1],)
+                                     or right.shape != (candidate_edges.shape[1],)):
+                return False
         reference_rigidity = reference_obs.spaces.get("rigidity")
         candidate_rigidity = candidate_obs.spaces.get("rigidity")
         return (

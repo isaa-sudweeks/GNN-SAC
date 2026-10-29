@@ -26,7 +26,7 @@ from common.graph_transforms import (
 
 
 _GIB = 1024 ** 3
-_SUPPORTED_GRAPH_FIELDS = {"x", "edge_index", "action_mask", "rigidity", "edge_role"}
+_SUPPORTED_GRAPH_FIELDS = {"x", "edge_index", "action_mask", "rigidity", "edge_role", "edge_direction"}
 
 
 @dataclass(frozen=True)
@@ -82,12 +82,15 @@ def build_graph_static(cfg, graph: Data, action: torch.Tensor) -> dict:
         raise ValueError(f"Tensor replay does not support graph fields: {sorted(extra)!r}.")
     mask = getattr(graph, "action_mask", None)
     role = getattr(graph, "edge_role", None)
+    direction = getattr(graph, "edge_direction", None)
     rigidity = getattr(graph, "rigidity", None)
     template = Data(x=torch.zeros_like(graph.x), edge_index=graph.edge_index.detach().clone())
     if mask is not None:
         template.action_mask = mask.detach().clone().bool()
     if role is not None:
         template.edge_role = role.detach().clone().long()
+    if direction is not None:
+        template.edge_direction = direction.detach().clone().float()
     if rigidity is not None:
         template.rigidity = torch.zeros_like(torch.as_tensor(rigidity).reshape(1)).float()
     prepared = prepare_graph(
@@ -102,6 +105,7 @@ def build_graph_static(cfg, graph: Data, action: torch.Tensor) -> dict:
         "edge_index": graph.edge_index.detach().cpu().long().contiguous(),
         "action_mask": None if mask is None else mask.detach().cpu().bool().contiguous(),
         "edge_role": None if role is None else role.detach().cpu().long().contiguous(),
+        "edge_direction": None if direction is None else direction.detach().cpu().float().contiguous(),
         "has_rigidity": rigidity is not None,
         "prepared_edge_index": prepared.edge_index.detach().cpu().long().contiguous(),
         "prepared_action_mask": (
@@ -354,6 +358,12 @@ class _TensorTaskBuffer:
             raise ValueError("Replay observation edge-role field presence changed within a task.")
         if role is not None and not torch.equal(role.detach().cpu().long(), saved_role):
             raise ValueError("Replay observation edge roles changed within a task.")
+        direction = getattr(graph, "edge_direction", None)
+        saved_direction = self._static.get("edge_direction")
+        if (direction is None) != (saved_direction is None):
+            raise ValueError("Replay edge-direction field presence changed within a task.")
+        if direction is not None and not torch.equal(direction.detach().cpu().float(), saved_direction):
+            raise ValueError("Replay edge directions changed within a task.")
 
     def _require_finite(self, label, values) -> None:
         if bool(getattr(self.cfg, "finite_checks", True)):
@@ -394,7 +404,7 @@ class _TensorTaskBuffer:
         return self._num_eps
 
     def add_dense(self, transitions: Mapping[str, torch.Tensor], *, completed_episodes=0,
-                  edge_index=None, edge_role=None):
+                  edge_index=None, edge_role=None, edge_direction=None):
         """Insert a batch of same-topology transitions stored as dense tensors.
 
         ``transitions`` holds ``obs_x``/``next_obs_x`` ``[B, N, F]``,
@@ -418,10 +428,19 @@ class _TensorTaskBuffer:
                 action_mask=transitions["obs_action_mask"][0],
                 rigidity=transitions["obs_rigidity"][0],
             )
+            if edge_direction is not None:
+                template.edge_direction = torch.as_tensor(edge_direction)
             if edge_role is not None:
                 template.edge_role = torch.as_tensor(edge_role)
             self._initialize(template, transitions["action"][0])
         static = self._static
+        saved_direction = static.get("edge_direction")
+        if (edge_direction is None) != (saved_direction is None):
+            raise ValueError("Dense replay edge-direction metadata changed.")
+        if edge_direction is not None and not torch.equal(
+            torch.as_tensor(edge_direction).detach().cpu().float(), saved_direction
+        ):
+            raise ValueError("Dense replay edge directions changed.")
         if list(transitions["obs_x"].shape[1:]) != [static["raw_node_count"], static["raw_feature_dim"]]:
             raise ValueError("Replay observation topology or action ordering changed within a task.")
         if self._graph_signature is not None and (
@@ -743,7 +762,7 @@ class TensorGNNBuffer:
 
     supports_dense_insertion = True
 
-    def add_dense(self, task, transitions, *, completed_episodes=0, edge_index=None, edge_role=None):
+    def add_dense(self, task, transitions, *, completed_episodes=0, edge_index=None, edge_role=None, edge_direction=None):
         """Insert a dense batch of one task's transitions; see ``_TensorTaskBuffer.add_dense``."""
         if str(task) not in self._buffers:
             raise KeyError(f"Unknown replay task {task!r}; expected one of {self.task_names!r}.")
@@ -752,6 +771,7 @@ class TensorGNNBuffer:
             completed_episodes=completed_episodes,
             edge_index=edge_index,
             edge_role=edge_role,
+            edge_direction=edge_direction,
         )
         return self.num_eps
 
@@ -810,6 +830,7 @@ class TensorGNNBuffer:
         edge_index = static["edge_index"].to(device)
         action_mask = values.get("obs_action_mask", static["action_mask"])
         edge_role = static["edge_role"]
+        edge_direction = static.get("edge_direction")
         if action_mask is not None:
             action_mask = action_mask.to(device)
         if edge_role is not None:
@@ -820,6 +841,8 @@ class TensorGNNBuffer:
             graph = Data(x=x, edge_index=edge_index)
             if action_mask is not None:
                 graph.action_mask = action_mask[index] if action_mask.ndim == 2 else action_mask
+            if edge_direction is not None:
+                graph.edge_direction = edge_direction.to(device)
             if edge_role is not None:
                 graph.edge_role = edge_role
             if static["has_rigidity"]:

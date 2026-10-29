@@ -10,6 +10,8 @@ from gymnasium import spaces
 from env.mujoco_gen.topology_envs import (
     _broken_nodes_probability,
     _edge_roles_enabled,
+    _edge_direction_enabled,
+    control_edge_directions,
     _semantic_edge_roles,
     broken_node_regime_fraction,
     broken_node_regime_slots,
@@ -130,6 +132,7 @@ class MjxVectorGraphEnv(gym.Env):
         edge_index = get_edge_index(self.mj_model, graph_view="control")
         self._edge_index = torch.as_tensor(edge_index, dtype=torch.long)
         self._edge_role = None
+        self._edge_direction = None
         observation_spaces = {
                 "x": spaces.Box(
                     low=-np.inf,
@@ -161,6 +164,11 @@ class MjxVectorGraphEnv(gym.Env):
                 high=1,
                 shape=(edge_index.shape[1],),
                 dtype=np.int64,
+            )
+        if _edge_direction_enabled(cfg):
+            self._edge_direction = torch.as_tensor(control_edge_directions(self.mj_model))
+            observation_spaces["edge_direction"] = spaces.Box(
+                low=-1, high=1, shape=(edge_index.shape[1],), dtype=np.float32
             )
         self.observation_space = spaces.Dict(observation_spaces)
         self.action_space = spaces.Box(
@@ -320,6 +328,10 @@ class MjxVectorGraphEnv(gym.Env):
     def edge_role(self) -> torch.Tensor | None:
         return self._edge_role
 
+    @property
+    def edge_direction(self) -> torch.Tensor | None:
+        return self._edge_direction
+
     def batched_groups(self) -> list[tuple["MjxVectorGraphEnv", torch.Tensor]]:
         """Return ``(env, global_indices)`` pairs for tensor-batched collection."""
         return [(self, torch.arange(self.num_envs, dtype=torch.long))]
@@ -460,6 +472,9 @@ class MjxVectorGraphEnv(gym.Env):
         if self._edge_role is not None:
             for observation in observations:
                 observation["edge_role"] = self._edge_role
+        if self._edge_direction is not None:
+            for observation in observations:
+                observation["edge_direction"] = self._edge_direction
         return observations
 
     def _sample_broken_nodes(self, indices: Sequence[int]) -> None:

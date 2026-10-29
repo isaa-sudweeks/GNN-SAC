@@ -54,6 +54,7 @@ class GNNActorCritic(nn.Module):
         edge_channels = graph_edge_input_dim(
             use_edge_roles=feature_flags["use_edge_roles"],
             use_edge_distance=feature_flags["use_edge_distance"],
+            use_edge_direction=feature_flags["use_edge_direction"],
         )
 
         self._pi = gnn_layers.GNN(
