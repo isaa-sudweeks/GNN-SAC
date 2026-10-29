@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from omegaconf import OmegaConf
+from hydra import compose, initialize_config_dir
 
 ROOT = Path(__file__).resolve().parents[1]
 SAC_ROOT = ROOT / "sac"
@@ -265,10 +266,52 @@ class RandomPartitionTest(unittest.TestCase):
 
         self.assertEqual(len(jobs), 10)
         for job in jobs:
-            self.assertEqual(len(job["heldout_topologies"]), 2)
-            self.assertEqual(len(job["training_topologies"]), 8)
+            self.assertIn(len(job["heldout_topologies"]), (3, 4))
+            self.assertEqual(
+                len(job["training_topologies"]) + len(job["heldout_topologies"]), 19
+            )
             self.assertFalse(set(job["heldout_topologies"]) & set(job["training_topologies"]))
             self.assertFalse(set(job["training_topologies"]) & set(loaded["final_test"]))
+
+
+class DevelopmentPoolTest(unittest.TestCase):
+    def test_saved_teacher_preset_covers_every_fold_and_relocates_paths(self):
+        with initialize_config_dir(config_dir=str(ROOT / "config"), version_base=None):
+            for name in ("node_count_loso", "random_5fold", "farthest_point_5fold"):
+                definition = load_definition(name)
+                pool = {topology for group in definition["groups"].values() for topology in group}
+                for group in definition["groups"]:
+                    cfg = compose(config_name="config", overrides=[
+                        f"cross_validation={name}", f"cross_validation.held_out_group={group}",
+                        "sac_backend=gnn", "distillation=kl_paper_v4",
+                        "distillation.teacher_root=/tmp/relocated-teachers",
+                    ])
+                    resolve_cross_validation(cfg)
+                    self.assertTrue(cfg.distillation.enabled)
+                    self.assertEqual(cfg.distillation.pretrain_updates, 10000)
+                    self.assertEqual(set(cfg.distillation.teachers), pool)
+                    self.assertFalse(set(cfg.distillation.teachers) & set(definition["final_test"]))
+                    for topology in cfg.truss_topologies:
+                        path = Path(cfg.distillation.teachers[topology])
+                        self.assertTrue(str(path).startswith("/tmp/relocated-teachers/"))
+                        self.assertEqual(path.name, "step_10000000.pt")
+
+    def test_teacher_pool_and_reserved_seven_node_topologies(self):
+        loaded = load_definition("node_count_loso", ROOT / "config")
+        expected = {
+            "tetrahedron", "henneberg_n5_1tube_1", "octahedron",
+            "henneberg_n6_1tube_1", "henneberg_n6_1tube_2",
+            "henneberg_n6_2tube_1", "henneberg_n6_3tube_1",
+            "henneberg_n8_1tube_13", "henneberg_n8_1tube_57", "henneberg_n8_1tube_69",
+            "henneberg_n8_2tube_127", "henneberg_n8_2tube_134", "henneberg_n8_2tube_187",
+            "henneberg_n8_3tube_11", "henneberg_n8_3tube_34", "henneberg_n8_3tube_60",
+            "henneberg_n8_3tube_85", "usevitch_212365307", "usevitch_60243677150_p1",
+        }
+        pool = {topology for group in loaded["groups"].values() for topology in group}
+        self.assertEqual(pool, expected)
+        self.assertEqual(set(loaded["final_test"]), {
+            "henneberg_n7_1tube_3", "henneberg_n7_3tube_1", "usevitch_1514879",
+        })
 
 
 if __name__ == "__main__":
