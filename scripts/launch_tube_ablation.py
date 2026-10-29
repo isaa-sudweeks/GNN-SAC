@@ -150,7 +150,8 @@ def main() -> None:
         for directory in sorted(args.run_root.glob('truss-graph/*/seed_*/*/checkpoints')):
             if directory.parents[2].name not in {job['exp_name'] for job in jobs}:
                 continue
-            if not (directory / 'distillation.pt').exists():
+            if not any((directory / name).exists() for name in
+                       ('distillation_complete.pt', 'distillation.pt')):
                 continue
             output = directory.parent / 'tube_diagnostics.json'
             diagnostic = [sys.executable, str(ROOT / 'scripts/evaluate_routing_ablation.py'),

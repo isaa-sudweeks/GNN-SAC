@@ -40,6 +40,19 @@ def fixture():
 
 
 class TubeVirtualNodeTest(unittest.TestCase):
+    def test_optional_graph_features_and_generalist_tools_are_off_by_default(self):
+        from hydra import compose, initialize_config_dir
+
+        for backend in ("gnn", "padded_mlp"):
+            with self.subTest(backend=backend), initialize_config_dir(
+                config_dir=str(ROOT / 'config'), version_base=None
+            ):
+                cfg = compose(config_name='config', overrides=[f'sac_backend={backend}'])
+                self.assertFalse(any(graph_feature_flags(cfg).values()))
+                self.assertFalse(cfg.cross_validation.enabled)
+                self.assertFalse(cfg.distillation.enabled)
+                self.assertFalse(cfg.distillation.reconstruct_control_metadata)
+
     def test_membership_masks_features_and_global_isolation(self):
         raw = fixture()
         graph = prepare_graph(raw, **FLAGS)
@@ -200,7 +213,10 @@ class TubeVirtualNodeTest(unittest.TestCase):
                 self.assertEqual(trainer._step, 0 if offline_only else cfg.steps)
                 if offline_only:
                     self.assertEqual(trainer._optimizer_updates, 0)
-                    self.assertTrue((Path(cfg.work_dir) / 'checkpoints' / 'distillation.pt').exists())
+                    completion = Path(cfg.work_dir) / 'checkpoints' / 'distillation_complete.pt'
+                    self.assertTrue(completion.exists())
+                    saved = torch.load(completion, map_location='cpu', weights_only=False)
+                    self.assertEqual(saved['distillation']['stage'], 'complete')
                 else:
                     self.assertGreater(trainer._optimizer_updates, 0)
                 self.assertTrue(all(torch.isfinite(x).all() for x in agent.model.parameters()))

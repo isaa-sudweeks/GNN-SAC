@@ -27,7 +27,6 @@ from common.graph_transforms import (
     graph_structure_signature as graph_signature,
     physical_node_mask,
     policy_action_mask,
-    physical_node_mask,
     prepare_graph,
 )
 

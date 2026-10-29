@@ -61,7 +61,7 @@ slightly because input feature widths increase. No holdout-based checkpoint
 selection is performed.
 
 `distillation.offline_only=true` completes offline updates, evaluates the initial
-policy, writes `checkpoints/distillation.pt`, and finishes without SAC transitions.
+policy, writes `checkpoints/distillation_complete.pt`, and finishes without SAC transitions.
 The configured online budget stays 2,000,010 so the KL schedule and run configuration
 remain matched to the online protocol. The default teacher paths are defined in
 `config/distillation/kl_paper_v4.yaml`.

@@ -49,6 +49,15 @@ class RoutingExperimentTest(unittest.TestCase):
             self.assertEqual([(stage, path.name) for stage, path in select_checkpoints(root)], [
                 ('offline', 'distillation.pt'), ('800k', 'step_800190.pt'), ('final', 'step_2000010.pt')])
 
+    def test_checkpoint_selection_prefers_completed_offline_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ('distillation.pt', 'distillation_complete.pt', 'distillation_100.pt'):
+                (root / name).touch()
+            self.assertEqual([(stage, path.name) for stage, path in select_checkpoints(root)], [
+                ('distillation_100', 'distillation_100.pt'),
+                ('offline', 'distillation_complete.pt')])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -55,7 +55,9 @@ def select_checkpoints(directory: Path) -> list[tuple[str,Path]]:
                  if p.stem.removeprefix('distillation_').isdigit()]
     for p in sorted(snapshots, key=lambda p: int(p.stem.removeprefix('distillation_'))):
         result.append((p.stem, p))
-    offline=directory/'distillation.pt'
+    offline=directory/'distillation_complete.pt'
+    if not offline.exists():
+        offline=directory/'distillation.pt'
     if offline.exists():result.append(('offline',offline))
     numbered=sorted((int(p.stem.removeprefix('step_')),p) for p in directory.glob('step_*.pt') if not p.name.endswith('.agent.pt'))
     for label,target in [('800k',800000),('final',2000010)]:
