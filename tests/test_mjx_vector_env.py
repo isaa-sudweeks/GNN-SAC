@@ -193,6 +193,7 @@ class MjxVectorEnvTest(unittest.TestCase):
                 "node_roles": True,
                 "edge_roles": True,
                 "edge_distance": True,
+                "edge_direction": True,
             },
         )
         env = make_env(cfg)
@@ -204,7 +205,8 @@ class MjxVectorEnvTest(unittest.TestCase):
                 (observation.edge_index.shape[1],),
             )
             self.assertEqual(cfg.effective_node_feature_dim, 10)
-            self.assertEqual(cfg.edge_feature_dim, 4)
+            self.assertEqual(cfg.edge_feature_dim, 5)
+            self.assertEqual(observation.edge_direction.shape, observation.edge_role.shape)
 
             agent = GNNSAC(cfg)
             action = agent.act(observation, eval_mode=True)

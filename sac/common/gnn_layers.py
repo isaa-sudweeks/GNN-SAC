@@ -217,6 +217,7 @@ class Q_GNN(GNN):
         physical_mask=None,
         edge_attr=None,
         num_graphs=None,
+        global_mask=None,
     ):
         x = super().forward(x, edge_index, edge_attr)
         if batch is None:
@@ -240,11 +241,9 @@ class Q_GNN(GNN):
             if self.critic_readout == "physical_mean":
                 readout = physical_mean
             else:
-                # ``prepare_graph`` appends exactly one virtual node to every
-                # graph. Batched boolean indexing therefore returns virtual
-                # embeddings in graph order without a pooling reduction or a
-                # GPU-to-host synchronization in this training hot path.
-                virtual_node = x[~physical_mask]
+                # Tube graphs explicitly identify the single global readout node.
+                # Legacy graphs contain only one architectural node per graph.
+                virtual_node = x[~physical_mask if global_mask is None else global_mask.bool()]
                 if self.critic_readout == "virtual_node":
                     readout = virtual_node
                 else:

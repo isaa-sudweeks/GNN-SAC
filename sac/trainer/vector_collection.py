@@ -52,8 +52,12 @@ class VectorBucket:
                 action_mask=self.obs["action_mask"][0],
                 rigidity=self.obs["rigidity"][0],
             )
+            if getattr(self.env, "edge_direction", None) is not None:
+                template.edge_direction = self.env.edge_direction
             if self.env.edge_role is not None:
                 template.edge_role = self.env.edge_role
+            for key, value in getattr(self.env, "tube_physics_metadata", {}).items():
+                template[key] = value
             action = torch.zeros(self.obs["x"].size(1), 1)
             static = build_graph_static(cfg, template, action)
             self._static = {

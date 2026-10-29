@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import copy, deepcopy
 import hashlib
 import json
 import math
@@ -15,6 +16,7 @@ from torch_geometric.data import Batch, Data
 from torch_geometric.nn import global_mean_pool
 
 from env.mujoco_gen.topology_envs import base_regime_task, is_broken_regime_task
+from env.mujoco_gen.tube_physics import TUBE_PHYSICS_FIELDS
 
 from common.gnn_actor_critic import GNNActorCritic
 from common.padded_mlp_actor_critic import PaddedMLPActorCritic
@@ -23,8 +25,8 @@ from common.graph_transforms import (
     graph_feature_schema,
     graph_signature_compatible,
     graph_structure_signature as graph_signature,
-    policy_action_mask,
     physical_node_mask,
+    policy_action_mask,
     prepare_graph,
 )
 
@@ -98,6 +100,10 @@ def replay_observations(replay: dict):
                     if replay_format >= 4 and "obs_action_mask" in fields
                     else static["action_mask"]
                 )
+            if static.get("edge_direction") is not None:
+                graph.edge_direction = static["edge_direction"]
+            for key, value in static.get("tube_physics_metadata", {}).items():
+                graph[key] = value
             if static["edge_role"] is not None:
                 graph.edge_role = static["edge_role"]
             if static["has_rigidity"]:
@@ -133,6 +139,61 @@ def replay_contract_observation(replay: dict, first: Data) -> Data:
     contract = first.clone()
     contract.action_mask = base_mask.detach().clone().bool()
     return contract
+
+
+def attach_control_metadata(graph: Data, metadata: dict[str, torch.Tensor]) -> Data:
+    """Add validated static metadata without mutating teacher replay tensors."""
+    if not metadata:
+        return graph
+    result = copy(graph)
+    for key, value in metadata.items():
+        existing = getattr(graph, key, None)
+        if existing is not None and not torch.equal(existing.cpu(), value.cpu()):
+            raise ValueError(f"Teacher replay {key} disagrees with reconstructed metadata.")
+        result[key] = value.to(graph.x.device)
+    return result
+
+
+def reconstruct_control_metadata(teacher_cfg, student_cfg, graph: Data) -> dict[str, torch.Tensor]:
+    """Recover missing edge semantics from a verified teacher control graph.
+
+    Never infer signs from replay geometry. Fail on ordered topology, mask, or
+    existing-metadata disagreement; no held-out teacher is opened here.
+    """
+    from env.mujoco_gen.topology_envs import MujocoPresetGraphEnv
+    flags = graph_feature_flags(student_cfg)
+    if flags["use_tube_physics"]:
+        parameters = _get(teacher_cfg, "domain_randomization_params", {})
+        noise = _get(parameters, "observation_noise", {})
+        scale = _get(parameters, "length_scale", {})
+        if bool(_get(teacher_cfg, "domain_randomization", False)) and (
+                bool(_get(scale, "enabled", True)) or
+                (bool(_get(noise, "enabled", False)) and float(_get(noise, "std", 0)) > 0)):
+            raise ValueError("Tube physics requires clean, fixed-scale replay. Prepare shared clean teacher replay first.")
+    if not (flags["use_edge_roles"] or flags["use_edge_direction"]):
+        return {}
+    if not bool(_get(teacher_cfg, "use_control_graph", False)):
+        raise ValueError("Metadata reconstruction requires a control-graph teacher.")
+    config = deepcopy(vars(teacher_cfg) if not isinstance(teacher_cfg, dict) else teacher_cfg)
+    config.update(domain_randomization=False, mujoco_backend="mujoco", sim_backend="mujoco")
+    config["graph_features"] = dict(node_roles=False, edge_distance=False,
+                                    edge_roles=flags["use_edge_roles"],
+                                    edge_direction=flags["use_edge_direction"],
+                                    tube_physics=flags["use_tube_physics"])
+    env = MujocoPresetGraphEnv(config)
+    try:
+        observation, _ = env.reset(seed=0)
+        if (tuple(observation["x"].shape) != tuple(graph.x.shape)
+                or not torch.equal(torch.as_tensor(observation["edge_index"]), graph.edge_index.cpu())
+                or not torch.equal(torch.as_tensor(observation["action_mask"]).bool(),
+                                   policy_action_mask(graph).cpu())):
+            raise ValueError("Reconstructed teacher control graph differs from replay ordering or mask.")
+        metadata = {key: torch.as_tensor(observation[key])
+                    for key in ("edge_role", "edge_direction", *TUBE_PHYSICS_FIELDS) if key in observation}
+        attach_control_metadata(graph, metadata)
+        return metadata
+    finally:
+        env.close()
 
 
 TARGET_CACHE_FORMAT = "gnn-sac-distillation-targets-v3"
@@ -204,7 +265,7 @@ def _validate_action_alignment(teacher_graph: Data, student_graph: Data) -> None
             or not torch.equal(teacher_edges, student_edges)
             or not torch.equal(teacher_mask, student_mask)):
         raise ValueError(
-            "Teacher and student graph views differ in topology or policy action ordering."
+            "Teacher and student graph views differ in physical topology or policy action ordering."
         )
 
 
@@ -286,6 +347,8 @@ class ObservationShards:
             batch=torch.arange(count).repeat_interleave(nodes),
             ptr=torch.arange(0, (count + 1) * nodes, nodes),
         )
+        if "global_node_mask" in self.static:
+            kwargs["global_node_mask"] = self.static["global_node_mask"].repeat(count)
         if "physical_node_mask" in self.static:
             kwargs["physical_node_mask"] = self.static["physical_node_mask"].repeat(count)
         if "edge_attr" in shard:
@@ -358,6 +421,9 @@ class ObservationShards:
                 current_static = {
                     "edge_index": first.edge_index.cpu().contiguous(),
                 }
+                global_mask = getattr(first, "global_node_mask", None)
+                if global_mask is not None:
+                    current_static["global_node_mask"] = global_mask.cpu().contiguous()
                 physical = getattr(first, "physical_node_mask", None)
                 if physical is not None:
                     current_static["physical_node_mask"] = physical.cpu().contiguous()
@@ -387,8 +453,8 @@ class ObservationShards:
                     for row, (mask, row_mean, row_log_std) in enumerate(zip(
                         masks, mean.split(counts), log_std.split(counts)
                     )):
-                        padded_mean[row, mask] = row_mean
-                        padded_log_std[row, mask] = row_log_std
+                        padded_mean[row, mask.nonzero().flatten()] = row_mean
+                        padded_log_std[row, mask.nonzero().flatten()] = row_log_std
                     means.append(padded_mean.cpu())
                     log_stds.append(padded_log_std.cpu())
                 payload = {
@@ -485,6 +551,7 @@ class Distillation:
         self.datasets, self.sources = {}, {}
         self.schema_pairs = {}
         self.policy_contracts = {}
+        self.control_metadata = {}
         self._dataset_plans = {}
         self.replay_signatures = {}
         self._replay_contracts_bound = False
@@ -547,6 +614,13 @@ class Distillation:
                     replay = replay["buffers"][matching[0]]
                 first = next(replay_observations(replay))
                 contract_observation = replay_contract_observation(replay, first)
+                if bool(_get(options, "reconstruct_control_metadata", False)):
+                    self.control_metadata[task] = reconstruct_control_metadata(
+                        teacher_cfg, cfg, contract_observation
+                    )
+                    contract_observation = attach_control_metadata(
+                        contract_observation, self.control_metadata[task]
+                    )
                 signature = graph_signature(contract_observation)
                 if first.x.size(1) != int(cfg.obs_dim):
                     raise ValueError("Teacher replay observation width differs from student.")
@@ -566,12 +640,17 @@ class Distillation:
                         "use_virtual_node": bool(_get(self.cfg, "use_virtual_node", False)),
                         "policy_contracts": self.policy_contracts[task],
                     }
+                    if self.control_metadata.get(task):
+                        contract["reconstructed_control_metadata"] = {
+                            key: value.tolist() for key, value in self.control_metadata[task].items()
+                        }
                     contract_hash = hashlib.sha256(
                         json.dumps(contract, sort_keys=True).encode()
                     ).hexdigest()[:16]
                     directory = cache / f"{digest}-targets-v3-{contract_hash}-s{shard_size}"
                     if (self._legacy_gnn_contract(task)
-                            and self.schema_pairs[task]["teacher"] == self.schema_pairs[task]["student"]):
+                            and self.schema_pairs[task]["teacher"] == self.schema_pairs[task]["student"]
+                            and not self.control_metadata.get(task)):
                         legacy_contract = {
                             "format": TARGET_CACHE_FORMAT,
                             "source_sha256": digest,
@@ -607,7 +686,8 @@ class Distillation:
     def _prepare_dataset(self, task: str, observations) -> ObservationShards:
         plan = self._dataset_plans[task]
         return ObservationShards.prepare(
-            plan["directory"], observations, plan["shard_size"], plan["contract"],
+            plan["directory"], (attach_control_metadata(g, self.control_metadata.get(task, {}))
+                                for g in observations), plan["shard_size"], plan["contract"],
             self.teachers[task], lambda graph: self.prepare_teacher(task, graph),
             self.device, plan["target_batch_size"],
             student_prepare_graph_fn=self.prepare_student,

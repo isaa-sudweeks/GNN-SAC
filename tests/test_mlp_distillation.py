@@ -199,6 +199,37 @@ class MLPDistillationTest(unittest.TestCase):
                 distill.target_loss(student.model, batch, tm, tl),
             )
 
+    def test_tube_node_teacher_distills_into_physical_only_padded_student(self):
+        from tests.test_tube_virtual_nodes import fixture
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = student_config(tmp, obs_dim=3, padded_mlp_max_nodes=6,
+                                 truss_topologies=["a"], tasks=["truss-graph:a"])
+            teacher_cfg = student_config(
+                tmp, sac_backend="gnn", obs_dim=3, use_virtual_node=True,
+                truss_topology="a", truss_topologies=None, tasks=["truss-graph"],
+                graph_features=dict(tube_nodes=True, edge_roles=True, edge_direction=True),
+            )
+            teacher = GNNSAC(teacher_cfg)
+            raw = [fixture() for _ in range(3)]
+            path = Path(tmp) / "tube-teacher.pt"
+            torch.save(dict(config=vars(teacher_cfg), agent=teacher.training_state_dict(),
+                            buffer=dict(capacity=3, size=3, idx=0, obs=raw)), path)
+            cfg.distillation["teachers"] = {"a": str(path)}
+            distill = Distillation(cfg, cfg.tasks)
+            self.addCleanup(lambda: [dataset.close() for dataset in distill.datasets.values()])
+            task = cfg.tasks[0]
+            batch, tm, tl = distill.datasets[task].resolve(
+                {"shard": 0, "indices": [0, 1]}, torch.device("cpu")
+            )
+            self.assertEqual(batch.x.shape, (12, 3))
+            self.assertEqual(distill.prepare_teacher(task, raw[0]).num_nodes, 9)
+            student = PaddedMLPSAC(cfg)
+            torch.testing.assert_close(
+                distill.loss(student.model, task, batch, raw[:2]),
+                distill.target_loss(student.model, batch, tm, tl),
+            )
+
     def test_offline_kl_decreases_without_changing_critics_alpha_or_teachers(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg, distill, _ = setup(tmp, backend="padded_mlp", lr=2e-3)

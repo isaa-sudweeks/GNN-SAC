@@ -196,8 +196,8 @@ class GNNSAC(torch.nn.Module):
             saved_schema = state_dict.get("graph_feature_schema")
         expected_schema = graph_feature_schema(self.cfg)
         features_enabled = any(
-            expected_schema[name]
-            for name in ("node_roles", "edge_roles", "edge_distance")
+            expected_schema.get(name, False)
+            for name in ("node_roles", "edge_roles", "edge_distance", "edge_direction")
         )
         if saved_schema is None:
             if features_enabled:

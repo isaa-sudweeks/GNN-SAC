@@ -28,6 +28,22 @@ For cross-validation, use the existing `cross_validation` overrides **instead
 of** setting `truss_topologies`. Supply a mapping covering every possible
 training topology; the resolved fold controls which entries are used.
 
+For the completed paper-v4 development experts on ORC, use the saved preset
+instead of typing the mapping:
+
+```bash
+uv run python scripts/launch_cross_validation.py cross_validation=node_count_loso \
+  --seeds 1,2,3 platform=supercomputer distillation=kl_paper_v4
+```
+
+`config/distillation/kl_paper_v4.yaml` inherits the `kl` schedule and maps all
+19 development topologies to pinned full `step_10000000.pt` checkpoints. It uses
+seed 1 except for octahedron, which uses seed 3; selection is independent of CV
+student seed. The three reserved seven-node topologies are absent. The same
+preset covers `random_5fold` and `farthest_point_5fold`. Paths refer to the ORC
+checkpoint tree, so copy that tree or override
+`distillation.teacher_root=/path/to/truss-graph` when running elsewhere.
+
 The `distillation=kl` preset performs 10,000 offline updates, using 256
 observations per topology per update. Then ordinary online SAC begins with
 an actor KL weight of 1, decaying linearly to zero over half of `cfg.steps`.
@@ -206,7 +222,16 @@ action mask and edge distance uses observed xyz coordinates. Edge roles require
 used for an offline student that requires edge roles. Likewise, online teacher
 edge roles require the student's raw replay to retain them. Missing metadata
 fails during compatibility validation with the affected policy and schema.
-Distillation never guesses semantic roles.
+Distillation never guesses semantic roles. With the explicit opt-in
+`distillation.reconstruct_control_metadata=true`, it can instead rebuild the
+teacher control graph from the checkpoint configuration and verify its exact
+ordered adjacency, observation shape, base action mask, and any existing metadata
+against replay before adding roles or routing signs. This supports legacy teacher
+replays without those fields. Reconstructed values are fingerprinted in the cache
+contract; teacher network inputs/targets retain their own saved feature schema.
+No held-out teachers are used by training. The separate read-only development
+diagnostic script described in [routing_ablation.md](routing_ablation.md) opens
+held-out teachers for evaluation only.
 
 Target-cache contracts include both feature schemas, both prepared graph
 signatures and complete policy input contracts, so incompatible pairs cannot
@@ -238,3 +263,13 @@ replay/shard handling, held-out exclusion, both actor optimizers, zero-weight
 baseline equivalence, offline resume, and a short two-topology native MuJoCo
 training smoke test using generated fixture teachers. This validates mechanics;
 it does not establish transfer performance for trained specialist checkpoints.
+
+Students may also enable `graph_features.edge_direction=true` while keeping
+legacy teachers unchanged. This adds signed actuator-routing metadata to edge
+features, not an action-space or controller change. Metadata reconstruction is
+required if those teacher replays did not retain the field.
+
+`distillation.offline_only=true` stops after offline pretraining, deterministic
+evaluation, and saving `checkpoints/distillation_complete.pt`, without SAC transitions.
+It requires enabled distillation. The tube-membership screen uses this mode; see
+[tube virtual nodes](tube_virtual_nodes.md).
