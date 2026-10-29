@@ -48,6 +48,8 @@
 - [mlp_paper_readiness.md](plans/mlp_paper_readiness.md): MLP audit, distillation
   gaps, implementation phases and paper launch acceptance gates
 - [domain_randomization_test_plan.md](plans/domain_randomization_test_plan.md)
+- [tube_virtual_nodes.md](plans/tube_virtual_nodes.md): simulator audit and proposed
+  tube-specific aggregation-node experiment
 
 ## Archive
 
