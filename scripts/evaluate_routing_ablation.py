@@ -39,6 +39,7 @@ def replay_samples(replay: dict, count: int, seed: int) -> list[Data]:
         if mask is not None:graph.action_mask=mask.clone()
         for key in ('edge_role','edge_direction'):
             if static.get(key) is not None:graph[key]=static[key]
+        for key, value in static.get('tube_physics_metadata', {}).items():graph[key]=value
         if static['has_rigidity']:graph.rigidity=fields['obs_rigidity'][i].clone()
         result.append(graph)
     return result
@@ -50,6 +51,10 @@ def prepared(config, graph):
 
 def select_checkpoints(directory: Path) -> list[tuple[str,Path]]:
     result=[]
+    snapshots = [p for p in directory.glob('distillation_*.pt')
+                 if p.stem.removeprefix('distillation_').isdigit()]
+    for p in sorted(snapshots, key=lambda p: int(p.stem.removeprefix('distillation_'))):
+        result.append((p.stem, p))
     offline=directory/'distillation.pt'
     if offline.exists():result.append(('offline',offline))
     numbered=sorted((int(p.stem.removeprefix('step_')),p) for p in directory.glob('step_*.pt') if not p.name.endswith('.agent.pt'))
@@ -66,13 +71,14 @@ def evaluate_checkpoint(path: Path, samples: int=256, episodes: int=5) -> dict:
     config=deepcopy(state['config']);config['device']='cpu';cfg=SimpleNamespace(**config)
     student=GNNActorCritic(cfg);student.load_state_dict(state['agent']['model']);student.eval()
     step=int(state.get('trainer',{}).get('step',0))
+    offline_updates=int(state.get('distillation',{}).get('completed_updates',0))
     final_test=set(config.get('cross_validation',{}).get('final_test',[]))
     heldout=list(config.get('eval_extra_topologies') or [])
     if (not heldout or set(heldout)&final_test
             or set(heldout)&set(config.get('truss_topologies') or [])):
         raise ValueError('Diagnostics require development holdouts and must exclude final_test.')
     del state
-    result=dict(checkpoint=str(path),step=step,seed=cfg.seed,topologies={},
+    result=dict(checkpoint=str(path),step=step,offline_updates=offline_updates,seed=cfg.seed,topologies={},
                 replay_sampling_seed=314159,reset_seeds=list(range(1000,1000+episodes)),
                 rollout_protocol='Native MuJoCo; configured reset randomization; clean observations/actions (no wrapper noise).')
     for topology in heldout:

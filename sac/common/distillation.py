@@ -16,6 +16,7 @@ from torch_geometric.data import Batch, Data
 from torch_geometric.nn import global_mean_pool
 
 from env.mujoco_gen.topology_envs import base_regime_task, is_broken_regime_task
+from env.mujoco_gen.tube_physics import TUBE_PHYSICS_FIELDS
 
 from common.gnn_actor_critic import GNNActorCritic
 from common.padded_mlp_actor_critic import PaddedMLPActorCritic
@@ -24,6 +25,7 @@ from common.graph_transforms import (
     graph_feature_schema,
     graph_signature_compatible,
     graph_structure_signature as graph_signature,
+    physical_node_mask,
     policy_action_mask,
     physical_node_mask,
     prepare_graph,
@@ -101,6 +103,8 @@ def replay_observations(replay: dict):
                 )
             if static.get("edge_direction") is not None:
                 graph.edge_direction = static["edge_direction"]
+            for key, value in static.get("tube_physics_metadata", {}).items():
+                graph[key] = value
             if static["edge_role"] is not None:
                 graph.edge_role = static["edge_role"]
             if static["has_rigidity"]:
@@ -159,6 +163,14 @@ def reconstruct_control_metadata(teacher_cfg, student_cfg, graph: Data) -> dict[
     """
     from env.mujoco_gen.topology_envs import MujocoPresetGraphEnv
     flags = graph_feature_flags(student_cfg)
+    if flags["use_tube_physics"]:
+        parameters = _get(teacher_cfg, "domain_randomization_params", {})
+        noise = _get(parameters, "observation_noise", {})
+        scale = _get(parameters, "length_scale", {})
+        if bool(_get(teacher_cfg, "domain_randomization", False)) and (
+                bool(_get(scale, "enabled", True)) or
+                (bool(_get(noise, "enabled", False)) and float(_get(noise, "std", 0)) > 0)):
+            raise ValueError("Tube physics requires clean, fixed-scale replay. Prepare shared clean teacher replay first.")
     if not (flags["use_edge_roles"] or flags["use_edge_direction"]):
         return {}
     if not bool(_get(teacher_cfg, "use_control_graph", False)):
@@ -167,7 +179,8 @@ def reconstruct_control_metadata(teacher_cfg, student_cfg, graph: Data) -> dict[
     config.update(domain_randomization=False, mujoco_backend="mujoco", sim_backend="mujoco")
     config["graph_features"] = dict(node_roles=False, edge_distance=False,
                                     edge_roles=flags["use_edge_roles"],
-                                    edge_direction=flags["use_edge_direction"])
+                                    edge_direction=flags["use_edge_direction"],
+                                    tube_physics=flags["use_tube_physics"])
     env = MujocoPresetGraphEnv(config)
     try:
         observation, _ = env.reset(seed=0)
@@ -177,7 +190,7 @@ def reconstruct_control_metadata(teacher_cfg, student_cfg, graph: Data) -> dict[
                                    policy_action_mask(graph).cpu())):
             raise ValueError("Reconstructed teacher control graph differs from replay ordering or mask.")
         metadata = {key: torch.as_tensor(observation[key])
-                    for key in ("edge_role", "edge_direction") if key in observation}
+                    for key in ("edge_role", "edge_direction", *TUBE_PHYSICS_FIELDS) if key in observation}
         attach_control_metadata(graph, metadata)
         return metadata
     finally:
@@ -253,7 +266,7 @@ def _validate_action_alignment(teacher_graph: Data, student_graph: Data) -> None
             or not torch.equal(teacher_edges, student_edges)
             or not torch.equal(teacher_mask, student_mask)):
         raise ValueError(
-            "Teacher and student graph views differ in topology or policy action ordering."
+            "Teacher and student graph views differ in physical topology or policy action ordering."
         )
 
 
@@ -335,6 +348,8 @@ class ObservationShards:
             batch=torch.arange(count).repeat_interleave(nodes),
             ptr=torch.arange(0, (count + 1) * nodes, nodes),
         )
+        if "global_node_mask" in self.static:
+            kwargs["global_node_mask"] = self.static["global_node_mask"].repeat(count)
         if "physical_node_mask" in self.static:
             kwargs["physical_node_mask"] = self.static["physical_node_mask"].repeat(count)
         if "edge_attr" in shard:
@@ -407,6 +422,9 @@ class ObservationShards:
                 current_static = {
                     "edge_index": first.edge_index.cpu().contiguous(),
                 }
+                global_mask = getattr(first, "global_node_mask", None)
+                if global_mask is not None:
+                    current_static["global_node_mask"] = global_mask.cpu().contiguous()
                 physical = getattr(first, "physical_node_mask", None)
                 if physical is not None:
                     current_static["physical_node_mask"] = physical.cpu().contiguous()
@@ -436,8 +454,8 @@ class ObservationShards:
                     for row, (mask, row_mean, row_log_std) in enumerate(zip(
                         masks, mean.split(counts), log_std.split(counts)
                     )):
-                        padded_mean[row, mask] = row_mean
-                        padded_log_std[row, mask] = row_log_std
+                        padded_mean[row, mask.nonzero().flatten()] = row_mean
+                        padded_log_std[row, mask.nonzero().flatten()] = row_log_std
                     means.append(padded_mean.cpu())
                     log_stds.append(padded_log_std.cpu())
                 payload = {

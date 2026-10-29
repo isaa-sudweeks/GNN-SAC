@@ -128,6 +128,13 @@ six per-node values (relative position and velocity):
 | `node_roles` | `[actuated, passive]` one-hot per node |
 | `edge_roles` | `[tube, connector, virtual]` one-hot per directed edge |
 | `edge_distance` | Endpoint distance per edge |
+| `edge_direction` | Signed controller incidence per directed edge |
+| `tube_nodes` | One aggregation hub per structural tube, plus membership edges |
+| `tube_physics` | Segment count, fixed reference length, length ratio and residual on tube hubs |
+
+Tube physics requires validated simulator metadata and clean, fixed-scale replay.
+Use the [three-arm launcher](tube_virtual_nodes.md#run-the-three-arm-physics-screen)
+to prepare matched data for all arms.
 
 Checkpoints record the feature schema, so a checkpoint can only be loaded with
 the same flags it was trained with.

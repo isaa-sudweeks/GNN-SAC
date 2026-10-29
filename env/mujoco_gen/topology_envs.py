@@ -35,7 +35,10 @@ def _cfg_get(config, name, default=None):
 
 def _edge_roles_enabled(config) -> bool:
     features = _cfg_get(config, "graph_features", {})
-    return bool(_cfg_get(features, "edge_roles", False))
+    tubes = bool(_cfg_get(features, "tube_nodes", False))
+    if tubes and not bool(_cfg_get(config, "use_control_graph", False)):
+        raise ValueError("Tube nodes require use_control_graph=true.")
+    return bool(_cfg_get(features, "edge_roles", False)) or tubes
 
 
 def _edge_direction_enabled(config) -> bool:
@@ -750,6 +753,7 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
             )
 
     def _define_observation_space(self):
+        from env.mujoco_gen.tube_physics import build_tube_physics_metadata, tube_physics_enabled
         edge_index = get_edge_index(self.mj_model, graph_view=self._graph_view())
         observation_spaces = {
                 "x": spaces.Box(
@@ -772,6 +776,15 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
                     dtype=np.float32,
                 ),
             }
+        self.tube_physics_metadata = {}
+        if tube_physics_enabled(self.source_config):
+            if resolve_truss_realistic(self.source_config):
+                raise ValueError("Tube physics reconstruction requires abstract models; connector-ball observations omit tendon sites.")
+            self.tube_physics_metadata = build_tube_physics_metadata(
+                self.mj_model, edge_index, _semantic_edge_roles(self.mj_model, graph_view=self._graph_view()),
+                normalized=bool(self.config.normalize_observations))
+            for key, value in self.tube_physics_metadata.items():
+                observation_spaces[key] = spaces.Box(-np.inf, np.inf, shape=value.shape, dtype=np.float32)
         if _edge_roles_enabled(self.source_config):
             observation_spaces["edge_role"] = spaces.Box(
                 low=0,
@@ -877,6 +890,7 @@ class MujocoPresetGraphEnv(FirstNonRigidEigenvalueRewardMixin, MujocoRelativeObs
             )
         if _edge_direction_enabled(self.source_config):
             observation["edge_direction"] = control_edge_directions(self.mj_model)
+        observation.update(self.tube_physics_metadata)
         return observation
 
     def step(self, action):

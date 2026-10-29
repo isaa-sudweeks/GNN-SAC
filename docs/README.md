@@ -21,12 +21,15 @@
   random-fold, and farthest-point morphology-cluster cross-validation
 - [distillation.md](usage/distillation.md): multi-teacher Gaussian KL
   distillation into GNN or padded MLP students, offline-only and online modes
+- [teacher_student_diagnostic.md](usage/teacher_student_diagnostic.md): matched
+  teacher, separate-student and shared-student fidelity experiment
 - [replay.md](usage/replay.md): tensor vs legacy replay, storage placement,
   checkpoint conversion
 - [padded_mlp_baseline.md](usage/padded_mlp_baseline.md): fixed-width MLP
   comparison baseline
 - [scripts.md](usage/scripts.md): launch, validation, benchmark, and figure scripts
 
+- [tube_virtual_nodes.md](usage/tube_virtual_nodes.md): tube membership screen and launch commands
 - [routing_ablation.md](usage/routing_ablation.md): controlled signed-routing
   experiment and read-only development diagnostics
 
