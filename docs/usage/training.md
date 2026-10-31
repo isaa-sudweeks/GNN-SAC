@@ -47,7 +47,7 @@ optimizer update per collected transition.
 
 ## Discount factor
 
-`discount` defaults to `0.995` (`config/algorithm.yaml`). Set `discount=null` to
+`discount` defaults to `0.95` (`config/algorithm.yaml`). Set `discount=null` to
 derive it from `episode_length` instead: `(frac - 1) / frac` with
 `frac = episode_length / discount_denom`, clipped to
 `[discount_min, discount_max]`. With the default `max_steps=1000` that gives

@@ -30,9 +30,9 @@ def agent_stub(agent_cls, **overrides):
 
 
 class DiscountTest(unittest.TestCase):
-    def test_algorithm_config_defaults_to_0_995(self):
+    def test_algorithm_config_defaults_to_0_95(self):
         algorithm_cfg = OmegaConf.load(ROOT / "config" / "algorithm.yaml")
-        self.assertEqual(algorithm_cfg.discount, 0.995)
+        self.assertEqual(algorithm_cfg.discount, 0.95)
 
     def test_explicit_discount_overrides_heuristic(self):
         for agent_cls in (SAC, GNNSAC):

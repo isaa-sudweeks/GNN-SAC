@@ -11,6 +11,7 @@ signed routing, tube nodes and tube physics remain disabled by default.
 | `main` | Integrated project development. |
 | `codex/paper-expert-comparison` | Ongoing paper configurations, evaluation and reproduction work. This branch can advance. |
 | `paper-experts-v1` | Annotated, fixed code-baseline tag. Never move or overwrite it. |
+| `paper-experts-v2` | Updated code baseline restoring the default SAC discount to `0.95`. |
 
 The first tag records the integrated, locally tested code baseline: 424 tests
 passed and two CUDA-only tests were skipped. It does not assert GPU qualification,
@@ -18,6 +19,10 @@ choose the final morphology set or establish any paper result. The run protocol
 and GPU pilots in [the baseline plan](../plans/paper_expert_baseline.md) are still
 required before production. If subsequent fixes are needed, create a new version
 such as `paper-experts-v2`; keep the original tag and existing run records.
+
+`paper-experts-v2` restores `discount=0.95` in `config/algorithm.yaml`.
+Runs made with the previous default retain their original configuration and
+source identity; this version does not establish new experimental results.
 
 The paper branch and annotated tag are published on the project
 [GitHub repository](https://github.com/isaa-sudweeks/GNN-SAC).
