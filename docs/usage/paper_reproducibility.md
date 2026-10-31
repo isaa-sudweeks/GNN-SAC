@@ -24,6 +24,11 @@ such as `paper-experts-v2`; keep the original tag and existing run records.
 Runs made with the previous default retain their original configuration and
 source identity; this version does not establish new experimental results.
 
+`paper-experts-v3` retains v2 and sets `critical_eig_threshold=0.01` in
+`config/environment.yaml` and the environment-construction fallback. Collapse
+termination occurs below 1% of initial rigidity. Existing runs retain their
+original thresholds and source identities; this version adds no new results.
+
 The paper branch and annotated tag are published on the project
 [GitHub repository](https://github.com/isaa-sudweeks/GNN-SAC).
 `paper-experts-v1` remains fixed at

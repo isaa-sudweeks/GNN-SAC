@@ -108,7 +108,8 @@ The reward terms are set in `config/environment.yaml`:
 - ground-contact slip penalty (`slip_weight`, `slip_height`)
 
 An episode terminates when normalized rigidity falls below
-`critical_eig_threshold`, and truncates at `max_steps`. Rewards are normalized
+`critical_eig_threshold` (default `0.01`, or 1% of initial rigidity), and truncates
+at `max_steps`. Rewards are normalized
 per task by the variance of the discounted return (`normalize_rewards`).
 
 ## Replay and updates

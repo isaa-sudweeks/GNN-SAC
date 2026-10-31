@@ -617,7 +617,7 @@ def make_truss_env_config(config):
         "alive_bonus": float(_cfg_get(config, "alive_bonus", 0.1)),
         "rigidity_weight": float(_cfg_get(config, "rigidity_weight", 0.5)),
         "slip_weight": float(_cfg_get(config, "slip_weight", 0.1)),
-        "critical_eig_threshold": float(_cfg_get(config, "critical_eig_threshold", 0.03)),
+        "critical_eig_threshold": float(_cfg_get(config, "critical_eig_threshold", 0.01)),
         "slip_height": float(_cfg_get(config, "slip_height", 0.2)),
         "domain_randomization": _domain_randomization(config, topology, realistic),
         "normalize_observations": bool(
