@@ -1,7 +1,7 @@
 # Paper shared-controller campaign: 10M total transitions
 
 Status: prepared and tested on 4 November 2026; no production jobs submitted.
-Branch: `paper/experts`. W&B project: `i-suds/Paper-Generalists`.
+Branch: `paper/general`. W&B project: `i-suds/Paper-Generalists`.
 
 ## Run matrix and budgets
 
