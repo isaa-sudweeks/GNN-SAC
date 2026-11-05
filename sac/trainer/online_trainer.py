@@ -176,6 +176,9 @@ class OnlineTrainer(Trainer):
                     self._record_video_this_eval = False
                     evaluation = self.eval()
                     metrics.update(evaluation)
+                    self._save_evaluation_agent(
+                        evaluation, offline_updates=distillation.completed_updates
+                    )
                     log_update = True
                 finally:
                     self._load_rng_state_dict(rng)
@@ -359,11 +362,51 @@ class OnlineTrainer(Trainer):
         )
         eval_metrics = self.eval()
         eval_metrics.update(self.common_metrics())
+        self._save_evaluation_agent(eval_metrics)
         self.logger.log(eval_metrics, 'eval')
         self.report_eval_metrics(eval_metrics, self._step)
         self._last_eval_step = int(self._step)
         self._eval_count = eval_count + 1
         return eval_metrics
+
+    def _save_evaluation_agent(self, metrics, *, offline_updates=None):
+        """Keep the exact evaluated policy independently of replay retention.
+
+        Agent exports preserve each backend's schema, include the resolved
+        configuration, and omit replay and optimizer state. Offline snapshots
+        use their update count because all have environment step zero.
+        """
+        if not bool(getattr(self.cfg, "save_eval_agent", False)):
+            return None
+        distillation = getattr(self, "distillation", None)
+        completed_updates = int(getattr(distillation, "completed_updates", 0))
+        if offline_updates is None:
+            identifier = f"eval_step_{int(self._step)}"
+            stage = str(getattr(distillation, "stage", "online"))
+        else:
+            completed_updates = int(offline_updates)
+            identifier = f"offline_update_{completed_updates}"
+            stage = "offline"
+        directory = self.checkpoint_dir() / "evaluations"
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / f"{identifier}.agent.pt"
+        temporary = directory / f".{identifier}.agent.tmp"
+        try:
+            self.agent.save(temporary)
+            state = torch.load(temporary, map_location="cpu", weights_only=False)
+            state["config"] = self._config_state_dict()
+            state["evaluation"] = {
+                "format_version": 1,
+                "stage": stage,
+                "step": int(self._step),
+                "offline_updates": completed_updates,
+                "metrics": self._snapshot_checkpoint_value(metrics),
+            }
+            torch.save(state, temporary)
+            temporary.replace(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return destination
 
     def _evaluate_final_policy(self):
         if not bool(getattr(self.cfg, "eval_at_end", True)):

@@ -1,0 +1,509 @@
+{
+  "project": "i-suds/Paper-Experts",
+  "selection": "Largest logged evaluation mean displacement among retained full trainer checkpoints with an exact evaluation at that environment step; all expert architectures and seeds compete; held-out topologies excluded.",
+  "selected": [
+    {
+      "topology": "henneberg_n5_1tube_1",
+      "backend": "gnn",
+      "seed": 2,
+      "step": 9901056,
+      "distance_m": 59.60121355810509,
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n5_1tube_1/seed_2/job_0004_c0437a23dfbe/checkpoints/step_9901056.pt",
+      "run_id": "nafbgzg1",
+      "run_url": "https://wandb.ai/i-suds/Paper-Experts/runs/nafbgzg1",
+      "candidate_count": 25,
+      "bytes": 593819303,
+      "checkpoint_config": {
+        "truss_topology": "henneberg_n5_1tube_1",
+        "truss_topologies": null,
+        "sac_backend": "gnn",
+        "seed": 2,
+        "domain_randomization": true,
+        "truss_realistic": false,
+        "speed": 0.05,
+        "nsubsteps": 100,
+        "action_repeat": 1,
+        "obs_norm": true,
+        "normalize_observations": true,
+        "normalize_rewards": true,
+        "truss_graph_view": "auto",
+        "use_control_graph": true,
+        "use_virtual_node": true,
+        "discount": 0.95,
+        "critical_eig_threshold": 0.01,
+        "max_steps": 1000,
+        "obs_dim": 6,
+        "action_dim": 1,
+        "padded_mlp_max_nodes": null,
+        "padded_mlp_hidden_dims": null
+      },
+      "score_source": "ORC eval.csv, exact environment step; cross-checked against W&B history"
+    },
+    {
+      "topology": "henneberg_n6_1tube_2",
+      "backend": "padded_mlp",
+      "seed": 3,
+      "step": 9801216,
+      "distance_m": 51.82540728661436,
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-henneberg_n6_1tube_2/seed_3/job_0005_70db488ee335/checkpoints/step_9801216.pt",
+      "run_id": "9gstfu46",
+      "run_url": "https://wandb.ai/i-suds/Paper-Experts/runs/9gstfu46",
+      "candidate_count": 21,
+      "bytes": 756668591,
+      "checkpoint_config": {
+        "truss_topology": "henneberg_n6_1tube_2",
+        "truss_topologies": null,
+        "sac_backend": "padded_mlp",
+        "seed": 3,
+        "domain_randomization": true,
+        "truss_realistic": false,
+        "speed": 0.05,
+        "nsubsteps": 100,
+        "action_repeat": 1,
+        "obs_norm": true,
+        "normalize_observations": true,
+        "normalize_rewards": true,
+        "truss_graph_view": "auto",
+        "use_control_graph": true,
+        "use_virtual_node": false,
+        "discount": 0.95,
+        "critical_eig_threshold": 0.01,
+        "max_steps": 1000,
+        "obs_dim": 6,
+        "action_dim": 1,
+        "padded_mlp_max_nodes": 21,
+        "padded_mlp_hidden_dims": [
+          736,
+          736
+        ]
+      },
+      "score_source": "ORC eval.csv, exact environment step; cross-checked against W&B history"
+    },
+    {
+      "topology": "henneberg_n8_1tube_57",
+      "backend": "padded_mlp",
+      "seed": 2,
+      "step": 9701376,
+      "distance_m": 69.25870377985106,
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-henneberg_n8_1tube_57/seed_2/job_0010_53271bf38af7/checkpoints/step_9701376.pt",
+      "run_id": "qdqmepui",
+      "run_url": "https://wandb.ai/i-suds/Paper-Experts/runs/qdqmepui",
+      "candidate_count": 28,
+      "bytes": 1080679663,
+      "checkpoint_config": {
+        "truss_topology": "henneberg_n8_1tube_57",
+        "truss_topologies": null,
+        "sac_backend": "padded_mlp",
+        "seed": 2,
+        "domain_randomization": true,
+        "truss_realistic": false,
+        "speed": 0.05,
+        "nsubsteps": 100,
+        "action_repeat": 1,
+        "obs_norm": true,
+        "normalize_observations": true,
+        "normalize_rewards": true,
+        "truss_graph_view": "auto",
+        "use_control_graph": true,
+        "use_virtual_node": false,
+        "discount": 0.95,
+        "critical_eig_threshold": 0.01,
+        "max_steps": 1000,
+        "obs_dim": 6,
+        "action_dim": 1,
+        "padded_mlp_max_nodes": 21,
+        "padded_mlp_hidden_dims": [
+          736,
+          736
+        ]
+      },
+      "score_source": "ORC eval.csv, exact environment step; cross-checked against W&B history"
+    },
+    {
+      "topology": "henneberg_n6_2tube_1",
+      "backend": "padded_mlp",
+      "seed": 3,
+      "step": 10000000,
+      "distance_m": 81.61354169951845,
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-henneberg_n6_2tube_1/seed_3/job_0014_f89445db2fb9/checkpoints/step_10000000.pt",
+      "run_id": "rh3yax6l",
+      "run_url": "https://wandb.ai/i-suds/Paper-Experts/runs/rh3yax6l",
+      "candidate_count": 26,
+      "bytes": 810687256,
+      "checkpoint_config": {
+        "truss_topology": "henneberg_n6_2tube_1",
+        "truss_topologies": null,
+        "sac_backend": "padded_mlp",
+        "seed": 3,
+        "domain_randomization": true,
+        "truss_realistic": false,
+        "speed": 0.05,
+        "nsubsteps": 100,
+        "action_repeat": 1,
+        "obs_norm": true,
+        "normalize_observations": true,
+        "normalize_rewards": true,
+        "truss_graph_view": "auto",
+        "use_control_graph": true,
+        "use_virtual_node": false,
+        "discount": 0.95,
+        "critical_eig_threshold": 0.01,
+        "max_steps": 1000,
+        "obs_dim": 6,
+        "action_dim": 1,
+        "padded_mlp_max_nodes": 21,
+        "padded_mlp_hidden_dims": [
+          736,
+          736
+        ]
+      },
+      "score_source": "ORC eval.csv, exact environment step; cross-checked against W&B history"
+    },
+    {
+      "topology": "henneberg_n8_2tube_187",
+      "backend": "padded_mlp",
+      "seed": 1,
+      "step": 9600000,
+      "distance_m": 138.36703537718887,
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-henneberg_n8_2tube_187/seed_1/job_0015_1dbfc62c0921/checkpoints/step_9600000.pt",
+      "run_id": "xg8hh32z",
+      "run_url": "https://wandb.ai/i-suds/Paper-Experts/runs/xg8hh32z",
+      "candidate_count": 28,
+      "bytes": 1134673135,
+      "checkpoint_config": {
+        "truss_topology": "henneberg_n8_2tube_187",
+        "truss_topologies": null,
+        "sac_backend": "padded_mlp",
+        "seed": 1,
+        "domain_randomization": true,
+        "truss_realistic": false,
+        "speed": 0.05,
+        "nsubsteps": 100,
+        "action_repeat": 1,
+        "obs_norm": true,
+        "normalize_observations": true,
+        "normalize_rewards": true,
+        "truss_graph_view": "auto",
+        "use_control_graph": true,
+        "use_virtual_node": false,
+        "discount": 0.95,
+        "critical_eig_threshold": 0.01,
+        "max_steps": 1000,
+        "obs_dim": 6,
+        "action_dim": 1,
+        "padded_mlp_max_nodes": 21,
+        "padded_mlp_hidden_dims": [
+          736,
+          736
+        ]
+      },
+      "score_source": "ORC eval.csv, exact environment step; cross-checked against W&B history"
+    },
+    {
+      "topology": "tetrahedron",
+      "backend": "padded_mlp",
+      "seed": 2,
+      "step": 10000000,
+      "distance_m": 27.910215551868408,
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-tetrahedron/seed_2/job_0019_7be2c7dcfe7f/checkpoints/step_10000000.pt",
+      "run_id": "rqazvzvz",
+      "run_url": "https://wandb.ai/i-suds/Paper-Experts/runs/rqazvzvz",
+      "candidate_count": 30,
+      "bytes": 486684696,
+      "checkpoint_config": {
+        "truss_topology": "tetrahedron",
+        "truss_topologies": null,
+        "sac_backend": "padded_mlp",
+        "seed": 2,
+        "domain_randomization": true,
+        "truss_realistic": false,
+        "speed": 0.05,
+        "nsubsteps": 100,
+        "action_repeat": 1,
+        "obs_norm": true,
+        "normalize_observations": true,
+        "normalize_rewards": true,
+        "truss_graph_view": "auto",
+        "use_control_graph": true,
+        "use_virtual_node": false,
+        "discount": 0.95,
+        "critical_eig_threshold": 0.01,
+        "max_steps": 1000,
+        "obs_dim": 6,
+        "action_dim": 1,
+        "padded_mlp_max_nodes": 21,
+        "padded_mlp_hidden_dims": [
+          736,
+          736
+        ]
+      },
+      "score_source": "ORC eval.csv, exact environment step; cross-checked against W&B history"
+    },
+    {
+      "topology": "henneberg_n8_3tube_64",
+      "backend": "padded_mlp",
+      "seed": 3,
+      "step": 9801216,
+      "distance_m": 82.5500735836579,
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-henneberg_n8_3tube_64/seed_3/job_0026_39b1f1531861/checkpoints/step_9801216.pt",
+      "run_id": "75qw9tkw",
+      "run_url": "https://wandb.ai/i-suds/Paper-Experts/runs/75qw9tkw",
+      "candidate_count": 29,
+      "bytes": 1188678703,
+      "checkpoint_config": {
+        "truss_topology": "henneberg_n8_3tube_64",
+        "truss_topologies": null,
+        "sac_backend": "padded_mlp",
+        "seed": 3,
+        "domain_randomization": true,
+        "truss_realistic": false,
+        "speed": 0.05,
+        "nsubsteps": 100,
+        "action_repeat": 1,
+        "obs_norm": true,
+        "normalize_observations": true,
+        "normalize_rewards": true,
+        "truss_graph_view": "auto",
+        "use_control_graph": true,
+        "use_virtual_node": false,
+        "discount": 0.95,
+        "critical_eig_threshold": 0.01,
+        "max_steps": 1000,
+        "obs_dim": 6,
+        "action_dim": 1,
+        "padded_mlp_max_nodes": 21,
+        "padded_mlp_hidden_dims": [
+          736,
+          736
+        ]
+      },
+      "score_source": "ORC eval.csv, exact environment step; cross-checked against W&B history"
+    },
+    {
+      "topology": "usevitch_60243677150_p1",
+      "backend": "padded_mlp",
+      "seed": 2,
+      "step": 9701376,
+      "distance_m": 87.29426157564905,
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-usevitch_60243677150_p1/seed_2/job_0028_f49cfe0d315b/checkpoints/step_9701376.pt",
+      "run_id": "hqtq3os9",
+      "run_url": "https://wandb.ai/i-suds/Paper-Experts/runs/hqtq3os9",
+      "candidate_count": 27,
+      "bytes": 1188675055,
+      "checkpoint_config": {
+        "truss_topology": "usevitch_60243677150_p1",
+        "truss_topologies": null,
+        "sac_backend": "padded_mlp",
+        "seed": 2,
+        "domain_randomization": true,
+        "truss_realistic": false,
+        "speed": 0.05,
+        "nsubsteps": 100,
+        "action_repeat": 1,
+        "obs_norm": true,
+        "normalize_observations": true,
+        "normalize_rewards": true,
+        "truss_graph_view": "auto",
+        "use_control_graph": true,
+        "use_virtual_node": false,
+        "discount": 0.95,
+        "critical_eig_threshold": 0.01,
+        "max_steps": 1000,
+        "obs_dim": 6,
+        "action_dim": 1,
+        "padded_mlp_max_nodes": 21,
+        "padded_mlp_hidden_dims": [
+          736,
+          736
+        ]
+      },
+      "score_source": "ORC eval.csv, exact environment step; cross-checked against W&B history"
+    },
+    {
+      "topology": "usevitch_210272254_p1",
+      "backend": "padded_mlp",
+      "seed": 1,
+      "step": 9600000,
+      "distance_m": 63.10489092713125,
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-usevitch_210272254_p1/seed_1/job_0030_b51e2048cfdc/checkpoints/step_9600000.pt",
+      "run_id": "il72h6ue",
+      "run_url": "https://wandb.ai/i-suds/Paper-Experts/runs/il72h6ue",
+      "candidate_count": 27,
+      "bytes": 1026668847,
+      "checkpoint_config": {
+        "truss_topology": "usevitch_210272254_p1",
+        "truss_topologies": null,
+        "sac_backend": "padded_mlp",
+        "seed": 1,
+        "domain_randomization": true,
+        "truss_realistic": false,
+        "speed": 0.05,
+        "nsubsteps": 100,
+        "action_repeat": 1,
+        "obs_norm": true,
+        "normalize_observations": true,
+        "normalize_rewards": true,
+        "truss_graph_view": "auto",
+        "use_control_graph": true,
+        "use_virtual_node": false,
+        "discount": 0.95,
+        "critical_eig_threshold": 0.01,
+        "max_steps": 1000,
+        "obs_dim": 6,
+        "action_dim": 1,
+        "padded_mlp_max_nodes": 21,
+        "padded_mlp_hidden_dims": [
+          736,
+          736
+        ]
+      },
+      "score_source": "ORC eval.csv, exact environment step; cross-checked against W&B history"
+    },
+    {
+      "topology": "octahedron",
+      "backend": "gnn",
+      "seed": 1,
+      "step": 9600000,
+      "distance_m": 71.90150951132114,
+      "checkpoint": "/home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-octahedron/seed_1/job_0018_724c9a9f07ce/checkpoints/step_9600000.pt",
+      "run_id": "uosotpbe",
+      "run_url": "https://wandb.ai/i-suds/Paper-Experts/runs/uosotpbe",
+      "candidate_count": 24,
+      "bytes": 701808615,
+      "checkpoint_config": {
+        "truss_topology": "octahedron",
+        "truss_topologies": null,
+        "sac_backend": "gnn",
+        "seed": 1,
+        "domain_randomization": true,
+        "truss_realistic": false,
+        "speed": 0.05,
+        "nsubsteps": 100,
+        "action_repeat": 1,
+        "obs_norm": true,
+        "normalize_observations": true,
+        "normalize_rewards": true,
+        "truss_graph_view": "auto",
+        "use_control_graph": true,
+        "use_virtual_node": true,
+        "discount": 0.95,
+        "critical_eig_threshold": 0.01,
+        "max_steps": 1000,
+        "obs_dim": 6,
+        "action_dim": 1,
+        "padded_mlp_max_nodes": null,
+        "padded_mlp_hidden_dims": null
+      },
+      "score_source": "ORC eval.csv, exact environment step; cross-checked against W&B history"
+    }
+  ],
+  "verified_at_utc": "2026-11-05T01:44:08.685517+00:00",
+  "audited_runs": 78,
+  "audited_retained_full_checkpoints": 390,
+  "history_snapshot_sha256": "8540361dea85dd522b16c325077d7d3e3fca9b9fcece0f4be025a83e25f85f63",
+  "source_crosscheck": "Current ORC eval.csv rows and saved W&B snapshot agree at every jointly present retained-checkpoint evaluation step.",
+  "checkpoint_validation": "All ten archives opened; torch.load(map_location=cpu,mmap=True) confirmed config,agent,buffer and saved observation/control/DR conventions. No GPU training launched.",
+  "selection_caveat": "Highest available measured displacement; deleted earlier checkpoints cannot be recovered. Teacher ranking is based on evaluation means of five episodes, not independent repeated validation or a survival criterion.",
+  "policy_validation": [
+    {
+      "topology": "henneberg_n5_1tube_1",
+      "backend": "gnn",
+      "model_loaded": true,
+      "finite": true,
+      "compatible_students": [
+        "gnn",
+        "padded_mlp"
+      ]
+    },
+    {
+      "topology": "henneberg_n6_1tube_2",
+      "backend": "padded_mlp",
+      "model_loaded": true,
+      "finite": true,
+      "compatible_students": [
+        "gnn",
+        "padded_mlp"
+      ]
+    },
+    {
+      "topology": "henneberg_n8_1tube_57",
+      "backend": "padded_mlp",
+      "model_loaded": true,
+      "finite": true,
+      "compatible_students": [
+        "gnn",
+        "padded_mlp"
+      ]
+    },
+    {
+      "topology": "henneberg_n6_2tube_1",
+      "backend": "padded_mlp",
+      "model_loaded": true,
+      "finite": true,
+      "compatible_students": [
+        "gnn",
+        "padded_mlp"
+      ]
+    },
+    {
+      "topology": "henneberg_n8_2tube_187",
+      "backend": "padded_mlp",
+      "model_loaded": true,
+      "finite": true,
+      "compatible_students": [
+        "gnn",
+        "padded_mlp"
+      ]
+    },
+    {
+      "topology": "tetrahedron",
+      "backend": "padded_mlp",
+      "model_loaded": true,
+      "finite": true,
+      "compatible_students": [
+        "gnn",
+        "padded_mlp"
+      ]
+    },
+    {
+      "topology": "henneberg_n8_3tube_64",
+      "backend": "padded_mlp",
+      "model_loaded": true,
+      "finite": true,
+      "compatible_students": [
+        "gnn",
+        "padded_mlp"
+      ]
+    },
+    {
+      "topology": "usevitch_60243677150_p1",
+      "backend": "padded_mlp",
+      "model_loaded": true,
+      "finite": true,
+      "compatible_students": [
+        "gnn",
+        "padded_mlp"
+      ]
+    },
+    {
+      "topology": "usevitch_210272254_p1",
+      "backend": "padded_mlp",
+      "model_loaded": true,
+      "finite": true,
+      "compatible_students": [
+        "gnn",
+        "padded_mlp"
+      ]
+    },
+    {
+      "topology": "octahedron",
+      "backend": "gnn",
+      "model_loaded": true,
+      "finite": true,
+      "compatible_students": [
+        "gnn",
+        "padded_mlp"
+      ]
+    }
+  ]
+}

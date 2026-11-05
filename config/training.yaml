@@ -27,6 +27,7 @@ tasks: # Task list used by multitask code paths and logging.
 # Outputs and logging
 save_csv: true # Whether to write evaluation metrics to eval.csv.
 save_agent: true # Whether to save final model weights at the end of training.
+save_eval_agent: false # Keep agent-only checkpoints for every online/offline evaluation, separately from replay checkpoint retention.
 checkpoint_freq: 50_000 # Save resumable training checkpoints every N environment steps; 0 disables.
 checkpoint_async: true # Write periodic checkpoints in a background thread; final forced checkpoint remains synchronous.
 checkpoint_dir: checkpoints # Directory for resumable checkpoints, relative to work_dir unless absolute.

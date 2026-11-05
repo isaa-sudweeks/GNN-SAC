@@ -239,9 +239,9 @@ LABELS = {
     "tetrahedron": "Tetrahedron",
     "henneberg_n7_3tube_1": "7 nodes / 3 tubes",
     "henneberg_n8_3tube_64": "8 nodes / 3 tubes",
-    "usevitch_60243677150_p1": "6 nodes / multi-triangle",
-    "usevitch_210272254_p1": "7 nodes / multi-triangle",
-    "usevitch_1514879": "8 nodes / multi-triangle",
+    "usevitch_60243677150_p1": "9 nodes / multi-triangle",
+    "usevitch_210272254_p1": "8 nodes / multi-triangle",
+    "usevitch_1514879": "7 nodes / multi-triangle",
     "octahedron": "Octahedron",
 }
 STYLES = {

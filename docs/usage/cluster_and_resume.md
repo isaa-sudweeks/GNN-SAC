@@ -23,6 +23,16 @@ With `finite_checks=true` (the default), the agent refuses to save or load
 non-finite model, optimizer, or temperature state. Training also stops as soon
 as a loss, gradient, action, or replay sample becomes non-finite.
 
+## Evaluation policy exports
+
+`save_eval_agent=true` additionally keeps agent-only exports at each actual
+policy evaluation under `checkpoints/evaluations/eval_step_N.agent.pt`. Each
+contains the backend schema, resolved configuration and evaluation metrics.
+These exports are independent of numbered replay-checkpoint pruning and cannot
+resume SAC. Intermediate offline evaluations use `offline_update_N.agent.pt`
+so multiple evaluations at environment step zero remain distinct. Disabled by
+default; the [paper shared-controller campaign](paper_shared_10m.md) enables it.
+
 ## Resuming
 
 Resume by rerunning the same training config with the same `work_dir`, or by

@@ -1,0 +1,29 @@
+# Same frozen mixed-architecture teacher bank for both student architectures.
+# Only the ten training topologies are present. Scores/provenance are in
+# paper_experts_best_selection.json. Paths were verified on ORC 2026-11-04.
+defaults:
+  - kl
+  - _self_
+
+reconstruct_control_metadata: true
+teachers:
+  # gnn, seed 2, step 9901056: 59.6012 m
+  henneberg_n5_1tube_1: /home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-henneberg_n5_1tube_1/seed_2/job_0004_c0437a23dfbe/checkpoints/step_9901056.pt
+  # padded_mlp, seed 3, step 9801216: 51.8254 m
+  henneberg_n6_1tube_2: /home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-henneberg_n6_1tube_2/seed_3/job_0005_70db488ee335/checkpoints/step_9801216.pt
+  # padded_mlp, seed 2, step 9701376: 69.2587 m
+  henneberg_n8_1tube_57: /home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-henneberg_n8_1tube_57/seed_2/job_0010_53271bf38af7/checkpoints/step_9701376.pt
+  # padded_mlp, seed 3, step 10000000: 81.6135 m
+  henneberg_n6_2tube_1: /home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-henneberg_n6_2tube_1/seed_3/job_0014_f89445db2fb9/checkpoints/step_10000000.pt
+  # padded_mlp, seed 1, step 9600000: 138.3670 m
+  henneberg_n8_2tube_187: /home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-henneberg_n8_2tube_187/seed_1/job_0015_1dbfc62c0921/checkpoints/step_9600000.pt
+  # padded_mlp, seed 2, step 10000000: 27.9102 m
+  tetrahedron: /home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-tetrahedron/seed_2/job_0019_7be2c7dcfe7f/checkpoints/step_10000000.pt
+  # padded_mlp, seed 3, step 9801216: 82.5501 m
+  henneberg_n8_3tube_64: /home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-henneberg_n8_3tube_64/seed_3/job_0026_39b1f1531861/checkpoints/step_9801216.pt
+  # padded_mlp, seed 2, step 9701376: 87.2943 m
+  usevitch_60243677150_p1: /home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-usevitch_60243677150_p1/seed_2/job_0028_f49cfe0d315b/checkpoints/step_9701376.pt
+  # padded_mlp, seed 1, step 9600000: 63.1049 m
+  usevitch_210272254_p1: /home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-expert-mlp-usevitch_210272254_p1/seed_1/job_0030_b51e2048cfdc/checkpoints/step_9600000.pt
+  # gnn, seed 1, step 9600000: 71.9015 m
+  octahedron: /home/isuds/nobackup/autodelete/GNN-SAC/truss-graph/paper-v4-octahedron/seed_1/job_0018_724c9a9f07ce/checkpoints/step_9600000.pt

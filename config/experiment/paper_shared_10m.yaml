@@ -1,0 +1,57 @@
+# @package _global_
+
+# Frozen 10-train / 3-held-out paper split. The parser multiplies steps by
+# the ten training topologies: 1M requested here means 10M TOTAL transitions.
+steps: 1_000_000
+cross_validation:
+  enabled: false
+truss_topologies:
+  - henneberg_n5_1tube_1
+  - henneberg_n6_1tube_2
+  - henneberg_n8_1tube_57
+  - henneberg_n6_2tube_1
+  - henneberg_n8_2tube_187
+  - tetrahedron
+  - henneberg_n8_3tube_64
+  - usevitch_60243677150_p1
+  - usevitch_210272254_p1
+  - octahedron
+eval_extra_topologies:
+  - henneberg_n7_1tube_3
+  - henneberg_n7_3tube_1
+  - usevitch_1514879
+
+mlp_training_mode: generalist
+pcgrad: false
+discount: 0.95
+critical_eig_threshold: 0.01
+truss_realistic: false
+domain_randomization: true
+num_envs: 320
+mjx_impl: warp
+eval_backend: mujoco
+eval_freq: 20_000
+eval_episodes: 5
+eval_at_end: true
+save_eval_agent: true
+# Retain lightweight exports at the exact evaluation points; only resumable
+# checkpoints containing replay are pruned to bound storage usage.
+checkpoint_freq: 100_000
+checkpoint_keep_last: 5
+action_repeat: 1
+nsubsteps: 100
+max_steps: 1000
+speed: 0.05
+obs_norm: true
+normalize_observations: true
+normalize_rewards: true
+save_video: false
+project: Paper-Generalists
+wandb_project: ${project}
+wandb_entity: i-suds
+
+hydra:
+  launcher:
+    gpus_per_node: null
+    gres: gpu:a100:1
+    array_parallelism: 3

@@ -9,6 +9,9 @@
 
 ## Usage
 
+- [paper_shared_10m.md](usage/paper_shared_10m.md): twelve shared-controller runs,
+  10M total online transitions each, selected teachers and ORC launch commands
+
 - [paper_reproducibility.md](usage/paper_reproducibility.md): paper branch,
   fixed code tags, run provenance and submission releases
 - [configuration.md](usage/configuration.md): config groups, environments,

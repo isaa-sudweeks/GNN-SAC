@@ -2,6 +2,7 @@ import unittest
 from types import SimpleNamespace
 
 from figures.plot_distance_by_topology import (
+    LABELS,
     TOPOLOGIES,
     aggregate_results,
     collect_seed_results,
@@ -29,6 +30,13 @@ def _run(run_id, seed, history):
 
 
 class DistanceByTopologyTest(unittest.TestCase):
+    def test_multi_triangle_labels_match_preset_physical_node_counts(self):
+        from mujoco_truss_gen import PRESETS
+
+        for topology in ("usevitch_60243677150_p1", "usevitch_210272254_p1", "usevitch_1514879"):
+            positions, _ = PRESETS[topology]()
+            self.assertEqual(LABELS[topology], f"{len(positions)} nodes / multi-triangle")
+
     def test_retry_with_largest_logged_step_wins(self):
         rows = collect_seed_results(
             [_run("old", 1, [(100, 1.0)]), _run("new", 1, [(200, 2.0)])],
