@@ -25,6 +25,7 @@ dependencies = [
     "torch-geometric",
     "torchrl>=0.13,<0.14",
     "wandb[media]",
+    "matplotlib>=3.11.2",
 ]
 
 [tool.uv]

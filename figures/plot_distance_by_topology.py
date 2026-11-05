@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import gzip
+import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Iterable
 
 import pandas as pd
-import plotly.express as px
 import wandb
 
 
@@ -59,7 +61,7 @@ def collect_seed_results(runs: Iterable[Any], run_prefix: str) -> pd.DataFrame:
                 "run_id": run.id,
                 "run_name": run.name,
                 "run_state": run.state,
-                "logged_step": int(run.summary.get("_step", -1)),
+                "logged_step": int(run.summary.get("eval/step", run.summary.get("_step", -1))),
                 "run_url": run.url,
             }
         )
@@ -79,13 +81,15 @@ def collect_seed_results(runs: Iterable[Any], run_prefix: str) -> pd.DataFrame:
     history_rows: list[dict[str, Any]] = []
     for candidate in selected_runs.to_dict("records"):
         run = candidate.pop("run")
-        # These legacy runs do not expose ``_step`` in the exact-history endpoint's
-        # schema. Their evaluation histories are much shorter than this sample cap,
-        # so the sampled-history endpoint returns every evaluation row with metadata.
-        for history_row in run.history(
-            keys=[METRIC], samples=HISTORY_SAMPLES, pandas=False
-        ):
-            step = _finite_float(history_row.get("_step"))
+        # Use environment steps to align seeds even after logging resumes.
+        # At 20k evaluation intervals these 10M-step runs are below the sample cap.
+        evaluation_history = run.history(
+            keys=[METRIC, "eval/step"], samples=HISTORY_SAMPLES, pandas=False
+        )
+        if len(evaluation_history) >= HISTORY_SAMPLES:
+            raise RuntimeError(f"Run {run.id} reached the history sample cap; retrieve exact history.")
+        for history_row in evaluation_history:
+            step = _finite_float(history_row.get("eval/step", history_row.get("_step")))
             distance = _finite_float(history_row.get(METRIC))
             if step is None or distance is None:
                 continue
@@ -124,6 +128,39 @@ def collect_seed_results(runs: Iterable[Any], run_prefix: str) -> pd.DataFrame:
         selected_rows.append(rows)
 
     return pd.concat(selected_rows, ignore_index=True).drop(columns="logged_step")
+
+
+def collect_expert_results(runs: Iterable[Any]) -> pd.DataFrame:
+    """Select matched-seed peaks independently for each expert architecture.
+
+    Retain interrupted runs' recorded evaluations rather than silently dropping
+    seeds. Exclude the superseded paper-v2 run, which has no evaluation metric.
+    """
+    families = {"GNN specialist": [], "MLP specialist": []}
+    for run in runs:
+        if str(run.name).startswith(("paper-v4-", "paper-expert-gnn-")):
+            controller = "GNN specialist"
+        elif str(run.name).startswith("paper-expert-mlp-"):
+            controller = "MLP specialist"
+        else:
+            continue
+        families[controller].append(run)
+    results = []
+    for controller, family in families.items():
+        rows = collect_seed_results(family, "")
+        for topology in TOPOLOGIES:
+            seeds = set(rows.loc[rows.topology == topology, "seed"])
+            if seeds != {1, 2, 3}:
+                raise RuntimeError(f"{controller}, {topology}: expected seeds 1,2,3; got {seeds}")
+        results.append(rows.assign(controller=controller))
+    return pd.concat(results, ignore_index=True)
+
+
+def aggregate_experts(seed_results: pd.DataFrame) -> pd.DataFrame:
+    return pd.concat([
+        aggregate_results(rows).assign(controller=controller)
+        for controller, rows in seed_results.groupby("controller", sort=False)
+    ], ignore_index=True)
 
 
 def aggregate_results(seed_results: pd.DataFrame) -> pd.DataFrame:
@@ -192,72 +229,149 @@ def load_greedy_results(path: Path = DEFAULT_GREEDY_METRICS) -> pd.DataFrame:
     return greedy.sort_values("topology").reset_index(drop=True)
 
 
+LABELS = {
+    "henneberg_n5_1tube_1": "5 nodes / 1 tube",
+    "henneberg_n6_1tube_2": "6 nodes / 1 tube",
+    "henneberg_n7_1tube_3": "7 nodes / 1 tube",
+    "henneberg_n8_1tube_57": "8 nodes / 1 tube",
+    "henneberg_n6_2tube_1": "6 nodes / 2 tubes",
+    "henneberg_n8_2tube_187": "8 nodes / 2 tubes",
+    "tetrahedron": "Tetrahedron",
+    "henneberg_n7_3tube_1": "7 nodes / 3 tubes",
+    "henneberg_n8_3tube_64": "8 nodes / 3 tubes",
+    "usevitch_60243677150_p1": "6 nodes / multi-triangle",
+    "usevitch_210272254_p1": "7 nodes / multi-triangle",
+    "usevitch_1514879": "8 nodes / multi-triangle",
+    "octahedron": "Octahedron",
+}
+STYLES = {
+    "GNN specialist": ("#0072B2", "o", "circle", -0.24),
+    "MLP specialist": ("#D55E00", "s", "square", 0.0),
+    "Greedy": ("#444444", "D", "diamond", 0.24),
+}
+
+
+def plot_rows(aggregate: pd.DataFrame, greedy_metrics: pd.DataFrame | None = None):
+    learned = aggregate.copy()
+    if "controller" not in learned:
+        learned["controller"] = "GNN specialist"
+    greedy = load_greedy_results() if greedy_metrics is None else greedy_metrics.copy()
+    return pd.concat([learned, greedy.assign(controller="Greedy")], ignore_index=True)
+
+
 def make_figure(aggregate: pd.DataFrame, greedy_metrics: pd.DataFrame | None = None):
-    """Create the RA-L-style horizontal distance plot."""
-    gnn_sac = aggregate.assign(controller="GNN-SAC")
-    greedy = (
-        load_greedy_results() if greedy_metrics is None else greedy_metrics.copy()
-    ).assign(n_seeds=float("nan"), controller="Greedy")
-    plot_data = pd.concat([gnn_sac, greedy], ignore_index=True)
-    fig = px.scatter(
-        plot_data,
-        x="distance_m",
-        y="topology",
-        color="controller",
-        error_x="distance_std_m",
-        category_orders={"topology": list(reversed(TOPOLOGIES))},
-        color_discrete_map={"GNN-SAC": "#636EFA", "Greedy": "#EF553B"},
-        title="Peak Mean Evaluation Distance by Topology",
-        labels={
-            "distance_m": "Distance Traveled (m)",
-            "topology": "Robot Configuration",
-            "controller": "Controller",
-        },
-        hover_data={
-            "n_seeds": True,
-            "distance_std_m": ":.3f",
-            "selected_step": True,
-        },
-    )
+    """Interactive companion, using the same offsets and encodings as the PDF."""
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+    data = plot_rows(aggregate, greedy_metrics)
+    for controller, (color, _, symbol, offset) in STYLES.items():
+        rows = data[data.controller == controller]
+        fig.add_trace(go.Scatter(
+            x=rows.distance_m,
+            y=[TOPOLOGIES.index(str(t)) + offset for t in rows.topology],
+            name=controller, mode="markers",
+            marker=dict(color=color, symbol=symbol, size=8),
+            error_x=dict(type="data", array=rows.distance_std_m, thickness=1, width=3),
+            text=[LABELS[str(t)] for t in rows.topology],
+            hovertemplate="%{text}<br>%{x:.2f} m<extra>%{fullData.name}</extra>",
+        ))
     fig.update_layout(
-        font_family="Arial",
-        font_size=12,
-        title_font_size=16,
-        xaxis=dict(title_font_size=14, tickfont_size=12, showgrid=False),
-        yaxis=dict(title_font_size=14, tickfont_size=12, showgrid=False),
-        legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-            bgcolor="rgba(255,255,255,0.7)", bordercolor="black", borderwidth=1,
-            font_size=12,
-        ),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        margin=dict(l=100, r=50, t=80, b=80),
-        width=900,
-        height=650,
-    )
-    fig.update_traces(
-        marker=dict(size=10, opacity=0.8, line=dict(width=1, color="DarkSlateGrey")),
-        error_x=dict(thickness=1.5, width=3, color="dimgray"),
-        selector=dict(mode="markers"),
-    )
-    fig.update_traces(
-        hovertemplate=(
-            "Controller=Greedy<br>Distance Traveled (m)=%{x}<br>"
-            "Robot Configuration=%{y}<br>distance_std_m=%{customdata[1]:.3f}"
-            "<extra></extra>"
-        ),
-        selector=dict(name="Greedy"),
+        template="simple_white", font=dict(family="Arial", size=13),
+        width=1000, height=640, margin=dict(l=210, r=25, t=60, b=60),
+        xaxis=dict(title="Positive-x displacement (m)", showgrid=True, gridcolor="#e8e8e8"),
+        yaxis=dict(tickvals=list(range(len(TOPOLOGIES))),
+                   ticktext=[LABELS[t] for t in TOPOLOGIES], autorange="reversed"),
+        legend=dict(orientation="h", x=0, y=1.08),
     )
     return fig
 
 
+def save_publication_figure(aggregate: pd.DataFrame, seed_results: pd.DataFrame,
+                            output_dir: Path, greedy_metrics: pd.DataFrame) -> None:
+    """Export vector PDF with embedded TrueType fonts at IEEE double-column width."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    data = plot_rows(aggregate, greedy_metrics)
+    incomplete = set(seed_results.loc[seed_results.run_state != "finished", "topology"])
+    with plt.rc_context({
+        "font.family": "sans-serif", "font.sans-serif": ["Arial", "DejaVu Sans"],
+        "font.size": 9, "axes.labelsize": 10, "xtick.labelsize": 9,
+        "ytick.labelsize": 9, "legend.fontsize": 9, "pdf.fonttype": 42,
+        "ps.fonttype": 42, "axes.linewidth": 0.6,
+    }):
+        fig, ax = plt.subplots(figsize=(7.16, 4.65))
+        fig.subplots_adjust(left=0.285, right=0.985, bottom=0.13, top=0.90)
+        for i in range(len(TOPOLOGIES)):
+            if i % 2 == 0:
+                ax.axhspan(i - .48, i + .48, color="0.97", lw=0, zorder=0)
+        for controller, (color, marker, _, offset) in STYLES.items():
+            rows = data[data.controller == controller]
+            ypos = [TOPOLOGIES.index(str(t)) + offset for t in rows.topology]
+            ax.errorbar(rows.distance_m, ypos, xerr=rows.distance_std_m,
+                        fmt=marker, color=color, markersize=4.0, markeredgewidth=.7,
+                        elinewidth=.85, capsize=2.2, capthick=.7,
+                        label=controller, zorder=3)
+        # Small unfilled marks expose the three individual seed evaluations.
+        for controller, (color, marker, _, offset) in STYLES.items():
+            if controller == "Greedy":
+                continue
+            rows = seed_results[seed_results.controller == controller]
+            ypos = [TOPOLOGIES.index(str(t)) + offset for t in rows.topology]
+            ax.scatter(rows.distance_m, ypos, marker=marker, s=8,
+                       facecolors="white", edgecolors=color, linewidths=.5, zorder=2)
+        ax.set_yticks(range(len(TOPOLOGIES)), [
+            LABELS[t] + (" †" if t in incomplete else "") for t in TOPOLOGIES
+        ])
+        ax.set_ylim(len(TOPOLOGIES) - .5, -.6)
+        low = min(0., float((data.distance_m - data.distance_std_m).min()))
+        high = float((data.distance_m + data.distance_std_m).max())
+        ax.set_xlim(np.floor(low / 10) * 10 - 1, np.ceil(high / 10) * 10 + 1)
+        ax.set_xlabel("Positive-x displacement (m)", labelpad=7)
+        ax.xaxis.grid(True, color="0.88", linewidth=.5)
+        ax.set_axisbelow(True)
+        ax.axvline(0, color="0.55", linewidth=.6)
+        ax.tick_params(axis="y", length=0, pad=6)
+        ax.tick_params(axis="x", direction="out", width=.6, length=3)
+        for side in ("top", "right", "left"):
+            ax.spines[side].set_visible(False)
+        ax.spines["bottom"].set_color("0.45")
+        fig.legend(*ax.get_legend_handles_labels(), loc="upper center",
+                   bbox_to_anchor=(.59, .995), ncol=3, frameon=False,
+                   handletextpad=.5, columnspacing=1.1)
+        for suffix in ("pdf", "png"):
+            fig.savefig(output_dir / f"distance_achieved_by_topology.{suffix}", dpi=600)
+        plt.close(fig)
+
+
+def load_history_snapshot(path: Path) -> list[Any]:
+    """Adapt a source-preserving history export to the W&B run interface."""
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt") as stream:
+        snapshot = json.load(stream)
+    runs = []
+    for item in snapshot["runs"]:
+        h = snapshot["histories"][item["id"]]
+        if h.get("error") or not h.get("exact") or h.get("source_truncated"):
+            raise RuntimeError(f"Incomplete history export for {item['id']}")
+        run = SimpleNamespace(
+            id=item["id"], name=item["display_name"], state=item["state"],
+            config=item["config"], summary=item.get("summary", {}), url=item["url"],
+        )
+        run.history = lambda keys, samples, pandas, rows=h["rows"]: rows
+        runs.append(run)
+    return runs
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--project", default="i-suds/paper_results")
+    parser.add_argument("--project", default="i-suds/Paper-Experts")
     parser.add_argument(
-        "--run-prefix", default="paper-v3-",
-        help="Only include run names beginning with this value; pass '' for all runs.",
+        "--run-prefix", default=None,
+        help="Legacy single-family mode; default selects both Paper-Experts architectures.",
     )
     parser.add_argument(
         "--greedy-metrics",
@@ -266,14 +380,20 @@ def parse_args() -> argparse.Namespace:
         help="CSV containing measured greedy distance_m and distance_std_m by topology.",
     )
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent)
+    parser.add_argument("--history-json", type=Path, help="Offline W&B history snapshot.")
     parser.add_argument("--show", action="store_true", help="Open an interactive window.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    seed_results = collect_seed_results(wandb.Api().runs(args.project), args.run_prefix)
-    aggregate = aggregate_results(seed_results)
+    runs = load_history_snapshot(args.history_json) if args.history_json else wandb.Api().runs(args.project)
+    if args.run_prefix is None:
+        seed_results = collect_expert_results(runs)
+        aggregate = aggregate_experts(seed_results)
+    else:
+        seed_results = collect_seed_results(runs, args.run_prefix).assign(controller="GNN specialist")
+        aggregate = aggregate_experts(seed_results)
 
     missing = [name for name in TOPOLOGIES if name not in set(aggregate["topology"])]
     if missing:
@@ -283,8 +403,9 @@ def main() -> None:
     seed_results.to_csv(args.output_dir / "distance_by_topology_seed_results.csv", index=False)
     aggregate.to_csv(args.output_dir / "distance_by_topology_summary.csv", index=False)
 
-    fig = make_figure(aggregate, load_greedy_results(args.greedy_metrics))
-    fig.write_image(args.output_dir / "distance_achieved_by_topology.png", scale=3)
+    greedy = load_greedy_results(args.greedy_metrics)
+    fig = make_figure(aggregate, greedy)
+    save_publication_figure(aggregate, seed_results, args.output_dir, greedy)
     fig.write_html(
         args.output_dir / "distance_achieved_by_topology.html", include_plotlyjs="cdn"
     )

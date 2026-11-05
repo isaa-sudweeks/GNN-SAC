@@ -7,6 +7,7 @@ from figures.plot_distance_by_topology import (
     collect_seed_results,
     load_greedy_results,
     make_figure,
+    collect_expert_results,
 )
 
 
@@ -71,13 +72,31 @@ class DistanceByTopologyTest(unittest.TestCase):
 
         self.assertEqual(set(rows["evaluation_step"]), {100})
 
+    def test_environment_steps_align_seeds_after_resume(self):
+        runs = [_run("one", 1, [(10, 1.0), (20, 8.0)]),
+                _run("two", 2, [(110, 3.0), (120, 6.0)])]
+        for run in runs:
+            run.history = lambda keys, samples, pandas, seed=run.config["seed"]: [
+                {"_step": seed * 100 + 1, "eval/step": 20000, "eval/episode_distance": 2.0},
+                {"_step": seed * 100 + 2, "eval/step": 40000, "eval/episode_distance": 6.0},
+            ]
+        rows = collect_seed_results(runs, "paper-v2-")
+        self.assertEqual(set(rows.evaluation_step), {40000})
+        self.assertEqual(list(rows.distance_m), [6.0, 6.0])
+
+    def test_expert_mode_rejects_missing_seed_coverage(self):
+        run = _run("one", 1, [(100, 2.0)])
+        run.name = "paper-expert-gnn-henneberg_n5_1tube_1-1"
+        with self.assertRaisesRegex(RuntimeError, "expected seeds"):
+            collect_expert_results([run])
+
     def test_greedy_measurements_include_per_topology_error_bars(self):
         rows = collect_seed_results([_run("one", 1, [(100, 2.0)])], "paper-v2-")
         figure = make_figure(aggregate_results(rows))
         greedy = next(trace for trace in figure.data if trace.name == "Greedy")
 
         metrics = load_greedy_results()
-        self.assertEqual(figure.layout.title.text, "Peak Mean Evaluation Distance by Topology")
+        self.assertIsNone(figure.layout.title.text)
         self.assertEqual(list(greedy.x), list(metrics["distance_m"]))
         self.assertEqual(list(greedy.error_x.array), list(metrics["distance_std_m"]))
         self.assertAlmostEqual(greedy.x[0], 7.4338)

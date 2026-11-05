@@ -40,9 +40,47 @@ They read their inputs from environment variables (`REPLAY_*`).
 ## Figures
 
 `figures/plot_distance_by_topology.py` downloads paper evaluation results from
-W&B (`--project`, default `i-suds/paper_results`). It writes the
-distance-by-topology plot and summary CSVs to `figures/`. The generated files
-are checked in there next to the script.
+W&B (`--project`, default `i-suds/Paper-Experts`). By default it combines the
+33 `paper-v4-` GNN runs with six `paper-expert-gnn-` runs, plus the 39
+`paper-expert-mlp-` runs. The superseded `paper-v2-` run has no evaluation
+metric and is excluded. All 13 topologies must have seeds 1, 2, and 3 for
+both expert architectures. `--run-prefix` retains legacy single-family mode.
+
+Within each architecture and topology, select the **same environment step**
+for all seeds: the step with the largest across-seed mean evaluation
+`eval/episode_distance` (ties choose the latest step). Each logged value is
+an evaluation mean over five episodes. Error bars are across-seed **sample
+standard deviations**, not confidence intervals. This is a retrospective
+peak-of-evaluation comparison, not an independent test of the selected
+checkpoint. Specialists train on their own topology, including topologies
+held out from shared-policy training; these are not zero-shot results.
+
+Interrupted runs retain their available evaluations so that a seed is not
+silently dropped; selection is limited to steps shared by all three seeds.
+The November 4 snapshot includes two failed MLP seed-2 runs (tetrahedron and
+7-node/1-tube) with final evaluations at 9,801,216 steps. Their topology labels
+carry a dagger. Other runs reach 10M evaluation steps. The measured greedy
+baseline remains in `figures/greedy_metrics.csv` with its original per-topology
+standard deviations.
+
+Outputs are a 7.16-inch vector PDF with embedded fonts, a 600-dpi PNG, an
+interactive HTML companion, and seed/summary CSVs. Solid markers show means;
+small open markers show individual seeds. Shapes distinguish controllers in
+grayscale. Friendly labels map explicitly to canonical IDs in `LABELS`.
+
+Reproduce offline using the source-preserving compressed history snapshot:
+
+```bash
+uv run python figures/plot_distance_by_topology.py \
+  --history-json figures/paper_experts_history.json.gz
+```
+
+The snapshot records source run URLs, states, selected configuration fields,
+retrieval time, and all 38,860 evaluation rows (SDK history with a 10,000-row
+request per run, above every returned history length). It contains no API
+credentials. Omit `--history-json` to refresh directly from W&B. Generated
+figure files and CSVs are kept beside the script; the RA-L manuscript uses a
+copy of the PDF in its own `figures/` folder.
 
 - `launch_tube_ablation.py`: manifest/dry run or ORC submission for matched signed,
   membership and optional physics arms, with an offline screen and online stage.
