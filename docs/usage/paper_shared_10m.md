@@ -38,8 +38,13 @@ virtual-node graph architecture; the padded MLP retains its 21-node capacity
 and 736/736 hidden widths. No claim of exact parameter matching is made.
 Training uses 320 MJX/Warp environments (32 per topology); evaluation uses
 native MuJoCo. One A100 per job is requested explicitly through Slurm GRES.
-Each arm submits a three-seed array; across four arms up to twelve jobs may
-run concurrently if resources permit.
+The launcher starts all four Hydra controllers before waiting for any one
+condition to finish. Each immediately submits its own three-seed array, so all
+twelve jobs can be queued together and may run concurrently if resources permit.
+The Slurm scheduler still controls actual start times. Each controller writes
+to a separate timestamped log under `outputs/paper_shared_10m/launch_logs/`.
+The parent launcher remains running until all controllers finish; keep it in
+a persistent terminal or tmux session.
 
 ## Selected teachers
 
@@ -136,11 +141,21 @@ checkpoint for every topology instead would describe a per-topology peak
 envelope, not the performance of one shared policy. Record the chosen rule
 with the final figure/table and keep final-step values as a separate reference.
 
+## Concurrent submission correction
+
+The original launcher used a blocking subprocess for each arm and therefore
+submitted only three seeds at a time. It now starts every selected arm's
+controller before waiting on any controller. A controller failure is reported
+without cancelling other conditions. Stop an older launcher and cancel its old
+array before resubmitting the campaign, to avoid duplicate submissions.
+
 ## Validation
 
-- 39 focused tests passed: launch matrix/budget/held-out exclusion, per-evaluation
+- The original 39 focused tests passed: launch matrix/budget/held-out exclusion, per-evaluation
   export round trips for both backends, checkpoint retention, atomic failure
   handling, offline distillation and existing plotting/checkpoint behavior.
+- Additional regression tests verify that all four controllers start before
+  any wait, and that one failed condition does not suppress other submissions.
 - The full dry run composes four conditions with three seeds, exactly 10M total
   online transitions each, and identical training-only teacher maps.
 - Teacher files and saved conventions were checked directly on ORC; all ten

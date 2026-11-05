@@ -116,6 +116,33 @@ def build_manifest(arms: Sequence[str], extra: Sequence[str] = (), *, check_file
     }
 
 
+def submit_arms(entries: Sequence[dict], environment: dict, log_dir: Path) -> int:
+    """Start every Hydra controller before waiting for any condition to finish.
+
+    Submitit waits for its jobs inside each controller. Running the controllers
+    concurrently queues all selected conditions without a training dependency.
+    A failed condition does not cancel the other submitted jobs.
+    """
+    log_dir.mkdir(parents=True, exist_ok=True)
+    controllers = []
+    for entry in entries:
+        logfile = log_dir / f"{entry['arm']}.log"
+        with logfile.open("w") as stream:
+            process = subprocess.Popen(
+                entry["command"], cwd=PROJECT_ROOT, env=environment,
+                stdout=stream, stderr=subprocess.STDOUT,
+            )
+        controllers.append((entry["arm"], process, logfile))
+        print(f"Started {entry['arm']} controller PID {process.pid}; log: {logfile}", flush=True)
+    failed = []
+    for arm, process, logfile in controllers:
+        code = process.wait()
+        if code:
+            failed.append((arm, code))
+            print(f"{arm} controller exited {code}; inspect {logfile}", flush=True)
+    return 1 if failed else 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arms", default=",".join(ARMS), help="Comma-separated subset of the four named arms.")
@@ -141,8 +168,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.submit:
         environment = dict(os.environ)
         environment.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-        for entry in manifest["arms"]:
-            subprocess.run(entry["command"], cwd=PROJECT_ROOT, env=environment, check=True)
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        log_dir = args.manifest.parent / "launch_logs" / timestamp
+        return submit_arms(manifest["arms"], environment, log_dir)
     return 0
 
 

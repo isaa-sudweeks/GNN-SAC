@@ -15,6 +15,7 @@ from scripts.launch_paper_shared import (
     check_teachers,
     main,
     resolved_arm,
+    submit_arms,
 )
 
 
@@ -63,6 +64,46 @@ class PaperSharedLaunchTest(unittest.TestCase):
         distilled = [entry for entry in manifest["arms"] if entry["arm"].endswith("distill")]
         self.assertEqual(distilled[0]["teachers"], distilled[1]["teachers"])
 
+    def test_all_conditions_start_before_any_controller_is_waited_on(self):
+        events = []
+        entries = [{"arm": arm, "command": ["fake", arm]} for arm in ARMS]
+
+        def start(command, **kwargs):
+            arm = command[1]
+            events.append(("start", arm))
+
+            class Controller:
+                pid = 123
+
+                def wait(self):
+                    self_case.assertEqual(sum(e[0] == "start" for e in events), 4)
+                    events.append(("wait", arm))
+                    return 0
+
+            return Controller()
+
+        self_case = self
+        with tempfile.TemporaryDirectory() as temp, \
+                patch("scripts.launch_paper_shared.subprocess.Popen", side_effect=start):
+            self.assertEqual(submit_arms(entries, {}, Path(temp)), 0)
+            self.assertEqual([event for event, _ in events[:4]], ["start"] * 4)
+            self.assertEqual({p.name for p in Path(temp).glob("*.log")},
+                             {arm + ".log" for arm in ARMS})
+
+    def test_failed_condition_does_not_prevent_other_conditions_starting(self):
+        from unittest.mock import Mock
+
+        controllers = [Mock(pid=i) for i in range(4)]
+        for index, controller in enumerate(controllers):
+            controller.wait.return_value = 2 if index == 0 else 0
+        entries = [{"arm": arm, "command": ["fake", arm]} for arm in ARMS]
+        with tempfile.TemporaryDirectory() as temp, \
+                patch("scripts.launch_paper_shared.subprocess.Popen", side_effect=controllers) as start:
+            self.assertEqual(submit_arms(entries, {}, Path(temp)), 1)
+            self.assertEqual(start.call_count, 4)
+            for controller in controllers:
+                controller.wait.assert_called_once()
+
     def test_teacher_check_rejects_agent_only_or_missing_files(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "step_100.agent.pt"
@@ -76,14 +117,14 @@ class PaperSharedLaunchTest(unittest.TestCase):
 
     def test_default_dry_run_never_submits(self):
         with tempfile.TemporaryDirectory() as temp, \
-                patch("scripts.launch_paper_shared.subprocess.run") as submit, \
+                patch("scripts.launch_paper_shared.subprocess.Popen") as submit, \
                 patch("scripts.launch_paper_shared.subprocess.check_output", return_value="test-sha\n"):
             self.assertEqual(main(["--arms", "gnn_scratch", "--manifest", str(Path(temp) / "manifest.json")]), 0)
             submit.assert_not_called()
 
     def test_submit_checks_all_teachers_before_submitting_any_arm(self):
         with tempfile.TemporaryDirectory() as temp, \
-                patch("scripts.launch_paper_shared.subprocess.run") as submit, \
+                patch("scripts.launch_paper_shared.subprocess.Popen") as submit, \
                 patch("scripts.launch_paper_shared.subprocess.check_output", return_value="test-sha\n"), \
                 patch("scripts.launch_paper_shared.check_teachers", side_effect=FileNotFoundError("missing teacher")):
             with self.assertRaises(SystemExit):
