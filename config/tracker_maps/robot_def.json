@@ -4,33 +4,57 @@
         "name": "triangle_1",
         "nodes": ["node_1", "node_2", "node_3"],
         "passive_node": "node_2",
-        "trackers": {"node_2": "B11"}
+        "trackers": {"node_2": "B11"},
+        "rollers": {"node_1": "03", "node_3": "04"}
       },
       {
         "name": "triangle_2",
         "nodes": ["node_2", "node_4", "node_5"],
         "passive_node": "node_2",
-        "trackers": {"node_4": "B13", "node_5": "3.7"}
+        "trackers": {"node_4": "B13", "node_5": "B12"},
+        "rollers": {"node_4": "02", "node_5": "07"}
       },
       {
         "name": "triangle_3",
         "nodes": ["node_5", "node_3", "node_6"],
         "passive_node": "node_3",
-        "trackers": {"node_3": "B16", "node_6": "B14"}
+        "trackers": {"node_3": "B16"},
+        "rollers": {"node_5": "08", "node_6": "05"}
       },
       {
         "name": "triangle_4",
         "nodes": ["node_4", "node_6", "node_1"],
         "passive_node": "node_1",
-        "trackers": {"node_1": "B15"}
+        "trackers": {"node_1": "B15", "node_6": "B14"},
+        "rollers": {"node_4": "01", "node_6": "06"}
       }
     ],
     "tracker_calibration": {
       "B11": {
+        "local_plane_normal": [0, 0, -1],
+        "local_plane_point_offset": [0, 0, 0.0127]
+      },
+      "B13": {
         "local_plane_normal": [0, 0, 1],
-        "local_plane_point_offset": [0, 0, 0]
+        "local_plane_point_offset": [0, 0, 0.0127]
+    },
+      "B14": {
+        "local_plane_normal": [0, 0, 1],
+        "local_plane_point_offset": [0, 0, 0.0127]
+      },
+      "B15": {
+        "local_plane_normal": [0, 0, 1],
+        "local_plane_point_offset": [0, 0, 0.0127]
+      },
+      "B16": {
+        "local_plane_normal": [0, 0, 1],
+        "local_plane_point_offset": [0, 0, 0.0127]
+      },
+      "B12": {
+        "local_plane_normal": [0, 0, 1],
+        "local_plane_point_offset": [0, 0, 0.0127]
       }
     },
-    "steamvr_to_policy_matrix": [[1, 0, 0], [0, 0, 1], [0, 1, 0]],
+    "steamvr_to_policy_matrix": [[1, 0, 0], [0, 0, -1], [0, 1, 0]],
     "plane_parallel_tolerance": 1e-6
   }
