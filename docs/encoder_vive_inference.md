@@ -41,6 +41,22 @@ unset. The program rejects an incomplete calibration before opening serial outpu
 6. Check the proper right-handed `steamvr_to_policy_matrix` copied from the lab
    definition. Full orientation fusion rejects reflections (determinant −1).
 
+Capture the complete tracker pose while holding the robot stationary in a known
+reference alignment:
+
+```bash
+python scripts/vive_tracker_calibration_logger.py
+```
+
+The logger uses SteamVR only and never opens motor serial. Each `Full pose JSON:`
+line contains the tracker serial, position in metres, and full-precision 3×3
+`rotation_matrix` mapping tracker-local vectors into the SteamVR standing frame.
+Only connected, valid, `Running_OK` tracker poses are printed. Copy one JSON line
+for each mounted tracker, together with the known housing-to-world alignment.
+The separate `Forward direction` readout is only the tracker's local −Z direction
+expressed in that world frame; it is not a complete orientation or Euler angles.
+Ctrl+C exits and closes OpenVR.
+
 Inspect the exact nominal geometry, incidence matrix, serial order, and every
 possible mounting frame without opening hardware or loading a policy:
 
