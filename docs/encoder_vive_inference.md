@@ -104,18 +104,23 @@ encoder-session metadata taking precedence. This avoids comparing physical rolle
 centers against encoder observations of connector-ball centers. Position arrays and
 their ordering retain the existing schema.
 
-For a B13 mount with tracker **+Y parallel to housing +Z**, a yaw-only mounting
-family is `Rz(yaw) @ Rx(90 degrees)`. It includes a fixed axis alignment; it is not
-an identity roll/pitch matrix. Do not fit arbitrary mounting roll/pitch to compensate
-for an uncertain robot shape. An approximate nominal pose can be used to examine
-a candidate, but geometry and mounting-axis residuals must be reported before it is
-accepted. A direct known-housing-frame capture avoids this shape-transfer uncertainty.
+The direct B13 housing-reference capture supports tracker **-Z parallel to housing
++Z**, correcting the earlier +Y-axis belief. Its flat-XY-plane mounting family is
+`Rz(yaw) @ Rx(180 degrees)`: opposed normals with yaw fitted at 152.073285 degrees.
+This fixed normal flip preserves parallel mounting planes. The four-sample mean
+departs from that constrained fit by about 5.108 degrees; reference placement error
+and actual mount tilt cannot be separated by this capture. The user-requested flat
+mount prior is retained rather than fitting arbitrary mounting roll/pitch. Raw
+samples and calculation provenance are retained under
+`config/tracker_maps/calibration_sources/B13_reference_2026-11-07.json` and in the
+mount record. The roughly 0.014-degree sample spread measures short-term
+repeatability, not mounting accuracy. Independent physical validation remains open.
 The optional mount field `axis_alignment` declares `tracker_axis` and `housing_axis`
 using signed labels such as `+Y` and `+Z`. Runtime validates this declared constraint
 to numerical matrix precision; it does not certify physical alignment. B13 currently
-declares +Y -> +Z and retains an unset rotation until a compatible calibration is
-available. This fixes mounting tilt; it does not discard the robot's measured
-global tilt during operation.
+declares -Z -> +Z. This fixes mounting tilt; it does not discard the robot's measured
+global tilt during operation. A tracker +Y -> housing +Z mount would instead use
+`Rz(yaw) @ Rx(90 degrees)`; the direct B13 capture did not support that constraint.
 
 For these two mounts, B16 is at joint 3, which also belongs to B13's triangle.
 `fit_mount_yaw_from_point()` can fit B13's remaining yaw using that shared joint's

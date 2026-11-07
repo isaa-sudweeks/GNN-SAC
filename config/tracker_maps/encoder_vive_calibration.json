@@ -13,9 +13,64 @@
       "triangle": "triangle_1",
       "node": "node_2",
       "position_origin": "connector_ball",
-      "position_m": [0.24, 0, 0],
-      "rotation_matrix": null,
-      "axis_alignment": {"tracker_axis": "+Y", "housing_axis": "+Z"}
+      "position_m": [
+        0.24,
+        0,
+        0
+      ],
+      "rotation_matrix": [
+        [
+          -0.8835473571360218,
+          0.4683418278329954,
+          0.0
+        ],
+        [
+          0.4683418278329954,
+          0.8835473571360218,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          -1.0
+        ]
+      ],
+      "axis_alignment": {
+        "tracker_axis": "-Z",
+        "housing_axis": "+Z"
+      },
+      "calibration_provenance": {
+        "date": "2026-11-07",
+        "serial": "LHR-2BEE7775",
+        "samples": 4,
+        "capture_file": "config/tracker_maps/calibration_sources/B13_reference_2026-11-07.json",
+        "source_sha256": "32490d77c2b0bf9c99b66a96b5263b45a877a29b7a961c340760c0f006e0ebd9",
+        "method": "SO(3) mean in direct housing reference, projected to Rz(yaw) Rx(180 degrees) to preserve flat XY mounting",
+        "confirmed_world_from_housing": [
+          [
+            0.0,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0
+          ],
+          [
+            1.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "yaw_degrees": 152.0732852770903,
+        "reference_fit_residual_degrees": 5.108256228225529,
+        "max_sample_deviation_degrees": 0.014293437168827933,
+        "axis_alignment_source": "Direct reference capture supports tracker -Z to housing +Z; previous +Y declaration was incorrect for the reported OpenVR axes",
+        "tilt_residual_interpretation": "Reference-placement error and actual mounting tilt cannot be separated by this capture; flat-mount prior retained",
+        "physical_validation": false,
+        "offset_source": "User-confirmed 24 cm from joint center to tracker along housing +X"
+      }
     },
     "B16": {
       "triangle": "triangle_3",
