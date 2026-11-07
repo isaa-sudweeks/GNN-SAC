@@ -215,7 +215,7 @@ def tracker_health_metrics(
             reconstruction_rejections += 1
 
     duration = float(all_times[-1] - all_times[0]) if all_times.size > 1 else 0.0
-    return {
+    report = {
         "capture": str(capture["path"]),
         "expected_frames": len(frames),
         "valid_frames": len(complete),
@@ -241,6 +241,20 @@ def tracker_health_metrics(
             "acceleration_m_s2": acceleration_warning,
         },
     }
+    estimates = [frame.get("reconstruction_diagnostics", {}).get("encoder_vive") for frame in frames]
+    estimates = [estimate for estimate in estimates if estimate is not None]
+    if estimates:
+        report["state_estimation"] = {
+            "samples": len(estimates),
+            "one_tracker_frames": sum(estimate.get("status") == "one_tracker" for estimate in estimates),
+            "held_global_transform_frames": sum(estimate.get("status") == "held_global_transform" for estimate in estimates),
+            "uninitialized_frames": sum(estimate.get("status") == "uninitialized" for estimate in estimates),
+            "unverified_encoder_frames": sum(estimate.get("encoder_freshness_verified") is not True for estimate in estimates),
+            "max_global_pose_age_s": max((estimate.get("global_pose_age_s") or 0 for estimate in estimates), default=0),
+            "max_shape_constraint_error_m": max((estimate.get("shape", {}).get("max_constraint_error_m", 0) for estimate in estimates), default=0),
+            "paused_frames": sum(bool(frame.get("paused")) for frame in complete),
+        }
+    return report
 
 
 def kabsch_transform(source: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

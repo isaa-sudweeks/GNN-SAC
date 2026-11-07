@@ -1,5 +1,10 @@
 # Vive tracker diagnostics and exact MuJoCo replay
 
+The [encoder/two-Vive path](encoder_vive_inference.md) preserves this JSONL and
+command-replay workflow. Its additional estimator-health fields distinguish held
+global transforms from complete reconstructed-node frames and mark unverified
+Arduino encoder freshness.
+
 This workflow separates three questions: whether SteamVR tracking/reconstruction is
 stable, whether firmware commands address the intended physical rollers, and whether
 the configured MuJoCo dynamics reproduce the measured motion. A single moving trial

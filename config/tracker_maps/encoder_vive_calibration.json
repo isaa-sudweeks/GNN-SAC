@@ -1,0 +1,14 @@
+{
+  "reference_shape_confirmed": false,
+  "serial_node_order": [
+    "node_4_tri_triangle_4", "node_4", "node_1", "node_3",
+    "node_6", "node_6_tri_triangle_4", "node_5", "node_5_tri_triangle_3"
+  ],
+  "ticks_per_inch": 1125,
+  "encoder_signs": null,
+  "encoder_zero_ticks": null,
+  "tracker_mounts": {
+    "B13": {"triangle": null, "node": null, "position_m": null, "rotation_matrix": null},
+    "B16": {"triangle": null, "node": null, "position_m": null, "rotation_matrix": null}
+  }
+}

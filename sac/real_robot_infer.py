@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -35,6 +36,7 @@ from sim_to_real_io import (
     resolve_triangle_graph_definition,
     utc_now_iso,
 )
+from robot_operator import OperatorControls
 
 
 @dataclass(frozen=True)
@@ -236,6 +238,15 @@ class SerialCommandTransport:
         self.dropped_node_deliveries = 0
         self.node_drop_counts: Counter[int] = Counter()
         self.last_delivery_result: dict[str, object] | None = None
+        self.expect_encoder_positions = False
+        self.latest_encoder_sample = None
+        self._encoder_sequence = 0
+        self.operator_controls = None
+        self.pause_command = None
+        self._processing_pause_stop = False
+        self.last_pause_event = None
+        self.firmware_receiver_order = None
+        self._active_wire_indices = None
         if self.startup_delay_seconds > 0.0:
             self._sleep(self.startup_delay_seconds)
         reset_input_buffer = getattr(self._serial, "reset_input_buffer", None)
@@ -252,8 +263,31 @@ class SerialCommandTransport:
         return self._in_flight_command is not None
 
     def _write_line(self, command: str) -> None:
-        self._serial.write((command + "\n").encode("utf-8"))
+        self._serial.write((self.wire_command(command) + "\n").encode("utf-8"))
         self._serial.flush()
+
+    def configure_encoder_feedback(self, firmware_receivers, active_receivers) -> None:
+        """Map the unchanged transmitter's physical slots to the active policy channels."""
+        firmware = tuple(str(x) for x in firmware_receivers)
+        active = tuple(str(x) for x in active_receivers)
+        if not firmware or len(set(firmware)) != len(firmware) or any(not x.isdecimal() for x in firmware):
+            raise ValueError("firmware_receiver_order must contain unique decimal receiver IDs")
+        if len(active) != len(self.serial_node_order) or len(set(active)) != len(active) or not set(active) <= set(firmware):
+            raise ValueError("Firmware receiver order must contain every configured active roller exactly once")
+        self.firmware_receiver_order = firmware
+        self._active_wire_indices = tuple(firmware.index(x) for x in active)
+        self.expect_encoder_positions = True
+
+    def wire_command(self, command: str) -> str:
+        if self.firmware_receiver_order is None:
+            return command
+        parsed = parse_firmware_command(command)
+        if len(parsed.ticks) != len(self.serial_node_order):
+            raise ValueError("Policy command channel count does not match active rollers")
+        ticks = [0] * len(self.firmware_receiver_order)
+        for index, value in zip(self._active_wire_indices, parsed.ticks):
+            ticks[index] = value
+        return f"VEL_DUR:{','.join(map(str, ticks))}:{command.rsplit(':', 1)[1]}"
 
     def _node_label(self, one_based_index: int) -> str:
         if 1 <= one_based_index <= len(self.serial_node_order):
@@ -312,18 +346,33 @@ class SerialCommandTransport:
             f"cumulative_node_drops=[{cumulative_text}]"
         )
 
-    def send(self, command: str) -> None:
+    def send(self, command: str, *, _already_sent: bool = False) -> None:
         if self.command_in_flight:
             raise RuntimeError("Cannot send a new command while another is awaiting ACK")
         send_time = self._monotonic()
         self._in_flight_command = command
         self.last_delivery_result = None
         failures: dict[int, int] = {}
+        completion = None
+        encoder_ticks = None
+        queued_pause_stop = False
         try:
             print(f"serial tx: {command}", flush=True)
-            self._write_line(command)
+            if self.operator_controls is not None:
+                self.operator_controls.poll()
+            if not _already_sent:
+                self._write_line(command)
             deadline = send_time + self.ack_timeout_seconds
             while True:
+                if self.operator_controls is not None:
+                    paused = self.operator_controls.poll()
+                    if paused and not queued_pause_stop and not self._processing_pause_stop and self.pause_command is not None and command != self.pause_command:
+                        # Queue a zero immediately, then consume BOTH ordered
+                        # replies so a stop ACK can never acknowledge a move.
+                        self._write_line(self.pause_command)
+                        pause_sent_at = self._monotonic()
+                        self.last_pause_event = {"sent_at": pause_sent_at, "delivery": None}
+                        queued_pause_stop = True
                 if self._monotonic() >= deadline:
                     self.ack_timeouts += 1
                     self.last_delivery_result = {
@@ -347,6 +396,12 @@ class SerialCommandTransport:
                 if failure is not None:
                     node_index = int(failure.group(1))
                     attempts = int(failure.group(2))
+                    if self._active_wire_indices is not None:
+                        if not 1 <= node_index <= len(self.firmware_receiver_order):
+                            raise ValueError("Firmware reported a receiver index outside firmware_receiver_order")
+                        if node_index - 1 not in self._active_wire_indices:
+                            continue # Inactive configured transmitter slots always receive zero.
+                        node_index = self._active_wire_indices.index(node_index - 1) + 1
                     failures[node_index] = attempts
                     if not 1 <= node_index <= len(self.serial_node_order):
                         print(
@@ -356,8 +411,17 @@ class SerialCommandTransport:
                             flush=True,
                         )
                     continue
-                completion = self._COMPLETION_RE.fullmatch(line)
-                if completion is None:
+                if self.expect_encoder_positions and line.startswith("["):
+                    ticks = json.loads(line)
+                    expected_channels = len(self.firmware_receiver_order or self.serial_node_order)
+                    if not isinstance(ticks, list) or len(ticks) != expected_channels or any(isinstance(x, bool) or not isinstance(x, int) for x in ticks):
+                        raise ValueError("Firmware encoder array does not match configured channel order/count")
+                    raw_encoder_ticks = ticks
+                    encoder_ticks = ticks if self._active_wire_indices is None else [ticks[i] for i in self._active_wire_indices]
+                matched = self._COMPLETION_RE.fullmatch(line)
+                if matched is not None:
+                    completion = matched
+                if completion is None or (self.expect_encoder_positions and encoder_ticks is None):
                     continue
 
                 completion_time = self._monotonic()
@@ -379,6 +443,14 @@ class SerialCommandTransport:
                         for index, attempts in sorted(failures.items())
                     },
                 }
+                if self.expect_encoder_positions:
+                    if failures:
+                        self.latest_encoder_sample = None
+                        raise ValueError("Encoder feedback invalid after receiver delivery failure")
+                    self._encoder_sequence += 1
+                    self.latest_encoder_sample = {"ticks": encoder_ticks, "sequence": self._encoder_sequence,
+                                                  "received_at": completion_time, "freshness_verified": False,
+                                                  "raw_firmware_ticks": raw_encoder_ticks}
                 print(
                     self._format_stats(
                         round_trip_ms=1000.0 * (completion_time - send_time),
@@ -387,6 +459,17 @@ class SerialCommandTransport:
                     ),
                     flush=True,
                 )
+                if queued_pause_stop:
+                    delivery = self.last_delivery_result
+                    self._in_flight_command = None
+                    self._processing_pause_stop = True
+                    try:
+                        self.send(self.pause_command, _already_sent=True)
+                        delivery["pause_stop_delivery"] = self.last_delivery_result
+                        self.last_pause_event["delivery"] = self.last_delivery_result
+                        self.last_delivery_result = delivery
+                    finally:
+                        self._processing_pause_stop = False
                 return
         finally:
             self._in_flight_command = None
@@ -449,6 +532,7 @@ class SteamVRTrackerSource:
                 f"the OpenVR native library. Load failure: {exc}"
             ) from exc
         self.openvr = openvr
+        self.require_running_ok = False
         openvr.init(openvr.VRApplication_Background)
         self.system = openvr.VRSystem()
 
@@ -461,6 +545,8 @@ class SteamVRTrackerSource:
         tracker_poses = {}
         for device_index, pose in enumerate(poses):
             if not pose.bDeviceIsConnected or not pose.bPoseIsValid:
+                continue
+            if self.require_running_ok and pose.eTrackingResult != self.openvr.TrackingResult_Running_OK:
                 continue
             device_class = self.system.getTrackedDeviceClass(device_index)
             if device_class != self.openvr.TrackedDeviceClass_GenericTracker:
@@ -1773,7 +1859,36 @@ def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
     graph_definition_file = getattr(cfg, "graph_definition_file", None)
     if graph_definition_file in (None, "", "null"):
         graph_definition_file = None
-    if graph_definition_file is not None:
+    estimator = None
+    encoder_mode = str(getattr(cfg, "state_estimator", "trackers")) == "encoder_vive"
+    if str(getattr(cfg, "state_estimator", "trackers")) not in {"trackers", "encoder_vive"}:
+        raise ValueError("state_estimator must be trackers or encoder_vive")
+    if encoder_mode:
+        from encoder_robot import build_encoder_geometry, EncoderViveEstimator, load_calibration, make_encoder_layout
+
+        if graph_definition_file is None or layout_file is not None:
+            raise ValueError("encoder_vive requires graph_definition_file and no tracker_layout_file")
+        geometry = build_encoder_geometry(cfg)
+        calibration = load_calibration(str(cfg.encoder_calibration_file))
+        serial_data = _load_json(str(cfg.serial_map_file))
+        serial_map = serial_data.get("serial_to_tracker_id", serial_data)
+        serial_map = {str(serial): str(tracker) for serial, tracker in serial_map.items()
+                      if tracker in calibration.get("tracker_mounts", {})}
+        if len(serial_map) != 2 or len(set(serial_map.values())) != 2:
+            raise ValueError("Exactly one serial number is required for each of the two calibrated tracker IDs")
+        layout = make_encoder_layout(cfg, geometry, serial_map)
+        estimator = EncoderViveEstimator(cfg, geometry, calibration, layout.steamvr_to_policy_matrix)
+        if not set(estimator.mounts) <= set(serial_map.values()):
+            raise ValueError("Both calibrated tracker IDs must appear in serial_map_file")
+        if bool(cfg.encoder_allow_unverified_feedback):
+            print("WARNING: unchanged Arduino firmware returns potentially cached encoder arrays; per-channel sample age is UNVERIFIED.", file=sys.stderr, flush=True)
+        if source is None and str(cfg.command_transport) == "print":
+            from encoder_runtime import EncoderReplaySource
+
+            if getattr(cfg, "encoder_input_file", None) in (None, "", "null"):
+                raise ValueError("Print-only encoder mode requires encoder_input_file; use a sensor replay to avoid motor I/O")
+            source = EncoderReplaySource(str(cfg.encoder_input_file))
+    elif graph_definition_file is not None:
         if layout_file is not None:
             raise ValueError(
                 "Set either graph_definition_file or tracker_layout_file, not both"
@@ -1806,6 +1921,8 @@ def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
         configured_order = None
     if configured_order is None:
         configured_order = layout.serial_node_order
+    if encoder_mode and tuple(configured_order) != tuple(layout.serial_node_order):
+        raise ValueError("Encoder calibration and serial channel order must match graph roller order")
     formatter = SerialVelocityCommandFormatter(
         layout.node_names,
         layout.action_mask,
@@ -1818,25 +1935,59 @@ def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
     load_agent_checkpoint(agent, checkpoint)
     agent.model.eval()
     source = source or SteamVRTrackerSource()
+    if encoder_mode and isinstance(source, SteamVRTrackerSource):
+        source.require_running_ok = True
     transport = None
     recorder = None
+    preview = None
     session_reason = "error"
     try:
         transport = _make_command_transport(cfg, formatter)
+        if encoder_mode and isinstance(transport, SerialCommandTransport):
+            roller_by_control = {geometry.graph.control_node_by_occurrence[triangle["name"], node]: str(roller)
+                                 for triangle in geometry.graph.raw["triangles"]
+                                 for node, roller in triangle["rollers"].items()}
+            transport.configure_encoder_feedback(cfg.firmware_receiver_order,
+                                                  [roller_by_control[name] for name in formatter.serial_node_order])
         if bool(getattr(cfg, "record_session", True)):
+            metadata = _session_metadata(cfg, layout, formatter)
+            if estimator is not None:
+                metadata["state_estimation"] = estimator.metadata()
+                cached = checkpoint.with_name(f"{checkpoint.stem}.agent{checkpoint.suffix}")
+                loaded = cached if cached.exists() and cached.stat().st_mtime_ns >= checkpoint.stat().st_mtime_ns else checkpoint
+                with loaded.open("rb") as checkpoint_stream:
+                    digest = hashlib.file_digest(checkpoint_stream, "sha256").hexdigest()
+                metadata["state_estimation"]["policy_checkpoint"] = {"path": str(loaded), "sha256": digest}
             recorder = RealRobotSessionRecorder(
-                _recording_path(cfg), _session_metadata(cfg, layout, formatter)
+                _recording_path(cfg), metadata
             )
             print(f"Recording sim-to-real session to {recorder.path}", flush=True)
-        session_reason = _run_control_loop(
-            cfg, source, layout, builder, agent, formatter, transport, recorder
-        )
+        if encoder_mode:
+            from encoder_runtime import run_encoder_loop
+            from robot_preview import RobotPreview
+
+            with OperatorControls(enabled=bool(cfg.operator_keyboard)) as controls:
+                if bool(cfg.state_preview):
+                    preview = RobotPreview(layout.node_names, layout.edge_index)
+                    controls.external_events = preview.events
+                session_reason = run_encoder_loop(cfg, source, layout, builder, agent, formatter,
+                                                  transport, estimator, controls, recorder, preview)
+        else:
+            session_reason = _run_control_loop(cfg, source, layout, builder, agent, formatter, transport, recorder)
     finally:
-        if recorder is not None:
-            recorder.close(reason=session_reason)
-        if transport is not None:
-            transport.close()
-        source.close()
+        try:
+            if preview is not None:
+                preview.close()
+        finally:
+            try:
+                if recorder is not None:
+                    recorder.close(reason=session_reason)
+            finally:
+                try:
+                    if transport is not None:
+                        transport.close()
+                finally:
+                    source.close()
 
 
 @hydra.main(config_name="inference/real_robot", config_path="../config", version_base=None)

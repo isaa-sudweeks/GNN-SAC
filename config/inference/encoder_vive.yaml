@@ -1,0 +1,41 @@
+# @package _global_
+
+defaults:
+  - real_robot
+  - _self_
+
+state_estimator: encoder_vive
+graph_definition_file: config/tracker_maps/robot_def.json
+serial_map_file: config/tracker_maps/vive_serial_map.json
+encoder_calibration_file: config/tracker_maps/encoder_vive_calibration.json
+encoder_input_file: null # Print mode requires recorded sensor input; never opens motors.
+# User-confirmed flashed transmitter: eight receiver slots in roller order.
+firmware_receiver_order: ["01", "02", "03", "04", "05", "06", "07", "08"]
+
+# Use offset geometry for the estimator, keeping the policy architecture unchanged.
+truss_realistic: true
+use_control_graph: true
+num_nodes: 12 # Control-node occurrences in the pushed four-triangle definition.
+num_policy_actions: 8 # Eight unmasked rollers; the GNN per-node head is unchanged.
+control_node_observation_source: connector_ball
+# The pushed robot definition's proper right-handed SteamVR coordinate transform.
+steamvr_to_policy_matrix: [[1, 0, 0], [0, 0, -1], [0, 1, 0]]
+
+operator_keyboard: true
+state_preview: true
+tracker_startup_min_visible: 2
+tracker_startup_timeout_s: 30.0
+encoder_solver_tolerance_m: 0.0001
+encoder_solver_max_evaluations: 60
+encoder_max_age_s: 1.0 # Receive age ONLY: firmware cannot attest per-channel age.
+encoder_max_state_latency_s: 1.0 # Reject stale state after slow reconstruction/inference.
+encoder_max_step_m: 0.05 # Configurable discontinuity guard, to calibrate on hardware.
+encoder_allow_unverified_feedback: true # Authorized unchanged firmware; always warn/log.
+
+# Software defaults to calibrate with stationary and moving hardware recordings.
+tracker_variance_window: 30
+tracker_position_variance_floor_m2: 0.000001
+tracker_rotation_variance_floor_rad2: 0.000001
+tracker_initial_position_variance_m2: 0.0001
+tracker_initial_rotation_variance_rad2: 0.0001
+tracker_reacquire_after_s: 1.0

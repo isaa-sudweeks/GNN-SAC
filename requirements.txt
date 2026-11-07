@@ -1,6 +1,7 @@
 torch>=2.11.0
 tensordict
 numpy
+scipy>=1.18.0
 openvr==2.5.102
 pyserial>=3.5
 gymnasium[mujoco]

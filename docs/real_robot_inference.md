@@ -1,5 +1,10 @@
 # Real-robot GNN inference
 
+For the encoder-based offset shape estimator with two full-pose Vive anchors,
+inverse-variance fusion, dropout fallback, a state preview, and Ctrl+P pause,
+see [Encoder/Vive inference](encoder_vive_inference.md). It uses the same policy
+and observation/logging contracts; the modes below retain the original tracker path.
+
 `sac/real_robot_infer.py` replaces the MuJoCo observation/step loop with SteamVR tracker input. It obtains the policy node order, control graph, action mask, and edge roles from either a selected `mujoco-truss-gen` preset or a hand-authored triangle definition. Preset mode constructs MuJoCo once for this metadata and then closes it; every closed-loop observation comes from SteamVR. The physical tracker positions in the first complete frame establish the observation bounding box and rigidity reference. Firmware-compatible commands are printed unless serial transport is explicitly enabled.
 
 Real inference also records a JSONL diagnostic session by default. See
