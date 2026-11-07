@@ -6,6 +6,20 @@ defaults:
 
 state_estimator: encoder_vive
 graph_definition_file: config/tracker_maps/robot_def.json
+# Coordinate sources only: graph node IDs, action ordering, and weights stay fixed.
+# This graph's opposite pairs are (1,5), (2,6), (3,4); the preset uses (1,6), (2,5), (3,4).
+encoder_reference_node_map:
+  node_1: node_1
+  node_2: node_2
+  node_3: node_3
+  node_4: node_4
+  node_5: node_6
+  node_6: node_5
+encoder_reference_triangles_equilateral: true
+# Joint-center edge = roller edge + sqrt(3)*connector_rod_length for the
+# equilateral reference. 1.89 m - sqrt(3)*0.2886751346 m = 1.39 m.
+scale: 1.39
+encoder_reference_joint_edge_m: 1.89
 serial_map_file: config/tracker_maps/vive_serial_map.json
 encoder_calibration_file: config/tracker_maps/encoder_vive_calibration.json
 encoder_input_file: null # Print mode requires recorded sensor input; never opens motors.

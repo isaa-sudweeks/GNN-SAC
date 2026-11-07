@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from encoder_state import OffsetShapeSolver, Pose, TwoTrackerFusion, finite_array, roller_frame
-from sim_to_real_io import canonical_json, load_triangle_graph_definition
+from sim_to_real_io import canonical_json, graph_reference_coordinates, load_triangle_graph_definition
 
 if TYPE_CHECKING:
     from real_robot_infer import TrackerLayout
@@ -25,6 +25,29 @@ class EncoderGeometry:
     triangle_indices: dict[str, list[int]]
     control_ball_indices: np.ndarray
     model_xml_sha256: str
+    reference_node_map: dict[str, str] | None = None
+
+
+def validate_mount_axis_alignment(rotation: np.ndarray, alignment: dict | None) -> None:
+    """Require a declared mounting axis to be preserved to matrix precision.
+
+    For example tracker +Y -> housing +Z permits housing-Z yaw after a fixed
+    Rx(+90 degrees), while preventing a noisy shape estimate from changing tilt.
+    The declaration is a mechanical prior, not evidence of physical alignment.
+    """
+    if alignment is None:
+        return
+    if not isinstance(alignment, dict) or set(alignment) != {"tracker_axis", "housing_axis"}:
+        raise ValueError("axis_alignment requires tracker_axis and housing_axis")
+    axes = {f"{sign}{name}": multiplier * np.eye(3)[:, index]
+            for index, name in enumerate("XYZ") for sign, multiplier in (("+", 1), ("-", -1))}
+    source, target = alignment["tracker_axis"], alignment["housing_axis"]
+    if source not in axes or target not in axes:
+        raise ValueError("Mount axes must be one of +X, -X, +Y, -Y, +Z, -Z")
+    observed = rotation @ axes[source]
+    if not np.allclose(observed, axes[target], atol=1e-6, rtol=0):
+        angle = np.degrees(np.arccos(np.clip(observed @ axes[target], -1, 1)))
+        raise ValueError(f"Mount violates tracker {source} -> housing {target} alignment by {angle:.3f} degrees")
 
 
 def build_encoder_geometry(cfg: Any) -> EncoderGeometry:
@@ -36,6 +59,9 @@ def build_encoder_geometry(cfg: Any) -> EncoderGeometry:
     node_dict, _ = get_preset_definition(resolve_truss_topology(cfg), scale=_fixed_model_scale(cfg))
     if set(node_dict) != set(graph.logical_node_names):
         raise ValueError("Graph node names must match the selected MuJoCo preset coordinates")
+    reference_map = getattr(cfg, "encoder_reference_node_map", None)
+    reference_map = dict(reference_map) if reference_map is not None else {name: name for name in graph.logical_node_names}
+    node_dict = graph_reference_coordinates(node_dict, graph.logical_node_names, reference_map)
     spec = get_mujoco_spec(node_dict, graph.triangle_dict, realistic=True,
                            physical_params=_physical_parameters_from_config(cfg))
     model = MujocoModel(spec)
@@ -76,8 +102,20 @@ def build_encoder_geometry(cfg: Any) -> EncoderGeometry:
     solver = OffsetShapeSolver(rollers, balls, list(triangles.values()), ball_indices, incidence,
                               tolerance_m=float(cfg.encoder_solver_tolerance_m),
                               max_evaluations=int(cfg.encoder_solver_max_evaluations))
+    if bool(getattr(cfg, "encoder_reference_triangles_equilateral", False)):
+        lengths = solver.reference_lengths.reshape(-1, 3)
+        relative_spread = np.ptp(lengths, axis=1) / lengths.mean(axis=1)
+        if np.any(relative_spread > 1e-3):
+            raise ValueError(f"Nominal reference triangles are not equilateral; check encoder_reference_node_map: {lengths.tolist()}")
+    expected_joint_edge = getattr(cfg, "encoder_reference_joint_edge_m", None)
+    if expected_joint_edge is not None:
+        expected_joint_edge = float(expected_joint_edge)
+        joint_positions = balls[ball_indices]
+        joint_lengths = np.linalg.norm(joint_positions[solver.edges[:, 1]] - joint_positions[solver.edges[:, 0]], axis=1)
+        if not np.isfinite(expected_joint_edge) or expected_joint_edge <= 0 or not np.allclose(joint_lengths, expected_joint_edge, atol=1e-3, rtol=0):
+            raise ValueError(f"Nominal joint edges disagree with encoder_reference_joint_edge_m; check scale and connector dimensions: {joint_lengths.tolist()}")
     return EncoderGeometry(graph, solver, triangles, ball_indices,
-                           hashlib.sha256(spec.to_xml().encode()).hexdigest())
+                           hashlib.sha256(spec.to_xml().encode()).hexdigest(), reference_map)
 
 
 def make_encoder_layout(cfg: Any, geometry: EncoderGeometry, serial_map: dict[str, str]) -> TrackerLayout:
@@ -130,6 +168,7 @@ class EncoderViveEstimator:
         if len(mounts) != 2:
             raise ValueError("Exactly two measured tracker mounts are required")
         self.mounts = {}
+        self.mount_origins = {}
         for tracker_id, mount in mounts.items():
             triangle = str(mount["triangle"])
             if triangle not in geometry.triangle_indices:
@@ -140,7 +179,13 @@ class EncoderViveEstimator:
             order = geometry.triangle_indices[triangle]
             anchor = geometry.graph.triangle_nodes[triangle].index(node)
             order = order[anchor:] + order[:anchor]
-            self.mounts[tracker_id] = (order, Pose(mount["position_m"], mount["rotation_matrix"]))
+            pose = Pose(mount["position_m"], mount["rotation_matrix"])
+            validate_mount_axis_alignment(pose.rotation, mount.get("axis_alignment"))
+            self.mounts[tracker_id] = (order, pose)
+            origin = str(mount.get("position_origin", "physical_node"))
+            if origin not in {"physical_node", "connector_ball"}:
+                raise ValueError("position_origin must be physical_node or connector_ball")
+            self.mount_origins[tracker_id] = origin
         self.fusion = TwoTrackerFusion(self.mounts, window=int(cfg.tracker_variance_window),
             position_variance_floor=float(cfg.tracker_position_variance_floor_m2),
             rotation_variance_floor=float(cfg.tracker_rotation_variance_floor_rad2),
@@ -196,7 +241,11 @@ class EncoderViveEstimator:
             try:
                 observed = Pose(self.coordinate @ raw.position, self.coordinate @ raw.rotation_matrix)
                 order, mount = self.mounts[tracker_id]
-                local = roller_frame(self.last_rollers[order]).compose(mount)
+                housing = roller_frame(self.last_rollers[order])
+                if self.mount_origins[tracker_id] == "connector_ball":
+                    joint_index = self.geometry.control_ball_indices[order[0]]
+                    housing = Pose(self.last_balls[joint_index], housing.rotation)
+                local = housing.compose(mount)
                 candidates[tracker_id] = observed.compose(local.inverse())
             except (ValueError, AttributeError) as exc:
                 rejected[tracker_id] = str(exc)
@@ -237,6 +286,9 @@ class EncoderViveEstimator:
         return {"estimator": "encoder_offset_two_vive", "calibration": self.calibration,
                 "calibration_sha256": hashlib.sha256(canonical_json(self.calibration).encode()).hexdigest(),
                 "model_xml_sha256": self.geometry.model_xml_sha256,
+                "reference_node_map": self.geometry.reference_node_map,
+                "reference_joint_edge_m": getattr(self.cfg, "encoder_reference_joint_edge_m", None),
+                "control_node_observation_source": str(self.cfg.control_node_observation_source),
                 "shape_model": "spatial_triangle_bisectors_fixed_connector_rods",
                 "reference_offset_components_m": self.geometry.solver.offset_components.tolist(),
                 "settings": {key: getattr(self.cfg, key) for key in (

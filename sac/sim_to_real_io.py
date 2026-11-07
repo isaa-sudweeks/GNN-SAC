@@ -29,6 +29,30 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def graph_reference_coordinates(
+    preset_coordinates: Mapping[str, object],
+    logical_nodes: Iterable[str],
+    reference_node_map: Mapping[str, str] | None = None,
+) -> dict[str, list[float]]:
+    """Assign preset coordinates to graph labels without changing graph identities.
+
+    A custom triangle graph may use different labels for opposite vertices than
+    its coordinate preset. Explicit maps must be complete bijections so they cannot
+    silently alias nodes or alter actuator routing.
+    """
+    names = tuple(logical_nodes)
+    mapping = dict(reference_node_map) if reference_node_map is not None else {name: name for name in names}
+    if set(mapping) != set(names) or set(mapping.values()) != set(preset_coordinates) or len(mapping) != len(preset_coordinates):
+        raise ValueError("reference_node_map must bijectively map every graph node to one preset coordinate node")
+    result = {}
+    for name in names:
+        point = np.asarray(preset_coordinates[mapping[name]], dtype=float)
+        if point.shape != (3,) or not np.isfinite(point).all():
+            raise ValueError(f"Invalid reference coordinates for {name!r}")
+        result[name] = point.tolist()
+    return result
+
+
 @dataclass(frozen=True)
 class TriangleGraphDefinition:
     """Resolved controller and MuJoCo routing from a triangle graph JSON object."""

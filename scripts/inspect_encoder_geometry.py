@@ -25,6 +25,7 @@ def main(cfg):
             pose = roller_frame(geometry.solver.initial_rollers[order[i:] + order[:i]])
             mounts[triangle][node] = {"origin_m": pose.position.tolist(), "rotation_matrix": pose.rotation.tolist()}
     payload = {"model_xml_sha256": geometry.model_xml_sha256,
+               "reference_node_map": geometry.reference_node_map,
                "control_node_order": graph.control_node_names,
                "serial_node_order": graph.serial_node_order,
                "logical_node_order": graph.logical_node_names,

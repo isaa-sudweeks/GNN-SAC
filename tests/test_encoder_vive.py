@@ -16,12 +16,13 @@ from scipy.spatial.transform import Rotation
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "sac")]
 
-from encoder_state import Pose, TwoTrackerFusion, roller_frame
-from encoder_robot import build_encoder_geometry, EncoderViveEstimator, make_encoder_layout
+from encoder_state import Pose, TwoTrackerFusion, roller_frame, fit_mount_yaw_from_point
+from encoder_robot import build_encoder_geometry, EncoderViveEstimator, make_encoder_layout, validate_mount_axis_alignment
 from encoder_runtime import run_encoder_loop
 from robot_operator import OperatorControls, OperatorEmergencyStop
 from real_robot_infer import RealRobotObservationBuilder, RealRobotSessionRecorder, SerialVelocityCommandFormatter, TrackerPose
 from sim_to_real_io import read_jsonl
+from sim_to_real_io import graph_reference_coordinates
 from tests import test_real_robot_infer as legacy_tests
 from tests.test_gnn_mujoco_truss_gen_smoke import graph_test_cfg
 
@@ -33,6 +34,33 @@ def fusion():
 
 
 class FusionTest(unittest.TestCase):
+    def test_shared_point_yaw_fit_is_independent_of_global_robot_pose(self):
+        base=np.array([[1.,0,0],[0,0,-1],[0,1,0]])
+        point=np.array([1.63675,-.945,0])
+        offset=np.array([.24,0,0])
+        for yaw in (-179.,0.,62.8,179.):
+            rotation=Rotation.from_euler('z',yaw,degrees=True).as_matrix()@base
+            world=Pose([2,-1,.3],Rotation.from_euler('xyz',[.2,-.3,1.1]).as_matrix())
+            measured=world.compose(Pose(offset,rotation))
+            fitted,diagnostics=fit_mount_yaw_from_point(measured,world.apply(point),point,offset,base)
+            np.testing.assert_allclose(fitted,rotation,atol=1e-12)
+            self.assertLess(diagnostics['point_error_m'],1e-12)
+            validate_mount_axis_alignment(fitted,{'tracker_axis':'+Y','housing_axis':'+Z'})
+
+    def test_shared_point_yaw_fit_reports_normal_mismatch_without_fitting_tilt(self):
+        base=np.array([[1.,0,0],[0,0,-1],[0,1,0]])
+        point=np.array([1.6,-.945,0]); offset=np.array([.24,0,0])
+        measured=Pose(offset,base)
+        rotation,diagnostics=fit_mount_yaw_from_point(measured,point+[0,0,.3],point,offset,base)
+        np.testing.assert_allclose(rotation,base,atol=1e-12)
+        self.assertAlmostEqual(diagnostics['normal_error_m'],.3)
+        self.assertAlmostEqual(diagnostics['point_error_m'],.3)
+
+    def test_shared_point_yaw_fit_rejects_unobservable_heading(self):
+        base=np.array([[1.,0,0],[0,0,-1],[0,1,0]])
+        with self.assertRaisesRegex(ValueError,'unobservable'):
+            fit_mount_yaw_from_point(Pose([0,0,0],base),np.array([0,0,1.]),np.array([0,0,1.]),np.zeros(3),base)
+
     def test_mount_frame_follows_corner_bisector_as_triangle_deforms(self):
         pose = roller_frame(np.array([[0,0,0],[1,0,0],[0,1,0]],dtype=float))
         np.testing.assert_allclose(pose.rotation[:,0], [2**-.5,2**-.5,0],atol=1e-12)
@@ -110,6 +138,111 @@ class OperatorTest(unittest.TestCase):
     def test_ctrl_c_remains_keyboard_interrupt(self):
         with self.assertRaises(KeyboardInterrupt):
             OperatorControls(enabled=False).feed(b"\x03")
+
+
+class ReferenceGeometryTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from omegaconf import OmegaConf
+        cfg_values=OmegaConf.load(ROOT/"config/inference/encoder_vive.yaml")
+        physical=OmegaConf.load(ROOT/"config/physics/physical_parameters.yaml")
+        cls.node_map=OmegaConf.to_container(cfg_values.encoder_reference_node_map)
+        cls.cfg=graph_test_cfg(graph_definition_file=str(ROOT/"config/tracker_maps/robot_def.json"),
+            encoder_reference_node_map=cls.node_map, encoder_reference_triangles_equilateral=True,
+            encoder_solver_tolerance_m=1e-4, encoder_solver_max_evaluations=60,
+            scale=float(cfg_values.scale),encoder_reference_joint_edge_m=float(cfg_values.encoder_reference_joint_edge_m),
+            physical_parameters_enabled=True,physical_parameters=OmegaConf.to_container(physical.physical_parameters),
+            truss_realistic=True,control_frequency_hz=5,visualize=False,
+            steamvr_to_policy_matrix=np.eye(3).tolist(),control_node_observation_source='connector_ball')
+        cls.geometry=build_encoder_geometry(cls.cfg)
+
+    def test_default_encoder_reference_has_equilateral_triangles_without_changing_node_ids(self):
+        np.testing.assert_allclose(self.geometry.solver.reference_lengths,1.39,atol=1e-3)
+        b=self.geometry.solver.initial_balls[self.geometry.control_ball_indices]
+        edges=self.geometry.solver.edges
+        np.testing.assert_allclose(np.linalg.norm(b[edges[:,1]]-b[edges[:,0]],axis=1),1.89,atol=1e-3)
+        self.assertEqual(self.geometry.reference_node_map,self.node_map)
+        self.assertEqual(self.geometry.graph.serial_node_order,
+            ('node_4_tri_triangle_4','node_4','node_1','node_3','node_6','node_6_tri_triangle_4','node_5','node_5_tri_triangle_3'))
+
+    def test_identity_coordinates_are_rejected_when_equilateral_is_requested(self):
+        from copy import deepcopy
+        cfg=deepcopy(self.cfg)
+        cfg.encoder_reference_node_map={name:name for name in self.geometry.graph.logical_node_names}
+        with self.assertRaisesRegex(ValueError,'not equilateral'):
+            build_encoder_geometry(cfg)
+
+    def test_measured_joint_spacing_rejects_inconsistent_scale(self):
+        from copy import deepcopy
+        cfg=deepcopy(self.cfg)
+        cfg.scale=1.49
+        with self.assertRaisesRegex(ValueError,'joint edges disagree'):
+            build_encoder_geometry(cfg)
+
+    def test_reference_mapping_is_bijective_and_does_not_mutate_the_preset(self):
+        source={'a':[0,0,0],'b':[1,0,0]}
+        result=graph_reference_coordinates(source,['a','b'],{'a':'b','b':'a'})
+        self.assertEqual(result,{'a':[1,0,0],'b':[0,0,0]})
+        self.assertEqual(source,{'a':[0,0,0],'b':[1,0,0]})
+        with self.assertRaises(ValueError):
+            graph_reference_coordinates(source,['a','b'],{'a':'a','b':'a'})
+
+    def test_replay_geometry_matches_recorded_encoder_reference(self):
+        from replay_real_robot_commands import _build_environment, _positions
+        env,_=_build_environment(self.cfg,self.geometry.graph,reference_node_map=self.node_map)
+        try:
+            replay_positions=_positions(env)
+            expected=self.geometry.solver.initial_balls[self.geometry.control_ball_indices]
+            np.testing.assert_allclose(replay_positions,expected,atol=1e-6)
+        finally:
+            env.close()
+
+    def test_recorded_map_and_observation_source_are_used_by_replay(self):
+        from copy import deepcopy
+        from real_robot_infer import _session_metadata
+        from replay_real_robot_commands import run_replay, _build_environment, _positions
+        from sim_to_real_io import JsonlWriter
+        layout=make_encoder_layout(self.cfg,self.geometry,{})
+        formatter=SerialVelocityCommandFormatter(layout.node_names,layout.action_mask,layout.serial_node_order,
+            max_velocity_ticks_per_second=1800,duration_seconds=.2)
+        metadata=_session_metadata(self.cfg,layout,formatter)
+        metadata['state_estimation']={'reference_node_map':self.node_map,'control_node_observation_source':'connector_ball'}
+        with tempfile.TemporaryDirectory() as directory:
+            cfg=deepcopy(self.cfg)
+            cfg.input_file=str(Path(directory)/'real.jsonl')
+            cfg.output_file=str(Path(directory)/'replay.jsonl')
+            cfg.control_node_observation_source='physical_node' # Recorded source takes precedence.
+            with JsonlWriter(cfg.input_file) as writer:
+                writer.write('session',**metadata)
+                writer.write('emergency_command',step=0,relative_time_s=0,command=formatter.emergency_stop_command())
+            with redirect_stdout(io.StringIO()):
+                run_replay(cfg)
+            records=read_jsonl(cfg.output_file)
+        self.assertEqual(records[0]['reference_node_map'],self.node_map)
+        self.assertEqual(records[0]['control_node_observation_source'],'connector_ball')
+        initial=next(record for record in records if record['type']=='simulation_frame')
+        # Replay retains the simulator's seeded reset perturbation. Compare with
+        # that same reset, while the preceding test checks compiled nominal parity.
+        expected_env,_=_build_environment(self.cfg,self.geometry.graph,reference_node_map=self.node_map)
+        try:
+            expected_env.reset(seed=int(getattr(self.cfg,'seed',0)))
+            expected=_positions(expected_env)
+        finally:
+            expected_env.close()
+        np.testing.assert_allclose(initial['node_positions'],expected,atol=1e-6)
+
+    def test_yaw_only_constraint_preserves_tracker_y_to_housing_z(self):
+        alignment={"tracker_axis":"+Y","housing_axis":"+Z"}
+        base=Rotation.from_euler('x',90,degrees=True).as_matrix()
+        for angle in (-180,-123,0,86,180):
+            matrix=Rotation.from_euler('z',angle,degrees=True).as_matrix()@base
+            validate_mount_axis_alignment(matrix,alignment)
+        with self.assertRaisesRegex(ValueError,'violates'):
+            validate_mount_axis_alignment(np.eye(3),alignment)
+        with self.assertRaisesRegex(ValueError,'violates'):
+            validate_mount_axis_alignment(Rotation.from_euler('x',1,degrees=True).as_matrix()@base,alignment)
+        with self.assertRaisesRegex(ValueError,'axes'):
+            validate_mount_axis_alignment(base,{"tracker_axis":"unknown","housing_axis":"+Z"})
 
 
 class EncoderSerialTest(unittest.TestCase):
@@ -265,6 +398,25 @@ class OffsetEstimatorTest(unittest.TestCase):
         self.assertIsNotNone(positions)
         self.assertEqual(health["status"],"one_tracker")
         self.assertIn("B13",health["rejected_trackers"])
+
+    def test_joint_origin_offset_does_not_count_connector_arm_twice(self):
+        calibration=self.calibration()
+        for mount in calibration['tracker_mounts'].values():
+            mount['position_origin']='connector_ball'
+            mount['position_m']=[.24,0,0]
+        estimator=EncoderViveEstimator(self.cfg,self.geometry,calibration,np.eye(3))
+        world=Pose([1,-2,.5],Rotation.from_euler('xyz',[.1,.2,.3]).as_matrix())
+        raw={}
+        for key,(order,mount) in estimator.mounts.items():
+            joint=self.geometry.solver.initial_balls[self.geometry.control_ball_indices[order[0]]]
+            housing_rotation=roller_frame(self.geometry.solver.initial_rollers[order]).rotation
+            position=world.rotation@(joint+housing_rotation@mount.position)+world.position
+            rotation=world.rotation@housing_rotation@mount.rotation
+            raw[key]=TrackerPose(position,rotation)
+        sample={'ticks':[0]*8,'sequence':1,'received_at':0,'freshness_verified':False}
+        positions,_=estimator.sample(sample,raw,{key:key for key in raw},0)
+        expected=world.apply(self.geometry.solver.initial_balls[self.geometry.control_ball_indices])
+        np.testing.assert_allclose(positions,expected,atol=1e-7)
 
     def test_faults_send_immediate_stop_and_are_logged(self):
         class Source:

@@ -7,6 +7,8 @@ defaults:
 
 input_file: ??? # Recorded real-robot JSONL session or plain VEL_DUR command file.
 graph_definition_file: ??? # Exact triangle/passive/roller JSON used by real inference.
+reference_node_map: null # Recorded encoder sessions supply their map automatically; null preserves older replay coordinates.
+scale: null # null uses recorded session scale, or 1.0 for plain/older inputs; explicit values must match the recording.
 output_file: null # null writes mujoco_replay.jsonl under the Hydra run directory.
 visualize: false # true opens MuJoCo's interactive viewer; false runs headlessly.
 domain_randomization: false # Keep replay deterministic and use the configured nominal physics.

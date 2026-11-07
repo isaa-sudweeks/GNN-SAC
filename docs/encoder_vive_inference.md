@@ -32,10 +32,14 @@ unset. The program rejects an incomplete calibration before opening serial outpu
    model assumes a tracker rigidly attached to that triangle's roller/node housing,
    following the corner bisector and triangle normal as in the mechanism model;
    a freely rotating connector-ball mount needs its own orientation model.
-5. Measure `position_m` and `rotation_matrix` for the tracker relative to the selected
-   node's housing frame: origin at that physical roller, x along the interior corner
-   bisector, z along the triangle's normal in cyclic file order, y=z×x. This frame
-   follows the housing's changing corner angle rather than a single tube edge.
+5. Measure `position_m` and `rotation_matrix` in the selected node's housing axes:
+   x along the interior corner bisector, z along the triangle's normal in cyclic file
+   order, y=z×x. This follows the changing corner angle rather than a single tube edge.
+   `position_origin` selects the translation origin: `physical_node` (the physical
+   roller center, also the default for older calibrations) or `connector_ball` (the
+   spherical joint center, with the same housing axes). Both current mounts use
+   `connector_ball`: the user clarified that the 24 cm is from joint center to
+   tracker, so `position_m=[0.24,0,0]`. Do not also add a connector-arm displacement.
    `rotation_matrix` maps tracker-local axes into that frame. Identity and zero are
    valid only when physically measured; they are not supplied as mount defaults.
 6. Check the proper right-handed `steamvr_to_policy_matrix` copied from the lab
@@ -67,6 +71,62 @@ python scripts/inspect_encoder_geometry.py > /tmp/encoder_geometry.json
 It uses the existing MuJoCo preset, graph definition, scale, and physical parameters.
 Review `connector_rod_length`, node sizes, and nominal tube lengths against measured
 hardware. These simulation defaults are not a physical calibration.
+
+The encoder reference uses an explicit `encoder_reference_node_map` to assign
+preset coordinates to the hand-authored graph's labels. The graph's opposite pairs
+are (1,5), (2,6), (3,4), whereas the preset coordinates use (1,6), (2,5), (3,4).
+Using identical coordinate labels created two spurious approximately 1.414 m
+segments alongside 1 m segments. The configured map exchanges the coordinate
+sources of nodes 5 and 6, restoring approximately equilateral 1 m reference triangles
+at `scale=1`; it does not rename graph nodes, rewire actuators, or alter policy
+weights/training. Equilateral-reference validation now rejects that mismatch.
+This is a canonical nominal embedding, not a measurement of the robot's current
+shape, scale, or assembly branch. Verify these against physical geometry.
+
+The user measured nominal **joint-center spacing of about 1.89 m**, not roller-center
+spacing. With the configured nominal connector-rod length 0.2886751346 m and
+equilateral corners, the corresponding roller-side length is
+`1.89 - sqrt(3)*0.2886751346 = 1.39 m`. The encoder profile therefore sets
+`scale=1.39` and validates the generated joint edges against
+`encoder_reference_joint_edge_m=1.89`. Changing connector dimensions requires
+updating the reference scale consistently. This numerical consistency check does
+not certify the measured geometry; the calibration records `nominal_approximate`.
+
+The coordinate map is stored in session estimation metadata. Recorded-session
+replay uses that map automatically so its reference matches the estimator. Older
+sessions without this field retain the original coordinate assignment. Plain-command
+replay can set `reference_node_map` explicitly. Remapping the nominal coordinates
+does not make a calibration transferred through an approximate shape accurate.
+Replay's `scale=null` uses the recorded scale, or 1.0 when none is recorded.
+An explicit scale must match the recording.
+Replay positions also honor the configured node observation source, with recorded
+encoder-session metadata taking precedence. This avoids comparing physical roller
+centers against encoder observations of connector-ball centers. Position arrays and
+their ordering retain the existing schema.
+
+For a B13 mount with tracker **+Y parallel to housing +Z**, a yaw-only mounting
+family is `Rz(yaw) @ Rx(90 degrees)`. It includes a fixed axis alignment; it is not
+an identity roll/pitch matrix. Do not fit arbitrary mounting roll/pitch to compensate
+for an uncertain robot shape. An approximate nominal pose can be used to examine
+a candidate, but geometry and mounting-axis residuals must be reported before it is
+accepted. A direct known-housing-frame capture avoids this shape-transfer uncertainty.
+The optional mount field `axis_alignment` declares `tracker_axis` and `housing_axis`
+using signed labels such as `+Y` and `+Z`. Runtime validates this declared constraint
+to numerical matrix precision; it does not certify physical alignment. B13 currently
+declares +Y -> +Z and retains an unset rotation until a compatible calibration is
+available. This fixes mounting tilt; it does not discard the robot's measured
+global tilt during operation.
+
+For these two mounts, B16 is at joint 3, which also belongs to B13's triangle.
+`fit_mount_yaw_from_point()` can fit B13's remaining yaw using that shared joint's
+world position inferred from B16, its known coordinates within B13's local triangle,
+and the declared fixed mounting-axis alignment. This avoids requiring the whole
+octahedron's orientation to match its nominal pose. It still relies on correct
+joint IDs, offsets, local triangle dimensions, and axis alignment. The function
+returns normal-direction and in-plane point residuals alongside the candidate;
+large residuals must not be hidden by changing mounting roll/pitch. One shared
+point plus an axis constraint determines yaw only when its in-plane baseline is
+nonzero. A full known-housing-frame capture remains the independent alternative.
 
 After calibration, use the same checkpoint and architecture/feature overrides as
 the previous inference run:

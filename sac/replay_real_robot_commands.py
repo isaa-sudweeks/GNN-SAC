@@ -29,6 +29,7 @@ from mujoco_truss_gen.mujoco_model.control_graph import control_graph_metadata_f
 from sim_to_real_io import (
     SCHEMA_VERSION,
     canonical_json,
+    graph_reference_coordinates,
     FirmwareCommand,
     JsonlWriter,
     load_triangle_graph_definition,
@@ -296,7 +297,7 @@ def _assert_recorded_model_config(cfg, session: dict) -> None:
         raise ValueError("Recorded physical_parameters do not match replay configuration")
 
 
-def _build_environment(cfg, graph):
+def _build_environment(cfg, graph, *, reference_node_map=None):
     topology = resolve_truss_topology(cfg)
     node_dict, _ = get_preset_definition(topology, scale=_fixed_model_scale(cfg))
     if set(node_dict) != set(graph.logical_node_names):
@@ -304,6 +305,7 @@ def _build_environment(cfg, graph):
             "Graph logical nodes must exactly match preset coordinates; "
             f"graph={sorted(graph.logical_node_names)}, preset={sorted(node_dict)}"
         )
+    node_dict = graph_reference_coordinates(node_dict, graph.logical_node_names, reference_node_map)
     spec = get_mujoco_spec(
         node_dict,
         graph.triangle_dict,
@@ -336,6 +338,7 @@ def _positions(env) -> np.ndarray:
             env.mj_model,
             graph_view=env._graph_view(),
             aggregation="connector_ball",
+            control_node_observation_source=env.config.control_node_observation_source,
         )[:, :3],
         dtype=np.float64,
     )
@@ -367,8 +370,16 @@ def run_replay(cfg) -> Path:
     graph = load_triangle_graph_definition(str(cfg.graph_definition_file))
     limit = int(getattr(cfg, "max_velocity_ticks_per_second", 1800))
     scheduled, session, limit = _load_commands(Path(str(cfg.input_file)), limit=limit)
+    if getattr(cfg, "scale", None) in (None, "null") and "scale" in session:
+        cfg.scale = session["scale"]
     _assert_recorded_model_config(cfg, session)
-    env, metadata = _build_environment(cfg, graph)
+    reference_map = session.get("state_estimation", {}).get("reference_node_map")
+    if reference_map is None:
+        reference_map = getattr(cfg, "reference_node_map", None)
+    observation_source = session.get("state_estimation", {}).get("control_node_observation_source")
+    if observation_source is not None:
+        cfg.control_node_observation_source = observation_source
+    env, metadata = _build_environment(cfg, graph, reference_node_map=reference_map)
     _assert_graph_parity(graph, metadata, session)
     serial_order = tuple(session["serial_node_order"]) if session else graph.serial_node_order
     output_path = _output_path(cfg)
@@ -394,6 +405,8 @@ def run_replay(cfg) -> Path:
                 truss_realistic=resolve_truss_realistic(cfg),
                 scale=_fixed_model_scale(cfg),
                 physical_parameters=physical_parameters,
+                reference_node_map=reference_map,
+                control_node_observation_source=env.config.control_node_observation_source,
                 node_order=list(graph.control_node_names),
                 control_node_mapping=[
                     {"triangle": triangle, "logical_node": logical, "control_node": control}

@@ -1,5 +1,6 @@
 {
   "reference_shape_confirmed": true,
+  "reference_geometry_status": "nominal_approximate",
   "serial_node_order": [
     "node_4_tri_triangle_4", "node_4", "node_1", "node_3",
     "node_6", "node_6_tri_triangle_4", "node_5", "node_5_tri_triangle_3"
@@ -8,10 +9,18 @@
   "encoder_signs": [1, 1, 1, 1, 1, 1, 1, 1],
   "encoder_zero_ticks": [0, 0, 0, 0, 0, 0, 0, 0],
   "tracker_mounts": {
-    "B13": {"triangle": "triangle_1", "node": "node_2", "position_m": [0.024,0,0], "rotation_matrix": null},
+    "B13": {
+      "triangle": "triangle_1",
+      "node": "node_2",
+      "position_origin": "connector_ball",
+      "position_m": [0.24, 0, 0],
+      "rotation_matrix": null,
+      "axis_alignment": {"tracker_axis": "+Y", "housing_axis": "+Z"}
+    },
     "B16": {
       "triangle": "triangle_3",
       "node": "node_3",
+      "position_origin": "connector_ball",
       "position_m": [0.24, 0, 0],
       "rotation_matrix": [
         [0.6419275305126003, 0.7076387857590904, -0.29525648927567133],
@@ -25,7 +34,7 @@
         "source_sha256": "dc6b6c79f56096ad67eb165bf013d80378be40dfbe3b028e056eb94b874ed7ba",
         "method": "SO(3) mean; R_housing_from_tracker = R_world_from_housing.T @ mean(R_world_from_tracker)",
         "confirmed_world_from_housing": [[0, 1, 0], [0, 0, 1], [1, 0, 0]],
-        "offset_source": "User measurement: 24 cm along housing +X"
+        "offset_source": "User clarification: 24 cm from joint center to tracker along housing +X; not from roller center"
       }
     }
   }

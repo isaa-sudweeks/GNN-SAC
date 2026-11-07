@@ -74,6 +74,39 @@ def roller_frame(points: np.ndarray) -> Pose:
     return Pose(frame.position, np.column_stack((x, np.cross(z, x), z)))
 
 
+def fit_mount_yaw_from_point(
+    tracker_world_pose: Pose,
+    shared_point_world: np.ndarray,
+    shared_point_housing: np.ndarray,
+    tracker_offset_housing: np.ndarray,
+    fixed_axis_alignment: np.ndarray,
+) -> tuple[np.ndarray, dict]:
+    """Fit R_housing_from_tracker = Rz(yaw) @ fixed_axis_alignment.
+
+    One known point plus the fixed mounting-normal alignment determines yaw when
+    the point has a nonzero in-plane baseline. Return point residuals explicitly:
+    fitting yaw must not hide inconsistent geometry or manufacture roll/pitch.
+    This computes a candidate, not a physical-calibration acceptance decision.
+    """
+    point_world = finite_array(shared_point_world, (3,), "shared world point")
+    point_housing = finite_array(shared_point_housing, (3,), "shared housing point")
+    offset = finite_array(tracker_offset_housing, (3,), "tracker housing offset")
+    base = Pose(np.zeros(3), fixed_axis_alignment).rotation
+    measured_tracker = tracker_world_pose.rotation.T @ (point_world - tracker_world_pose.position)
+    measured = base @ measured_tracker
+    target = point_housing - offset
+    if min(np.linalg.norm(measured[:2]), np.linalg.norm(target[:2])) <= 1e-9:
+        raise ValueError("Yaw is unobservable from a point on the mounting-normal axis")
+    yaw = np.arctan2(target[1], target[0]) - np.arctan2(measured[1], measured[0])
+    yaw = float(np.arctan2(np.sin(yaw), np.cos(yaw)))
+    cosine, sine = np.cos(yaw), np.sin(yaw)
+    rotation = np.array([[cosine, -sine, 0], [sine, cosine, 0], [0, 0, 1]]) @ base
+    residual = rotation @ measured_tracker - target
+    return rotation, {"yaw_rad": yaw, "point_error_m": float(np.linalg.norm(residual)),
+                      "normal_error_m": float(residual[2]),
+                      "in_plane_length_error_m": float(np.linalg.norm(measured[:2]) - np.linalg.norm(target[:2]))}
+
+
 class OffsetShapeSolver:
     """Solve 3-D tube lengths with fixed connector rods on triangle bisectors.
 
