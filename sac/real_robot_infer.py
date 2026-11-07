@@ -1966,7 +1966,11 @@ def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
             from encoder_runtime import run_encoder_loop
             from robot_preview import RobotPreview
 
-            with OperatorControls(enabled=bool(cfg.operator_keyboard)) as controls:
+            with OperatorControls(enabled=bool(cfg.operator_keyboard),
+                                  start_paused=bool(getattr(cfg, "start_paused", False))) as controls:
+                if controls.paused:
+                    print("Starting PAUSED: sensing/logging continue with zero-velocity commands. Ctrl+P or the preview button starts motion.",
+                          file=sys.stderr, flush=True)
                 if bool(cfg.state_preview):
                     preview = RobotPreview(layout.node_names, layout.edge_index)
                     controls.external_events = preview.events

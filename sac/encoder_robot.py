@@ -297,7 +297,8 @@ class EncoderViveEstimator:
                     "tracker_initial_rotation_variance_rad2", "tracker_reacquire_after_s",
                     "tracker_startup_min_visible", "encoder_solver_tolerance_m",
                     "encoder_solver_max_evaluations", "encoder_max_age_s", "encoder_max_step_m",
-                    "encoder_max_state_latency_s", "encoder_allow_unverified_feedback")},
+                    "encoder_max_state_latency_s", "encoder_allow_unverified_feedback")}
+                    | {"start_paused": bool(getattr(self.cfg, "start_paused", False))},
                 "firmware_receiver_order": list(self.cfg.firmware_receiver_order),
                 "variance_model": "rolling_second_difference_jitter",
                 "both_trackers_missing": "hold_last_global_transform"}

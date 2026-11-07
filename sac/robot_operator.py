@@ -18,8 +18,8 @@ class OperatorControls:
     throughout pause; returning to running requires a newly built observation.
     """
 
-    def __init__(self, *, enabled: bool = True, stream=None) -> None:
-        self.paused = False
+    def __init__(self, *, enabled: bool = True, stream=None, start_paused: bool = False) -> None:
+        self.paused = bool(start_paused)
         self.stopped = False
         self.revision = 0
         self.enabled = enabled

@@ -123,6 +123,17 @@ class FusionTest(unittest.TestCase):
 
 
 class OperatorTest(unittest.TestCase):
+    def test_paused_startup_waits_for_explicit_resume_and_keeps_stop_latched(self):
+        controls=OperatorControls(enabled=False,start_paused=True)
+        self.assertTrue(controls.poll())
+        self.assertFalse(controls.stopped)
+        controls.feed(b'\x10')
+        self.assertFalse(controls.poll())
+        controls.feed(b'e\x10')
+        with self.assertRaises(OperatorEmergencyStop):
+            controls.poll()
+        self.assertTrue(controls.paused)
+
     def test_ctrl_p_toggles_and_emergency_stop_is_latched(self):
         controls = OperatorControls(enabled=False)
         controls.feed(b"\x10")
@@ -468,8 +479,7 @@ class OffsetEstimatorTest(unittest.TestCase):
         layout = make_encoder_layout(self.cfg,self.geometry,{"B13":"B13","B16":"B16"})
         formatter = SerialVelocityCommandFormatter(layout.node_names,layout.action_mask,layout.serial_node_order,
                                                    max_velocity_ticks_per_second=1800,duration_seconds=.2)
-        controls = OperatorControls(enabled=False)
-        controls.request("toggle_pause")
+        controls = OperatorControls(enabled=False,start_paused=True)
         outer = self
         class Source:
             count=0
@@ -515,6 +525,45 @@ class OffsetEstimatorTest(unittest.TestCase):
         self.assertEqual(transport.commands[:2],[formatter.velocity_command(np.zeros((12,1)))]*2)
         self.assertEqual(len(transport.stops),1)
         self.assertEqual(reason,"control_steps_complete")
+
+    def test_paused_serial_startup_only_sends_zero_while_recording_sensors(self):
+        from real_robot_infer import SerialCommandTransport
+        estimator=self.make_estimator()
+        layout=make_encoder_layout(self.cfg,self.geometry,{'B13':'B13','B16':'B16'})
+        formatter=SerialVelocityCommandFormatter(layout.node_names,layout.action_mask,layout.serial_node_order,
+            max_velocity_ticks_per_second=1800,duration_seconds=.2)
+        clock=legacy_tests._FakeClock()
+        responses=['VEL_DUR command completed in 10 ms','[0,0,0,0,0,0,0,0]']*3
+        serial=legacy_tests._FakeSerial(clock,responses)
+        transport=SerialCommandTransport('/dev/fake',115200,layout.serial_node_order,
+            ack_timeout_seconds=.5,startup_delay_seconds=0,serial_factory=lambda **_:serial,
+            monotonic=clock.monotonic,sleep=clock.sleep)
+        receiver_ids=[f'{i:02}' for i in range(1,9)]
+        transport.configure_encoder_feedback(receiver_ids,receiver_ids)
+        outer=self
+        class Source:
+            def poses_by_serial(self):
+                return outer.poses(estimator,Pose(np.zeros(3),np.eye(3)))
+        class Agent:
+            def act(self,*_,**__):
+                raise AssertionError('Policy must not run during paused startup')
+        cfg=SimpleNamespace(control_frequency_hz=5,control_steps=2,deterministic=True,
+            encoder_max_state_latency_s=2,tracker_startup_timeout_s=30)
+        controls=OperatorControls(enabled=False,start_paused=True)
+        builder=RealRobotObservationBuilder(layout,False,1)
+        with tempfile.TemporaryDirectory() as directory:
+            recorder=RealRobotSessionRecorder(Path(directory)/'session.jsonl',{})
+            with patch('encoder_runtime.time.monotonic',clock.monotonic),patch('encoder_runtime.time.sleep',clock.sleep),redirect_stdout(io.StringIO()):
+                reason=run_encoder_loop(cfg,Source(),layout,builder,Agent(),formatter,transport,estimator,controls,recorder)
+            recorder.close(reason=reason)
+            records=read_jsonl(recorder.path)
+        frames=[record for record in records if record['type']=='tracker_frame']
+        self.assertEqual(len(frames),2)
+        self.assertTrue(all(record['paused'] for record in frames))
+        self.assertEqual(len(serial.writes),4) # bootstrap, two paused cycles, final stop
+        for wire in serial.writes:
+            from sim_to_real_io import parse_firmware_command
+            self.assertEqual(parse_firmware_command(wire.decode().strip()).ticks,(0,)*8)
 
 
 if __name__ == "__main__":

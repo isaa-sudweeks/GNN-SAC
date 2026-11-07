@@ -36,6 +36,7 @@ control_node_observation_source: connector_ball
 steamvr_to_policy_matrix: [[1, 0, 0], [0, 0, -1], [0, 1, 0]]
 
 operator_keyboard: true
+start_paused: true # First live bench check: only zero velocity until Ctrl+P or preview Resume.
 state_preview: true
 tracker_startup_min_visible: 2
 tracker_startup_timeout_s: 30.0

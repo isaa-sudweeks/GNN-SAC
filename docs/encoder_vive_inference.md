@@ -146,6 +146,13 @@ python sac/real_robot_infer.py --config-name inference/encoder_vive \
 
 The default transport remains `print`. Print-only encoder mode requires
 `encoder_input_file=/path/to/sensors.jsonl` and opens neither serial nor SteamVR.
+The encoder profile also defaults to `start_paused=true`. In a live serial session
+it samples sensors, builds observations, updates the preview, and records data while
+sending zero-velocity commands. Press Ctrl+P or the preview's Pause/resume button
+only when ready to start policy commands. Pausing is not active position holding;
+zero commands cannot guarantee a loaded mechanism stays motionless. For a verified
+unattended run or a replay that should execute policy actions immediately, explicitly
+set `start_paused=false`.
 Each input line contains:
 
 ```json
@@ -154,7 +161,8 @@ Each input line contains:
 
 Supply both calibrated tracker poses for startup. Subsequent lines may omit one
 or both. The example above illustrates the schema, not a usable calibration.
-Use `state_preview=false operator_keyboard=false` for a headless replay.
+Use `state_preview=false operator_keyboard=false start_paused=false` for a headless
+replay that should execute policy actions rather than remain paused.
 
 ## Shape and global pose
 
