@@ -54,10 +54,12 @@ def run_encoder_loop(cfg, source, layout, builder, agent, formatter, transport,
     last_revision = controls.revision
     pending_pause = False
     policy_started = False
+    previous_dispatch = None
+    coverage_warnings = 0
 
-    def record(kind, **payload):
+    def record(kind, *, recorded_at=None, **payload):
         if recorder is not None:
-            recorder.write(kind, step=step, relative_time_s=recorder.relative_time(), **payload)
+            recorder.write(kind, step=step, relative_time_s=recorder.relative_time(recorded_at), **payload)
 
     def operator_events():
         nonlocal last_revision, pending_pause
@@ -70,17 +72,35 @@ def run_encoder_loop(cfg, source, layout, builder, agent, formatter, transport,
                     pending_pause = True
             last_revision = controls.revision
 
-    def send(command, action, *, sensor_poll=False):
+    def send(command, action, *, sensor_poll=False, cycle_timing=None):
+        nonlocal previous_dispatch, coverage_warnings
         attempt_time = time.monotonic()
         parsed = parse_firmware_command(command, limit=formatter.max_velocity_ticks_per_second)
+        timing = dict(cycle_timing or {})
+        if previous_dispatch is not None:
+            interval = attempt_time - previous_dispatch["time"]
+            uncovered = max(0., interval - previous_dispatch["duration_s"])
+            risk = (not sensor_poll and not controls.paused and any(parsed.ticks)
+                    and previous_dispatch["moving"] and uncovered > 1e-6)
+            timing.update(dispatch_interval_s=interval, previous_duration_s=previous_dispatch["duration_s"],
+                          host_uncovered_s=uncovered, host_lease_coverage_risk=bool(risk))
+            if risk:
+                coverage_warnings += 1
+                if coverage_warnings == 1 or coverage_warnings % 10 == 0:
+                    print(f"WARNING: host command interval {interval:.3f}s exceeds previous "
+                          f"duration {previous_dispatch['duration_s']:.3f}s by {uncovered:.3f}s "
+                          f"({coverage_warnings} coverage risks). Motors may expire between commands; "
+                          "successful ACKs do not verify continuous motion.", file=sys.stderr, flush=True)
+        previous_dispatch = dict(time=attempt_time, duration_s=parsed.duration_seconds,
+                                 moving=not sensor_poll and not controls.paused and any(parsed.ticks))
         payload = dict(normalized_action=numpy_value(action), graph_node_order=list(formatter.graph_node_names),
                        serial_node_order=list(formatter.serial_node_order), ticks=list(parsed.ticks),
                        duration_s=parsed.duration_seconds, command=command,
                        transport="serial" if transport.acknowledgment_gated else "print",
-                       control_state="paused" if controls.paused else "running")
+                       control_state="paused" if controls.paused else "running", timing=timing)
         if hasattr(transport, "wire_command"):
             payload["firmware_command"] = transport.wire_command(command)
-        record("sensor_poll" if sensor_poll else "command_attempt", **payload)
+        record("sensor_poll" if sensor_poll else "command_attempt", recorded_at=attempt_time, **payload)
         try:
             transport.send(command)
             record("sensor_poll_result" if sensor_poll else "command_result", command=command,
@@ -100,14 +120,20 @@ def run_encoder_loop(cfg, source, layout, builder, agent, formatter, transport,
                                    relative_time_s=recorder.relative_time(queued["sent_at"]),
                                    **dict(payload, command=pause_command, normalized_action=zeros.tolist(),
                                           ticks=[0] * len(formatter.serial_node_order), control_state="paused",
+                                          timing={},
                                           firmware_command=transport.wire_command(pause_command)))
                     recorder.write("command_result", step=step, relative_time_s=recorder.relative_time(),
                                    command=pause_command, status="acknowledged" if queued["delivery"] is not None else "unconfirmed",
                                    delivery=queued["delivery"])
                 transport.last_pause_event = None
+                previous_dispatch = dict(time=queued["sent_at"], duration_s=parsed.duration_seconds, moving=False)
 
     try:
         controls.drain_events()
+        if formatter.duration_seconds <= period:
+            print(f"WARNING: command duration {formatter.duration_seconds:.3f}s has no overlap at "
+                  f"{frequency:g} Hz; computation or radio jitter can cause motor expiry gaps.",
+                  file=sys.stderr, flush=True)
         record("operator_event", state="paused" if controls.paused else "running", reason="initial")
         if transport.acknowledgment_gated:
             send(pause_command, zeros, sensor_poll=True)
@@ -122,6 +148,7 @@ def run_encoder_loop(cfg, source, layout, builder, agent, formatter, transport,
                 send(pause_command, zeros)
                 pending_pause = False
             now = time.monotonic()
+            cycle_lateness = max(0., now - next_tick)
             if hasattr(source, "read_encoder_frame"):
                 raw, encoder = source.read_encoder_frame(now)
             else:
@@ -136,7 +163,7 @@ def run_encoder_loop(cfg, source, layout, builder, agent, formatter, transport,
                     raise TimeoutError("Timed out waiting for calibrated initial Vive anchors")
                 if transport.acknowledgment_gated:
                     send(pause_command, zeros, sensor_poll=True)
-                next_tick = time.monotonic() + period
+                next_tick = max(now + period, time.monotonic())
                 continue
             tracking_status = (health["status"], tuple(health["visible_trackers"]))
             if previous_tracking_status is not None and tracking_status != previous_tracking_status:
@@ -167,10 +194,14 @@ def run_encoder_loop(cfg, source, layout, builder, agent, formatter, transport,
             if time.monotonic() - now > float(cfg.encoder_max_state_latency_s):
                 raise TimeoutError("Estimated policy input exceeded encoder_max_state_latency_s")
             send_time = time.monotonic()
-            send(formatter.velocity_command(action), action)
+            send(formatter.velocity_command(action), action,
+                 cycle_timing=dict(cycle_compute_s=send_time - now, cycle_lateness_s=cycle_lateness,
+                                   target_period_s=period))
             step += 1
             # A late cycle never sends a burst of catch-up motor commands.
-            next_tick = max(send_time + period, time.monotonic())
+            # Include reconstruction, inference and ACK time in the period.
+            # Starting the period at dispatch adds the next cycle's compute time.
+            next_tick = max(now + period, time.monotonic())
         reason = "control_steps_complete"
     except StopIteration:
         reason = "sensor_replay_complete"

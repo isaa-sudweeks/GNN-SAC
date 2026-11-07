@@ -234,6 +234,49 @@ status, anchor age, unverified encoder status, and pause state. Stale display sa
 are marked. Closing the preview warns and leaves terminal controls active. Rendering
 does not participate in the control timing loop.
 
+## Command timing and motor expiry
+
+The encoder profile targets 5 Hz (200 ms cycles) and sends finite 300 ms velocity
+commands. This leaves a nominal 100 ms overlap for variation in computation and
+dispatch timing. It also increases the time the last velocity may persist after
+host/radio loss from 200 ms to 300 ms. Pause and emergency stop still send zero
+immediately; they do not wait for the current command's duration to finish.
+The legacy tracker-only profile retains its 200 ms duration.
+
+The encoder loop schedules each cycle from the start of sensor acquisition, so
+reconstruction, inference, logging and serial acknowledgment time are included in
+the period. If a cycle overruns, the next cycle samples fresh state; stale commands
+are never replayed to catch up. Earlier encoder-loop versions scheduled the next
+cycle from dispatch, adding the next computation time to every command interval.
+
+Successful ACKs attest delivery, not uninterrupted motion. For example, 3.3 Hz
+means approximately 303 ms between dispatches: a 200 ms command can expire for
+approximately 103 ms before the next arrives, even with 18 ms RTT and no failures.
+Do not lengthen the duration without considering the longer host-stall stop time.
+The new 300 ms setting is a bounded margin, not a guarantee under arbitrarily slow
+computation or radio delays.
+
+Each command attempt now adds `timing` fields for computation time, cycle lateness,
+dispatch interval and host lease coverage. Consecutive running, nonzero commands
+whose interval exceeds the previous duration produce a warning (first occurrence,
+then every tenth) and `host_lease_coverage_risk=true` in every affected log record.
+These are host timing risks; unchanged firmware does not report per-receiver arrival
+or expiry timestamps. Intentional zero commands and pauses are excluded from warnings.
+
+Analyze old or new logs without connecting hardware:
+
+```bash
+python scripts/analyze_sim_to_real.py timing \
+  --tracker-log PATH_TO_TRIAL/real_robot_session.jsonl \
+  --output-dir /tmp/trial_command_timing
+```
+
+`command_timing.json` reports dispatch interval distributions, candidate expiry gaps,
+ACK RTT/status, computation latency when available, and per-channel counts of
+running zero commands and direct sign reversals. Paused commands, sensor polls and
+shutdown are excluded from policy-output counts. Use the report to distinguish
+timing gaps from commanded stops/reversals; neither proves physical motor behavior.
+
 ## Firmware and analysis compatibility
 
 Firmware is unchanged. Writing a newline-delimited `VEL_DUR` command makes the

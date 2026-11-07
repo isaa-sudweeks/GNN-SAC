@@ -5,6 +5,9 @@ defaults:
   - _self_
 
 state_estimator: encoder_vive
+# At 5 Hz, leave 100 ms for dispatch jitter. On host/radio loss the receiver
+# can retain the last velocity for up to this finite duration (previously 0.2 s).
+serial_command_duration_s: 0.3
 graph_definition_file: config/tracker_maps/robot_def.json
 # Coordinate sources only: graph node IDs, action ordering, and weights stay fixed.
 # This graph's opposite pairs are (1,5), (2,6), (3,4); the preset uses (1,6), (2,5), (3,4).

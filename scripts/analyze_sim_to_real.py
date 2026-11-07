@@ -19,7 +19,7 @@ for path in (ROOT, SAC_ROOT):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from sim_to_real_io import SCHEMA_VERSION, canonical_json, read_jsonl  # noqa: E402
+from sim_to_real_io import SCHEMA_VERSION, canonical_json, parse_firmware_command, read_jsonl  # noqa: E402
 
 
 def _recording_sha256(records: list[dict[str, Any]]) -> str:
@@ -39,6 +39,87 @@ def _versioned_session_record(
             f"{path} contains an unsupported schema version; expected {SCHEMA_VERSION}"
         )
     return sessions[0]
+
+
+def command_timing_metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Report host lease gaps and commanded stops without claiming RF arrival times."""
+    session = next((r for r in records if r.get("type") == "session"), {})
+    limit = int(session.get("max_velocity_ticks_per_second", 1800))
+    attempts = [r for r in records if r.get("type") in {"command_attempt", "sensor_poll"}]
+    intervals, moving_intervals, gaps = [], [], []
+    previous = None
+    channel_stats = None
+    running_count = 0
+    previous_running = None
+    for record in attempts:
+        timestamp = float(record["relative_time_s"])
+        if not np.isfinite(timestamp) or timestamp < 0:
+            raise ValueError("Command timestamps must be finite and nonnegative")
+        command = parse_firmware_command(record["command"], limit=limit)
+        ticks = np.asarray(command.ticks)
+        if channel_stats is None:
+            order = record.get("serial_node_order", session.get("serial_node_order", []))
+            channel_stats = [dict(channel=i + 1, node=order[i] if i < len(order) else None,
+                                  zero_commands=0, direct_sign_reversals=0) for i in range(len(ticks))]
+        if len(ticks) != len(channel_stats):
+            raise ValueError("Command channel count changed within the recording")
+        running = record.get("type") == "command_attempt" and record.get("control_state", "running") == "running"
+        moving = running and bool(np.any(ticks))
+        if previous is not None:
+            interval = timestamp - previous["time"]
+            if interval < 0:
+                raise ValueError("Command dispatch timestamps must be nondecreasing")
+            intervals.append(interval)
+            if moving and previous["moving"]:
+                moving_intervals.append(interval)
+                uncovered = max(0., interval - previous["duration"])
+                if uncovered > 1e-6:
+                    gaps.append(dict(relative_time_s=timestamp, step=record.get("step"),
+                                     interval_s=interval, previous_duration_s=previous["duration"],
+                                     host_uncovered_s=uncovered,
+                                     continuing_channels=(np.flatnonzero((ticks != 0) & (previous["ticks"] != 0)) + 1).tolist()))
+        if running:
+            running_count += 1
+            for i, channel in enumerate(channel_stats):
+                channel["zero_commands"] += int(ticks[i] == 0)
+                if previous_running is not None:
+                    channel["direct_sign_reversals"] += int(np.sign(ticks[i]) * np.sign(previous_running[i]) < 0)
+            previous_running = ticks
+        else:
+            # Do not count an intentional pause/resume as a policy reversal.
+            previous_running = None
+        previous = dict(time=timestamp, duration=command.duration_seconds, moving=moving, ticks=ticks)
+
+    def summary(values):
+        array = np.asarray(values, dtype=float)
+        return dict(count=len(array), mean=float(np.mean(array)) if len(array) else None,
+                    p50=float(np.median(array)) if len(array) else None,
+                    p95=float(np.percentile(array, 95)) if len(array) else None,
+                    maximum=float(np.max(array)) if len(array) else None)
+
+    results = [r for r in records if r.get("type") == "command_result"]
+    statuses = {}
+    rtts, compute = [], []
+    for result in results:
+        status = result.get("status", "unknown")
+        statuses[status] = statuses.get(status, 0) + 1
+        delivery = result.get("delivery") or {}
+        if delivery.get("round_trip_ms") is not None:
+            rtts.append(float(delivery["round_trip_ms"]))
+    for record in attempts:
+        if record.get("timing", {}).get("cycle_compute_s") is not None:
+            compute.append(float(record["timing"]["cycle_compute_s"]))
+    return dict(
+        dispatch_attempts=len(attempts), running_commands=running_count,
+        effective_dispatch_hz=len(intervals) / sum(intervals) if intervals and sum(intervals) > 0 else None,
+        dispatch_interval_s=summary(intervals), moving_dispatch_interval_s=summary(moving_intervals),
+        host_lease_coverage_risk_count=len(gaps), host_lease_coverage_risks=gaps,
+        running_channels=channel_stats or [], command_result_statuses=statuses,
+        round_trip_ms=summary(rtts), cycle_compute_s=summary(compute),
+        limitation="Host dispatch intervals only; unchanged firmware supplies no per-receiver arrival or expiry timestamps. "
+                   "Zero commands and direct sign reversals describe policy outputs, not measured motor motion. "
+                   "Final shutdown and pause gaps are excluded from coverage risks.",
+    )
 
 
 def _real_capture(path: Path) -> dict[str, Any]:
@@ -717,6 +798,16 @@ def run_health(args: argparse.Namespace) -> None:
     )
 
 
+def run_timing(args: argparse.Namespace) -> None:
+    records = read_jsonl(args.tracker_log)
+    _versioned_session_record(records, "session", args.tracker_log)
+    metrics = command_timing_metrics(records)
+    output = _ensure_output(args.output_dir) / "command_timing.json"
+    output.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps({key: value for key, value in metrics.items() if key != "host_lease_coverage_risks"}, indent=2))
+    print(f"Full timing report: {output}")
+
+
 def run_compare(args: argparse.Namespace) -> None:
     output = _ensure_output(args.output_dir)
     real = _real_capture(args.tracker_log)
@@ -751,6 +842,10 @@ def run_repeat(args: argparse.Namespace) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="mode", required=True)
+    timing = subparsers.add_parser("timing", help="Check host command expiry gaps, zeros and reversals")
+    timing.add_argument("--tracker-log", type=Path, required=True)
+    timing.add_argument("--output-dir", type=Path, required=True)
+    timing.set_defaults(function=run_timing)
     health = subparsers.add_parser("health", help="Analyze a stationary Vive capture")
     health.add_argument("--tracker-log", type=Path, required=True)
     health.add_argument("--output-dir", type=Path, required=True)

@@ -566,5 +566,75 @@ class OffsetEstimatorTest(unittest.TestCase):
             self.assertEqual(parse_firmware_command(wire.decode().strip()).ticks,(0,)*8)
 
 
+class EncoderLoopTimingTest(unittest.TestCase):
+    def run_timed_loop(self, compute_delays):
+        import torch
+        clock = legacy_tests._FakeClock()
+        sampled_at, sent_at = [], []
+        delays = iter(compute_delays)
+
+        class Source:
+            def read_encoder_frame(self, now):
+                sampled_at.append(now)
+                return {}, None
+
+        class Estimator:
+            def sample(self, *args):
+                clock.sleep(next(delays))
+                return np.zeros((1, 3)), {"status": "tracked", "visible_trackers": ["B13", "B16"]}
+
+        class Builder:
+            def build(self, *args):
+                return SimpleNamespace(rigidity=torch.ones(1))
+
+        class Agent:
+            def act(self, *args, **kwargs):
+                return torch.ones((1, 1)) * .1
+
+        class Transport:
+            acknowledgment_gated = False
+            def send(self, command):
+                sent_at.append(clock.monotonic())
+                clock.sleep(.018)
+            def emergency_stop(self, command, **kwargs):
+                self.stop = command
+
+        formatter = SerialVelocityCommandFormatter(["node"], max_velocity_ticks_per_second=1800, duration_seconds=.3)
+        cfg = SimpleNamespace(control_frequency_hz=5, control_steps=len(compute_delays), deterministic=True,
+                              encoder_max_state_latency_s=1, tracker_startup_timeout_s=30)
+        layout = SimpleNamespace(node_names=["node"], serial_to_tracker_id={})
+        transport, warnings = Transport(), io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            with patch("encoder_runtime.time.monotonic", clock.monotonic), patch("encoder_runtime.time.sleep", clock.sleep), redirect_stderr(warnings):
+                recorder = RealRobotSessionRecorder(Path(directory) / "session.jsonl", {})
+                reason = run_encoder_loop(cfg, Source(), layout, Builder(), Agent(), formatter, transport,
+                                          Estimator(), OperatorControls(enabled=False), recorder)
+                recorder.close(reason=reason)
+            records = read_jsonl(recorder.path)
+        self.assertEqual(transport.stop, "VEL_DUR:0:0")
+        self.assertEqual(reason, "control_steps_complete")
+        return sampled_at, sent_at, records, warnings.getvalue()
+
+    def test_compute_and_ack_latency_are_inside_control_period(self):
+        # The old dispatch-relative schedule produced 303 ms intervals here.
+        sampled, sent, records, warnings = self.run_timed_loop([.103] * 4)
+        np.testing.assert_allclose(sampled, [0, .2, .4, .6], atol=1e-10)
+        np.testing.assert_allclose(np.diff(sent), [.2] * 3, atol=1e-10)
+        attempts = [r for r in records if r["type"] == "command_attempt"]
+        self.assertTrue(all(abs(r["timing"]["cycle_compute_s"] - .103) < 1e-10 for r in attempts))
+        self.assertTrue(all(not r["timing"]["host_lease_coverage_risk"] for r in attempts[1:]))
+        self.assertEqual(warnings, "")
+
+    def test_slow_cycle_warns_and_next_cycle_uses_fresh_state_without_backlog(self):
+        sampled, sent, records, warnings = self.run_timed_loop([.103, .35, .103])
+        np.testing.assert_allclose(sampled, [0, .2, .568], atol=1e-10)
+        np.testing.assert_allclose(sent, [.103, .55, .671], atol=1e-10)
+        attempts = [r for r in records if r["type"] == "command_attempt"]
+        self.assertTrue(attempts[1]["timing"]["host_lease_coverage_risk"])
+        self.assertAlmostEqual(attempts[1]["timing"]["host_uncovered_s"], .147)
+        self.assertFalse(attempts[2]["timing"]["host_lease_coverage_risk"])
+        self.assertIn("successful ACKs do not verify continuous motion", warnings)
+
+
 if __name__ == "__main__":
     unittest.main()

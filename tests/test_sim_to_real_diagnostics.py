@@ -27,6 +27,7 @@ from analyze_sim_to_real import (
     paired_metrics,
     repeated_trial_metrics,
     tracker_health_metrics,
+    command_timing_metrics,
 )
 from replay_real_robot_commands import (
     ScheduledCommand,
@@ -51,6 +52,42 @@ from sim_to_real_io import (
     resolve_triangle_graph_definition,
 )
 from tests.test_gnn_mujoco_truss_gen_smoke import graph_test_cfg
+
+
+class CommandTimingTest(unittest.TestCase):
+    def test_successful_acks_still_expose_lease_gaps_and_policy_stops(self):
+        records = [{"type": "session", "serial_node_order": ["a", "b"]}]
+        rows = [(0, [180, 180], "running"), (.303, [-180, 180], "running"),
+                (.606, [0, 0], "running"), (.909, [0, 0], "paused"),
+                (2, [180, 0], "running"), (2.2, [180, 180], "running")]
+        for timestamp, ticks, state in rows:
+            records.append(dict(type="command_attempt", relative_time_s=timestamp,
+                                command=f"VEL_DUR:{','.join(map(str, ticks))}:0.2", control_state=state))
+            records.append(dict(type="command_result", status="acknowledged", delivery={"round_trip_ms": 18}))
+        result = command_timing_metrics(records)
+        self.assertEqual(result["command_result_statuses"], {"acknowledged": 6})
+        self.assertEqual(result["round_trip_ms"]["mean"], 18)
+        self.assertEqual(result["host_lease_coverage_risk_count"], 1)
+        self.assertAlmostEqual(result["host_lease_coverage_risks"][0]["host_uncovered_s"], .103)
+        self.assertEqual(result["running_channels"][0]["direct_sign_reversals"], 1)
+        self.assertEqual(result["running_channels"][0]["zero_commands"], 1)
+        self.assertEqual(result["running_channels"][1]["zero_commands"], 2)
+        self.assertEqual(result["running_commands"], 5)
+
+    def test_paused_sensor_polls_do_not_count_as_policy_commands(self):
+        rows = [dict(type="sensor_poll", relative_time_s=t, command="VEL_DUR:0:0.3") for t in [0, .4]]
+        result = command_timing_metrics(rows)
+        self.assertEqual(result["host_lease_coverage_risk_count"], 0)
+        self.assertEqual(result["running_commands"], 0)
+        self.assertAlmostEqual(result["effective_dispatch_hz"], 2.5)
+        self.assertIsNone(command_timing_metrics([])["effective_dispatch_hz"])
+
+    def test_invalid_dispatch_times_are_rejected(self):
+        def row(t):
+            return dict(type="command_attempt", relative_time_s=t, command="VEL_DUR:1:0.3")
+        for rows in [[row(1), row(.9)], [row(float("nan"))]]:
+            with self.subTest(rows=rows), self.assertRaisesRegex(ValueError, "timestamps"):
+                command_timing_metrics(rows)
 
 
 def triangle_graph():
