@@ -340,6 +340,79 @@ class OffsetEstimatorTest(unittest.TestCase):
                 for key, (order, mount) in estimator.mounts.items()
                 for pose in [transform.compose(roller_frame(rollers[order]).compose(mount))]}
 
+    def test_offset_solver_exact_jacobian_matches_central_differences(self):
+        solver = self.geometry.solver
+        random = np.random.default_rng(14957)
+        target = solver.reference_lengths.copy()
+        for spread in [0., .015]:
+            flat = solver.reference.ravel() + random.normal(0, spread, solver.reference.size)
+            step = 1e-6
+            numerical = np.column_stack([
+                (solver._residual(flat + delta, target) - solver._residual(flat - delta, target)) / (2 * step)
+                for delta in np.eye(len(flat)) * step
+            ])
+            np.testing.assert_allclose(solver._jacobian(flat, target), numerical, atol=2e-8, rtol=2e-7)
+
+    def test_offset_solver_matches_numerical_reference_along_deformed_trajectory(self):
+        from scipy.optimize import least_squares
+        # Use the equilateral, offset-aware hardware reference. The legacy
+        # synthetic fixture above has different (non-equilateral) coordinates.
+        from omegaconf import OmegaConf
+        cfg = graph_test_cfg(graph_definition_file=str(ROOT / "config/tracker_maps/robot_def.json"),
+                            encoder_solver_tolerance_m=1e-4, encoder_solver_max_evaluations=60,
+                            scale=1.39, encoder_reference_triangles_equilateral=True,
+                            encoder_reference_node_map=OmegaConf.to_container(
+                                OmegaConf.load(ROOT / "config/inference/encoder_vive.yaml").encoder_reference_node_map),
+                            physical_parameters_enabled=True,
+                            physical_parameters=OmegaConf.to_container(
+                                OmegaConf.load(ROOT / "config/physics/physical_parameters.yaml").physical_parameters),
+                            truss_realistic=True)
+        solver = build_encoder_geometry(cfg).solver
+        reference_state = solver.reference.ravel().copy()
+        for displacement in [np.linspace(-.002, .003, 8), np.linspace(.004, -.005, 8)]:
+            target = solver.reference_lengths + solver.incidence @ displacement
+            reference = least_squares(solver._residual, reference_state, args=(target,),
+                                      max_nfev=solver.max_evaluations, ftol=1e-10, xtol=1e-10, gtol=1e-10)
+            self.assertTrue(reference.success)
+            rollers, balls, diagnostics = solver.solve(displacement)
+            np.testing.assert_allclose(solver.current.ravel(), reference.x, atol=1e-9, rtol=1e-9)
+            self.assertLess(diagnostics["max_constraint_error_m"], solver.tolerance)
+            reference_state = reference.x.copy()
+
+    def test_outward_housing_frame_preserves_measured_extrinsics_and_offset_sign(self):
+        calibration = self.calibration()
+        for mount in calibration["tracker_mounts"].values():
+            mount.update(housing_x_direction="outward", position_m=[-.24, 0, 0])
+        estimator = EncoderViveEstimator(self.cfg, self.geometry, calibration, np.eye(3))
+        raw = {}
+        for key, (order, mount) in estimator.mounts.items():
+            housing = roller_frame(self.geometry.solver.initial_rollers[order])
+            # Independent physical convention: outward X and Y, same normal Z.
+            observed = Pose(housing.position, housing.rotation @ np.diag([-1., -1., 1.])).compose(mount)
+            raw[key] = TrackerPose(observed.position, observed.rotation)
+            np.testing.assert_allclose(observed.position - housing.position, housing.rotation[:, 0] * .24)
+        positions, health = estimator.sample(dict(ticks=[0]*8, sequence=1, received_at=0, freshness_verified=False),
+                                             raw, {key:key for key in raw}, 0)
+        np.testing.assert_allclose(positions, self.geometry.solver.initial_balls[self.geometry.control_ball_indices], atol=1e-7)
+        self.assertTrue(health["anchor_consistent"])
+        calibration["tracker_mounts"]["B13"]["housing_x_direction"] = "ambiguous"
+        with self.assertRaisesRegex(ValueError, "housing_x_direction"):
+            EncoderViveEstimator(self.cfg, self.geometry, calibration, np.eye(3))
+
+    def test_disagreeing_anchors_warn_without_changing_fusion_or_stopping(self):
+        estimator = self.make_estimator()
+        raw = self.poses(estimator, Pose(np.zeros(3), np.eye(3)))
+        raw["B13"] = TrackerPose(raw["B13"].position + [1, 0, 0], raw["B13"].rotation_matrix)
+        warnings = io.StringIO()
+        with redirect_stderr(warnings):
+            positions, health = estimator.sample(dict(ticks=[0]*8, sequence=1, received_at=0, freshness_verified=False),
+                                                 raw, {key:key for key in raw}, 0)
+        self.assertIsNotNone(positions)
+        self.assertFalse(health["anchor_consistent"])
+        self.assertAlmostEqual(health["position_disagreement_m"], 1.)
+        self.assertIn("Tracker-derived robot poses disagree", warnings.getvalue())
+        np.testing.assert_allclose(positions, self.geometry.solver.initial_balls[self.geometry.control_ball_indices] + [.5, 0, 0], atol=1e-7)
+
     def test_zero_encoders_preserve_generated_offset_geometry(self):
         rollers, balls, diagnostics = self.geometry.solver.solve(np.zeros(8))
         np.testing.assert_allclose(rollers, self.geometry.solver.initial_rollers, atol=1e-7)
@@ -467,6 +540,10 @@ class OffsetEstimatorTest(unittest.TestCase):
             self.assertIn("UNVERIFIED",ax.get_title())
             plotted=np.column_stack(ax.collections[0]._offsets3d)
             np.testing.assert_allclose(plotted,positions)
+            draw_frame(ax,list(self.geometry.graph.control_node_names),self.geometry.solver.edges,
+                       {"positions":positions,"paused":True,"health":{"status":"two_trackers",
+                        "anchor_consistent":False,"position_disagreement_m":.25,"rotation_disagreement_rad":.2}})
+            self.assertIn("TRACKER POSES DISAGREE", ax.get_title())
             with tempfile.TemporaryDirectory() as tmp:
                 fig.savefig(Path(tmp)/"preview.png")
                 self.assertGreater((Path(tmp)/"preview.png").stat().st_size,10000)

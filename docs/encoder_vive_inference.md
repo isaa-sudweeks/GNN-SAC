@@ -7,9 +7,11 @@ the learned models. Existing six-tracker inference remains available.
 
 ## Calibration and first use
 
-Edit `config/tracker_maps/encoder_vive_calibration.json`. B13 and B16 are populated
-as tracker IDs, with their existing serial map; their physical mounts are deliberately
-unset. The program rejects an incomplete calibration before opening serial output.
+Edit `config/tracker_maps/encoder_vive_calibration.json`. The user-confirmed physical
+assignments are **B13 / LHR-2BEE7775 at triangle_3/node_3** and
+**B16 / LHR-5108988B at triangle_1/node_2**. Each measured rotation remains attached
+to its tracker serial. The program rejects incomplete calibration before opening
+serial output; a complete file is not evidence of physical accuracy.
 
 1. Check the eight roller IDs in `config/tracker_maps/robot_def.json` and the actual
    flashed transmitter order. The user confirmed the flashed transmitter has eight
@@ -32,14 +34,20 @@ unset. The program rejects an incomplete calibration before opening serial outpu
    model assumes a tracker rigidly attached to that triangle's roller/node housing,
    following the corner bisector and triangle normal as in the mechanism model;
    a freely rotating connector-ball mount needs its own orientation model.
-5. Measure `position_m` and `rotation_matrix` in the selected node's housing axes:
-   x along the interior corner bisector, z along the triangle's normal in cyclic file
-   order, y=z×x. This follows the changing corner angle rather than a single tube edge.
+5. Measure `position_m` and `rotation_matrix` in the selected node's housing axes.
+   `housing_x_direction=inward` (the backwards-compatible default) uses the interior
+   corner bisector. `outward` reverses both X and Y, retaining a proper frame and
+   the same Z along the triangle's normal in cyclic file order; Y=Z×X. Both current
+   mounts use `outward`, matching the user's direct housing reference captures.
+   This follows the changing corner angle rather than a single tube edge.
    `position_origin` selects the translation origin: `physical_node` (the physical
    roller center, also the default for older calibrations) or `connector_ball` (the
    spherical joint center, with the same housing axes). Both current mounts use
-   `connector_ball`: the user clarified that the 24 cm is from joint center to
-   tracker, so `position_m=[0.24,0,0]`. Do not also add a connector-arm displacement.
+   `connector_ball`: the user clarified that outward +X points **from tracker to
+   joint**, 24 cm. The required vector goes **from joint to tracker**, therefore
+   `position_m=[-0.24,0,0]` in those outward housing axes. Do not also add a
+   connector-arm displacement. The measured rotation matrices are expressed in
+   those same physical axes and are not modified when changing the direction field.
    `rotation_matrix` maps tracker-local axes into that frame. Identity and zero are
    valid only when physically measured; they are not supplied as mount defaults.
 6. Check the proper right-handed `steamvr_to_policy_matrix` copied from the lab
@@ -122,11 +130,11 @@ declares -Z -> +Z. This fixes mounting tilt; it does not discard the robot's mea
 global tilt during operation. A tracker +Y -> housing +Z mount would instead use
 `Rz(yaw) @ Rx(90 degrees)`; the direct B13 capture did not support that constraint.
 
-For these two mounts, B16 is at joint 3, which also belongs to B13's triangle.
-`fit_mount_yaw_from_point()` can fit B13's remaining yaw using that shared joint's
-world position inferred from B16, its known coordinates within B13's local triangle,
-and the declared fixed mounting-axis alignment. This avoids requiring the whole
-octahedron's orientation to match its nominal pose. It still relies on correct
+For the confirmed assignments, B13 is at joint 3, which also belongs to B16's
+triangle. The generic `fit_mount_yaw_from_point()` helper can fit a mount's remaining
+yaw using a known point in its triangle and a declared fixed mounting-axis alignment.
+The previous example assuming B16 at joint 3 is superseded. A shared-point fit
+avoids requiring the whole octahedron's orientation to match its nominal pose, but still relies on correct
 joint IDs, offsets, local triangle dimensions, and axis alignment. The function
 returns normal-direction and in-plane point residuals alongside the candidate;
 large residuals must not be hidden by changing mounting roll/pitch. One shared
@@ -206,6 +214,21 @@ trackers, sends only zero commands, and times out after 30 seconds. Startup coun
 timeout are configurable. Changes in the visible anchor set reset the observation
 velocity difference for one frame to avoid treating reference jumps as robot velocity.
 
+Two connected trackers can still imply inconsistent robot poses. The estimator now
+warns in the terminal, preview and health records when translation disagreement
+exceeds `tracker_position_disagreement_warning_m` (default 0.1 m) or rotation
+disagreement exceeds `tracker_rotation_disagreement_warning_deg` (default 15 degrees).
+These are configurable diagnostic thresholds, not measured accuracy bounds. They
+do not reject trackers, alter inverse-variance weights, stop control or certify
+calibration. Jitter weighting does not remove a stable calibration bias.
+
+In the supplied 2026-11-07 trial, the stored assignments/conventions produced
+about 2.49 m / 178.3 degrees median disagreement. Replaying the same raw poses with
+the user-confirmed assignments, outward housing X and signed joint-to-tracker
+offset reduces this to about 0.246 m / 11.6 degrees. This remaining inconsistency
+requires physical reference geometry and mount calibration checks; do not treat
+the fused robot pose as validated ground truth for the paper.
+
 ## Pause, preview, and stop
 
 - **Ctrl+P** in the focused terminal or preview toggles pause. The preview also has
@@ -248,6 +271,11 @@ reconstruction, inference, logging and serial acknowledgment time are included i
 the period. If a cycle overruns, the next cycle samples fresh state; stale commands
 are never replayed to catch up. Earlier encoder-loop versions scheduled the next
 cycle from dispatch, adding the next computation time to every command interval.
+The offset solver now uses an analytic constraint Jacobian and batched corner
+calculations. Its length, connector-offset and gauge equations, solver tolerances,
+conditioning checks and accepted solution remain unchanged. The supplied moving
+trial showed slow reconstruction even after the scheduling correction; extending
+the velocity duration alone would mask that computation cost.
 
 Successful ACKs attest delivery, not uninterrupted motion. For example, 3.3 Hz
 means approximately 303 ms between dispatches: a 200 ms command can expire for

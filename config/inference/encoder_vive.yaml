@@ -57,3 +57,6 @@ tracker_rotation_variance_floor_rad2: 0.000001
 tracker_initial_position_variance_m2: 0.0001
 tracker_initial_rotation_variance_rad2: 0.0001
 tracker_reacquire_after_s: 1.0
+# Diagnostic thresholds, not validated accuracy bounds; do not alter fusion or stop.
+tracker_position_disagreement_warning_m: 0.1
+tracker_rotation_disagreement_warning_deg: 15.0

@@ -145,6 +145,11 @@ class EncoderViveEstimator:
 
     def __init__(self, cfg: Any, geometry: EncoderGeometry, calibration: dict, coordinate_matrix: np.ndarray) -> None:
         self.cfg, self.geometry = cfg, geometry
+        self.position_warning_m = float(getattr(cfg, "tracker_position_disagreement_warning_m", .1))
+        self.rotation_warning_deg = float(getattr(cfg, "tracker_rotation_disagreement_warning_deg", 15.))
+        if any(not np.isfinite(value) or value <= 0 for value in (self.position_warning_m, self.rotation_warning_deg)):
+            raise ValueError("Tracker disagreement warning thresholds must be positive and finite")
+        self.previous_consistency = None
         self.coordinate = np.asarray(coordinate_matrix)
         self.calibration = json.loads(json.dumps(calibration))
         for key in ("encoder_max_age_s", "encoder_max_step_m", "encoder_max_state_latency_s", "tracker_startup_timeout_s"):
@@ -169,6 +174,7 @@ class EncoderViveEstimator:
             raise ValueError("Exactly two measured tracker mounts are required")
         self.mounts = {}
         self.mount_origins = {}
+        self.housing_axis_rotations = {}
         for tracker_id, mount in mounts.items():
             triangle = str(mount["triangle"])
             if triangle not in geometry.triangle_indices:
@@ -182,6 +188,13 @@ class EncoderViveEstimator:
             pose = Pose(mount["position_m"], mount["rotation_matrix"])
             validate_mount_axis_alignment(pose.rotation, mount.get("axis_alignment"))
             self.mounts[tracker_id] = (order, pose)
+            x_direction = str(mount.get("housing_x_direction", "inward"))
+            if x_direction not in {"inward", "outward"}:
+                raise ValueError("housing_x_direction must be inward or outward")
+            # The solver's corner bisector points inward. Flipping both X and Y
+            # preserves a proper frame and the ordered triangle's +Z normal.
+            self.housing_axis_rotations[tracker_id] = (np.diag([-1., -1., 1.])
+                                                       if x_direction == "outward" else np.eye(3))
             origin = str(mount.get("position_origin", "physical_node"))
             if origin not in {"physical_node", "connector_ball"}:
                 raise ValueError("position_origin must be physical_node or connector_ball")
@@ -242,6 +255,7 @@ class EncoderViveEstimator:
                 observed = Pose(self.coordinate @ raw.position, self.coordinate @ raw.rotation_matrix)
                 order, mount = self.mounts[tracker_id]
                 housing = roller_frame(self.last_rollers[order])
+                housing = Pose(housing.position, housing.rotation @ self.housing_axis_rotations[tracker_id])
                 if self.mount_origins[tracker_id] == "connector_ball":
                     joint_index = self.geometry.control_ball_indices[order[0]]
                     housing = Pose(self.last_balls[joint_index], housing.rotation)
@@ -260,12 +274,30 @@ class EncoderViveEstimator:
                        "shape": self.shape_diagnostics, "rejected_trackers": rejected,
                        "startup_ready": self.ready})
         health["raw_firmware_ticks"] = encoder_sample.get("raw_firmware_ticks")
+        health["anchor_consistent"] = None
+        health["anchor_consistency_warning"] = None
+        if len(candidates) == 2:
+            position_error = health["position_disagreement_m"]
+            rotation_error = float(np.degrees(health["rotation_disagreement_rad"]))
+            consistent = position_error <= self.position_warning_m and rotation_error <= self.rotation_warning_deg
+            health["anchor_consistent"] = consistent
+            if not consistent:
+                health["anchor_consistency_warning"] = (
+                    f"Tracker-derived robot poses disagree: {position_error:.3f} m, {rotation_error:.1f} deg; "
+                    "check mount assignments, housing axes, offsets and reference geometry")
+                health["warning"] = health["anchor_consistency_warning"]
+                if self.previous_consistency is not False:
+                    print(f"WARNING: {health['anchor_consistency_warning']}", file=sys.stderr, flush=True)
+            elif self.previous_consistency is False:
+                print("Tracker disagreement is back within warning thresholds.", file=sys.stderr, flush=True)
+            self.previous_consistency = consistent
         if not verified:
             health["encoder_warning"] = "Firmware may return cached encoder values; age is receive age only"
         status_key = (health["status"], tuple(health["missing_trackers"]))
         if status_key != self.previous_status:
             if health["warning"]:
-                print(f"WARNING: {health['warning']}; {health['status']}", file=sys.stderr, flush=True)
+                if health["missing_trackers"]:
+                    print(f"WARNING: {health['warning']}; {health['status']}", file=sys.stderr, flush=True)
             elif self.previous_status is not None:
                 print("Tracker pose anchors recovered.", file=sys.stderr, flush=True)
             self.previous_status = status_key
@@ -298,7 +330,9 @@ class EncoderViveEstimator:
                     "tracker_startup_min_visible", "encoder_solver_tolerance_m",
                     "encoder_solver_max_evaluations", "encoder_max_age_s", "encoder_max_step_m",
                     "encoder_max_state_latency_s", "encoder_allow_unverified_feedback")}
-                    | {"start_paused": bool(getattr(self.cfg, "start_paused", False))},
+                    | {"start_paused": bool(getattr(self.cfg, "start_paused", False)),
+                       "tracker_position_disagreement_warning_m": self.position_warning_m,
+                       "tracker_rotation_disagreement_warning_deg": self.rotation_warning_deg},
                 "firmware_receiver_order": list(self.cfg.firmware_receiver_order),
                 "variance_model": "rolling_second_difference_jitter",
                 "both_trackers_missing": "hold_last_global_transform"}

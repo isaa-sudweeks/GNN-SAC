@@ -45,10 +45,14 @@ def draw_frame(ax, names, edges, frame):
     age = health.get("global_pose_age_s")
     suffix = "" if age is None else f" | anchor age {age:.2f}s"
     encoder = "" if health.get("encoder_freshness_verified", True) else "\nENCODER FRESHNESS UNVERIFIED"
+    disagreement = ""
+    if health.get("anchor_consistent") is False:
+        disagreement = (f"\nTRACKER POSES DISAGREE: {health['position_disagreement_m']:.2f} m, "
+                        f"{np.degrees(health['rotation_disagreement_rad']):.1f} deg")
     sample_age = time.monotonic() - frame.get("generated_at", time.monotonic())
     stale = f"\nDISPLAY SAMPLE {sample_age:.1f}s OLD" if sample_age > .5 else ""
-    ax.set_title(f"{status} | {tracking_label}{suffix}{encoder}{stale}\nExact policy positions; Ctrl+P pause, E emergency stop", fontsize=9,
-                 color="darkorange" if tracking != "two_trackers" or encoder else "black")
+    ax.set_title(f"{status} | {tracking_label}{suffix}{encoder}{disagreement}{stale}\nExact policy positions; Ctrl+P pause, E emergency stop", fontsize=9,
+                 color="firebrick" if disagreement else "darkorange" if tracking != "two_trackers" or encoder else "black")
 
 
 def _preview_process(names, edges, frames, events):
@@ -57,7 +61,7 @@ def _preview_process(names, edges, frames, events):
 
     fig = plt.figure(figsize=(7, 5))
     ax = fig.add_subplot(111, projection="3d")
-    fig.subplots_adjust(bottom=.15)
+    fig.subplots_adjust(bottom=.15, top=.76)
     pause = Button(fig.add_axes([.14, .03, .3, .06]), "Pause / resume (Ctrl+P)")
     stop = Button(fig.add_axes([.55, .03, .3, .06]), "EMERGENCY STOP", color="salmon")
     pause.on_clicked(lambda _: events.put("toggle_pause"))

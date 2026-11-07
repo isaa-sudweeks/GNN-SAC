@@ -178,28 +178,87 @@ class OffsetShapeSolver:
 
     @staticmethod
     def _corner_bases(p):
-        a = np.roll(p, -1, axis=0) - p
-        b = np.roll(p, 1, axis=0) - p
-        a /= np.maximum(np.linalg.norm(a, axis=1, keepdims=True), 1e-12)
-        b /= np.maximum(np.linalg.norm(b, axis=1, keepdims=True), 1e-12)
+        a = np.roll(p, -1, axis=-2) - p
+        b = np.roll(p, 1, axis=-2) - p
+        a /= np.maximum(np.linalg.norm(a, axis=-1, keepdims=True), 1e-12)
+        b /= np.maximum(np.linalg.norm(b, axis=-1, keepdims=True), 1e-12)
         bisector = a + b
-        bisector /= np.maximum(np.linalg.norm(bisector, axis=1, keepdims=True), 1e-12)
+        bisector /= np.maximum(np.linalg.norm(bisector, axis=-1, keepdims=True), 1e-12)
         normal = np.cross(a, b)
-        normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-12)
+        normal /= np.maximum(np.linalg.norm(normal, axis=-1, keepdims=True), 1e-12)
         tangent = np.cross(normal, bisector)
-        return np.stack((bisector, tangent, normal), axis=2)
+        return np.stack((bisector, tangent, normal), axis=-1)
 
     def _residual(self, flat, target_lengths):
         points = flat.reshape(-1, 3)
         rollers, balls = points[:self.n], points[self.n:]
         offsets = np.zeros_like(rollers)
-        for triangle in self.triangles:
-            p = rollers[triangle]
-            offset = np.einsum("nij,nj->ni", self._corner_bases(p), self.offset_components[triangle])
-            offsets[triangle] = p - offset - balls[self.ball_indices[triangle]]
+        p = rollers[self.triangles]
+        offset = np.einsum("...ij,...j->...i", self._corner_bases(p), self.offset_components[self.triangles])
+        offsets[self.triangles] = p - offset - balls[self.ball_indices[self.triangles]]
         i, j, k = self.gauge_indices
         gauge = np.r_[balls[i], balls[j, 1:], balls[k, 2]]
         return np.r_[self._lengths(rollers) - target_lengths, offsets.ravel(), gauge]
+
+    def _jacobian(self, flat: np.ndarray, target_lengths: np.ndarray) -> np.ndarray:
+        """Exact derivatives of the same length, offset and gauge constraints.
+
+        Numerical differencing previously evaluated every triangle for each of
+        the 54 coordinates on each iteration, dominating live reconstruction.
+        """
+        rollers = flat.reshape(-1, 3)[:self.n]
+        p = rollers[self.triangles]
+        a, b = np.roll(p, -1, axis=-2) - p, np.roll(p, 1, axis=-2) - p
+        identity = np.eye(3)
+
+        def normalize_with_jacobian(vector):
+            length = np.linalg.norm(vector, axis=-1, keepdims=True)
+            denominator = np.maximum(length, 1e-12)
+            unit = vector / denominator
+            projection = identity - unit[..., :, None] * unit[..., None, :]
+            # Match the residual's clipped normalization at degenerate inputs.
+            projection = np.where((length > 1e-12)[..., None], projection, identity)
+            return unit, projection / denominator[..., None]
+
+        def cross_matrix(vector):
+            result = np.zeros((*vector.shape[:-1], 3, 3))
+            result[..., 0, 1], result[..., 0, 2] = -vector[..., 2], vector[..., 1]
+            result[..., 1, 0], result[..., 1, 2] = vector[..., 2], -vector[..., 0]
+            result[..., 2, 0], result[..., 2, 1] = -vector[..., 1], vector[..., 0]
+            return result
+
+        u, du = normalize_with_jacobian(a)
+        v, dv = normalize_with_jacobian(b)
+        bisector, db = normalize_with_jacobian(u + v)
+        normal, dn = normalize_with_jacobian(np.cross(u, v))
+        components = self.offset_components[self.triangles]
+        c0, c1, c2 = (components[..., i, None, None] for i in range(3))
+        # d(normal x bisector) = -[bisector]x dnormal + [normal]x dbisector.
+        along_bisector = c0 * identity + c1 * cross_matrix(normal)
+        along_normal = c2 * identity - c1 * cross_matrix(bisector)
+        d_offset_a = along_bisector @ db @ du - along_normal @ dn @ cross_matrix(v) @ du
+        d_offset_b = along_bisector @ db @ dv + along_normal @ dn @ cross_matrix(u) @ dv
+        edge_count = len(self.edges)
+        jacobian = np.zeros((edge_count + 3 * self.n + 6, 3 * (self.n + self.b)))
+        delta = rollers[self.edges[:, 1]] - rollers[self.edges[:, 0]]
+        directions = delta / np.maximum(np.linalg.norm(delta, axis=1, keepdims=True), 1e-12)
+        for row, (first, second) in enumerate(self.edges):
+            jacobian[row, 3 * first:3 * first + 3] = -directions[row]
+            jacobian[row, 3 * second:3 * second + 3] = directions[row]
+        for t, triangle in enumerate(self.triangles):
+            for corner, node in enumerate(triangle):
+                rows = slice(edge_count + 3 * node, edge_count + 3 * node + 3)
+                other_a, other_b = triangle[(corner + 1) % 3], triangle[(corner - 1) % 3]
+                jacobian[rows, 3 * node:3 * node + 3] = identity + d_offset_a[t, corner] + d_offset_b[t, corner]
+                jacobian[rows, 3 * other_a:3 * other_a + 3] = -d_offset_a[t, corner]
+                jacobian[rows, 3 * other_b:3 * other_b + 3] = -d_offset_b[t, corner]
+                ball_column = 3 * (self.n + self.ball_indices[node])
+                jacobian[rows, ball_column:ball_column + 3] = -identity
+        i, j, k = self.gauge_indices
+        columns = [3 * (self.n + i) + axis for axis in range(3)]
+        columns += [3 * (self.n + j) + 1, 3 * (self.n + j) + 2, 3 * (self.n + k) + 2]
+        jacobian[np.arange(edge_count + 3 * self.n, len(jacobian)), columns] = 1
+        return jacobian
 
     def solve(self, encoder_displacements_m: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
         displacement = finite_array(encoder_displacements_m, (self.incidence.shape[1],), "encoder displacement")
@@ -211,12 +270,14 @@ class OffsetShapeSolver:
                 raise ValueError("Encoder data violates a triangle inequality")
         started = time.monotonic()
         solution = least_squares(self._residual, self.current.ravel(), args=(target,),
+                                 jac=self._jacobian,
                                  max_nfev=self.max_evaluations, ftol=1e-10, xtol=1e-10, gtol=1e-10)
         error = float(np.max(np.abs(solution.fun)))
         singular_values = np.linalg.svd(solution.jac, compute_uv=False)
         condition = float(singular_values[0] / max(singular_values[-1], 1e-15))
         diagnostics = {"max_constraint_error_m": error, "condition_number": condition,
-                       "evaluations": int(solution.nfev), "solve_time_s": time.monotonic() - started}
+                       "evaluations": int(solution.nfev), "jacobian_evaluations": int(solution.njev or 0),
+                       "jacobian": "analytic", "solve_time_s": time.monotonic() - started}
         if not solution.success or error > self.tolerance or condition > 1e10:
             raise ValueError(f"Offset shape solve rejected: {diagnostics}")
         self.current = solution.x.reshape(-1, 3).copy()
