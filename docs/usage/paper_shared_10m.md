@@ -1,7 +1,10 @@
 # Paper shared-controller campaign: 10M total transitions
 
-Status: prepared and tested on 4 November 2026; no production jobs submitted.
-Branch: `paper/general`. W&B project: `i-suds/Paper-Generalists`.
+Status: fresh-run protocol v2 prepared on 7 November 2026; no v2 jobs submitted.
+Base branch: `paper/general`; v2 changes: `codex/generalist-features-pcgrad`.
+W&B project: `i-suds/Paper-Generalists-v2`.
+The launcher now uses experiment names ending in `-10m-v2` to keep the revised
+settings separate from the original campaign and its resume checkpoints.
 
 ## Run matrix and budgets
 
@@ -17,8 +20,13 @@ topologies. The final vector collection is clipped to the remaining budget.
 Do not override this to `steps=10_000_000`, which would request 100M total.
 
 Both distilled conditions use the **same frozen teacher bank**, with 10,000
-offline KL optimizer updates before SAC and online KL decaying from weight 1
-to zero over 5M collected transitions. Offline minibatches have 256 samples
+offline KL optimizer updates before SAC and online KL decaying linearly from
+weight 1 to **0.75 at 10M collected transitions**. The existing schedule is
+`beta(s) = max(0, 1 - s / 40_000_000)`, configured with
+`distillation.initial_weight=1` and `distillation.decay_steps=40000000`.
+Thus beta is 0.875 at 5M; its zero point lies beyond this run's budget. This
+changes the online KL coefficient, not the offline update count or a fraction
+of environment actions. Offline minibatches have 256 samples
 per topology: 25.6M replay-sample presentations total, with no new training
 environment transitions. Evaluation rollouts, offline work, and teacher
 training are additional costs; they do not advance the 10M online counter.
@@ -30,19 +38,42 @@ topologies (`henneberg_n7_1tube_3`, `henneberg_n7_3tube_1`,
 teacher appears in the teacher mapping. The older 19-topology CV/teacher
 preset is not used.
 
-Both student architectures have PCGrad disabled. Discount is .95 and the
+Both student architectures have **PCGrad enabled** for online per-topology
+actor and critic gradients; offline distillation is unchanged. Discount is .95 and the
 collapse threshold is .01, matching the experts. Abstract models, action
 routing, timing, normalization, domain randomization and its current parameter
-settings match the ten saved teacher configurations. The GNN retains its
-virtual-node graph architecture; the padded MLP retains its 21-node capacity
+settings match the ten saved teacher configurations. The GNN enables all of
+the following input features in both scratch and distilled arms:
+
+| Switch | Information supplied |
+|---|---|
+| `graph_features.node_roles=true` | Actuated/passive node roles |
+| `graph_features.edge_roles=true` | Tube, connector, virtual and membership edge roles |
+| `graph_features.edge_distance=true` | Endpoint distances from observed coordinates |
+| `graph_features.edge_direction=true` | Signed actuator routing |
+| `graph_features.tube_nodes=true` | One aggregation hub per structural tube |
+
+Node and edge identities here mean semantic roles, rather than arbitrary
+numeric IDs. The GNN retains its control graph, global virtual node, attention,
+skip connections and combined physical/global critic readout. Tube physics
+(`graph_features.tube_physics`) stays disabled: the saved teacher replay has
+observation noise and randomized geometry, while that feature requires fresh
+clean, fixed-scale teacher replay. The existing metadata reconstruction opt-in
+validates and restores legacy teacher edge roles/routing for the student;
+teacher inputs and targets retain their saved schemas.
+
+The padded MLP keeps all graph feature switches disabled, its 21-node capacity
 and 736/736 hidden widths. No claim of exact parameter matching is made.
 Training uses 320 MJX/Warp environments (32 per topology); evaluation uses
-native MuJoCo. One A100 per job is requested explicitly through Slurm GRES.
+native MuJoCo. The existing ORC resource settings are preserved: one GPU per
+job through Slurm GRES (`gpu:1`), allowing A100, H100, H200, B200 and L40S
+nodes, with P100, V100 and ARM GH200 hosts excluded. Requests retain 128 GB
+host RAM and five CPUs per job.
 The launcher starts all four Hydra controllers before waiting for any one
 condition to finish. Each immediately submits its own three-seed array, so all
 twelve jobs can be queued together and may run concurrently if resources permit.
 The Slurm scheduler still controls actual start times. Each controller writes
-to a separate timestamped log under `outputs/paper_shared_10m/launch_logs/`.
+to a separate timestamped log under `outputs/paper_shared_10m_v2/launch_logs/`.
 The parent launcher remains running until all controllers finish; keep it in
 a persistent terminal or tmux session.
 
@@ -95,8 +126,10 @@ uv run python scripts/launch_paper_shared.py --submit
 
 The script is a dry run by default. Before submitting anything it composes all
 selected arms, verifies split/budget/teacher invariants, and checks all teacher
-paths. The manifest at `outputs/paper_shared_10m/launch_manifest.json` records
-source commit, lock hash, commands, seeds, budgets and teacher paths. Only
+paths. The manifest at `outputs/paper_shared_10m_v2/launch_manifest.json` records
+protocol version, source commit, lock hash, commands, seeds, budgets, PCGrad,
+graph feature flags, distillation schedule/endpoint weight, W&B destination and
+teacher paths. Only
 resource/storage overrides are accepted. For example, `num_envs=160` reduces
 the environment count without changing the budget; the count must divide ten.
 Use `--manifest PATH` to preserve separate submission records.
@@ -108,12 +141,26 @@ uv run python scripts/launch_paper_shared.py --submit --arms gnn_scratch,padded_
 uv run python scripts/launch_paper_shared.py --submit --arms gnn_distill,padded_mlp_distill
 ```
 
-Run either the all-arm submission or the subset submissions. Preserve override
-ordering and run-root settings on resubmission so the existing job directories
-and resume checkpoints are reused. This campaign retains supercomputer
-standby/requeue/resume behavior. Offline W&B files are written by default;
-ORC's existing sync service must upload the new project for live web metrics.
-No new sync monitor is started by this launcher.
+Run either the all-arm submission or the subset submissions. V2 must start
+fresh: the GNN feature schema and distillation schedule differ from v1, so old
+checkpoints cannot resume under these settings. Do not remove the `-v2` suffix
+or rename old job directories to reuse them. For a later resubmission of v2,
+preserve override ordering and run-root settings so its own checkpoint directories
+are reused. This campaign retains supercomputer
+standby/requeue/resume behavior. Offline W&B files are written under
+`/home/isuds/robotics/paper-generalists-v2/wandb`, independent of the checkout.
+The separate ORC sync monitor `general-v2-wandb-monitor` on `login03` watches
+that directory for `Paper-Generalists-v2` runs and starts one W&B beta-sync
+worker per fragment. It preserves the run ID and destination recorded by the
+trainer; existing `Paper-Generalists` runs stay in their original project.
+Monitor logs/state are under
+`/home/isuds/robotics/wandb-sync-paper-generalists-v2-20261107/`.
+If overriding `wandb_dir`, update the monitor's roots accordingly. The launcher
+does not itself start a monitor. Inspect its status with:
+
+```bash
+tail -n 20 /home/isuds/robotics/wandb-sync-paper-generalists-v2-20261107/monitor.log
+```
 
 ## Evaluation and later figures
 
@@ -150,6 +197,24 @@ without cancelling other conditions. Stop an older launcher and cancel its old
 array before resubmitting the campaign, to avoid duplicate submissions.
 
 ## Validation
+
+V2 regression checks cover PCGrad on all four arms, GNN-only feature switches,
+distinct experiment names, the 0.75 endpoint, unchanged teachers/split/budgets,
+and manifest provenance. Compare v2 runs with one another; changes from v1
+combine features, PCGrad and the distillation schedule and cannot isolate any
+one setting's effect. Improved GNN performance remains an experimental question.
+
+On 7 November, all 86 focused tests passed (10 launcher tests plus 76 tests in
+`test_distillation`, `test_mlp_distillation`, `test_padded_mlp` and
+`test_tube_virtual_nodes`). This includes the two-topology CPU smoke with the
+enabled GNN features, legacy-teacher distillation and PCGrad, plus padded MLP
+PCGrad/distillation regression checks. A launcher dry run produced twelve
+10M-transition jobs; a direct runtime schedule check confirmed weights
+1.0, 0.975, 0.875 and 0.75 at 0, 1M, 5M and 10M total transitions.
+`git diff --check` passed. This preparation did not submit v2 jobs or qualify
+full-campaign GPU throughput.
+
+Original campaign validation:
 
 - The original 39 focused tests passed: launch matrix/budget/held-out exclusion, per-evaluation
   export round trips for both backends, checkpoint retention, atomic failure
