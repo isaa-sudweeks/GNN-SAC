@@ -22,7 +22,11 @@ eval_extra_topologies:
   - usevitch_1514879
 
 mlp_training_mode: generalist
-pcgrad: false
+pcgrad: true
+# beta = 1 - online_transitions / 40M: 0.75 at the 10M training limit.
+distillation:
+  initial_weight: 1.0
+  decay_steps: 40_000_000
 discount: 0.95
 critical_eig_threshold: 0.01
 truss_realistic: false
@@ -46,12 +50,17 @@ obs_norm: true
 normalize_observations: true
 normalize_rewards: true
 save_video: false
-project: Paper-Generalists
+project: Paper-Generalists-v2
 wandb_project: ${project}
 wandb_entity: i-suds
+# Stable offline-run parent, independent of the source checkout location.
+wandb_dir: /home/isuds/robotics/paper-generalists-v2
 
 hydra:
   launcher:
     gpus_per_node: null
-    gres: gpu:a100:1
+    # Preserve the compatible GPU pool already configured on ORC.
+    gres: gpu:1
+    additional_parameters:
+      exclude: m9g-[1-2]-[1-20],msg-1-1,mgh-1-[1-2]
     array_parallelism: 3

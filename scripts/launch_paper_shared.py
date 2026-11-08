@@ -20,6 +20,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRESET = "paper_shared_10m"
 SEEDS = (1, 2, 3)
 TOTAL_TRANSITIONS = 10_000_000
+PROTOCOL_VERSION = "v2"
+GNN_FEATURES = ("node_roles", "edge_roles", "edge_distance", "edge_direction", "tube_nodes")
 ARMS = {
     "gnn_scratch": ("gnn", "scratch"),
     "padded_mlp_scratch": ("padded_mlp", "scratch"),
@@ -45,12 +47,14 @@ def arm_overrides(arm: str, extra: Sequence[str] = ()) -> list[str]:
     result = [
         "platform=supercomputer", "sim_backend=mjx", f"sac_backend={backend}",
         f"distillation={distillation}", f"+experiment={PRESET}",
-        f"exp_name=paper-shared-{backend.replace('_', '-')}-{mode}-10m",
+        f"exp_name=paper-shared-{backend.replace('_', '-')}-{mode}-10m-{PROTOCOL_VERSION}",
         "seed=" + ",".join(map(str, SEEDS)),
     ]
+    if backend == "gnn":
+        result.extend(f"graph_features.{feature}=true" for feature in GNN_FEATURES)
     if mode == "distill":
         result.extend([
-            "distillation.pretrain_updates=10000", "distillation.decay_steps=5000000",
+            "distillation.pretrain_updates=10000",
             "distillation.offline_only=false",
         ])
     return [*result, *extra]
@@ -103,11 +107,30 @@ def build_manifest(arms: Sequence[str], extra: Sequence[str] = (), *, check_file
             "heldout_topologies": list(cfg.eval_extra_topologies),
             "per_topology_steps": int(cfg.steps), "total_online_transitions": TOTAL_TRANSITIONS,
             "offline_pretrain_updates": int(cfg.distillation.pretrain_updates),
+            "pcgrad": bool(cfg.pcgrad),
+            "wandb": {
+                "entity": str(cfg.wandb_entity),
+                "project": str(cfg.wandb_project),
+                "dir": str(cfg.wandb_dir),
+                "offline": bool(cfg.set_wandb_offline),
+            },
+            "graph_features": OmegaConf.to_container(cfg.graph_features, resolve=True),
+            "distillation_schedule": {
+                "enabled": bool(cfg.distillation.enabled),
+                "initial_weight": float(cfg.distillation.initial_weight),
+                "decay_steps": int(cfg.distillation.decay_steps),
+                "weight_at_online_limit": (
+                    float(cfg.distillation.initial_weight)
+                    * max(0.0, 1.0 - TOTAL_TRANSITIONS / float(cfg.distillation.decay_steps))
+                    if cfg.distillation.enabled else 0.0
+                ),
+            },
             "teachers": OmegaConf.to_container(cfg.distillation.teachers, resolve=True),
             "jobs": [{"seed": seed, "total_online_transitions": TOTAL_TRANSITIONS} for seed in SEEDS],
         })
     return {
         "created_at_utc": datetime.now(timezone.utc).isoformat(), "seeds": list(SEEDS),
+        "protocol_version": PROTOCOL_VERSION,
         "source_commit": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True).strip(),
         "dependency_lock_sha256": hashlib.sha256((PROJECT_ROOT / "uv.lock").read_bytes()).hexdigest(),
@@ -150,7 +173,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     mode.add_argument("--submit", action="store_true", help="Submit all selected arm sweeps after validation.")
     mode.add_argument("--dry-run", action="store_true", help="Print/write commands without submitting (default).")
     parser.add_argument("--check-teachers", action="store_true", help="Check teacher files on this machine (always done before submission).")
-    parser.add_argument("--manifest", type=Path, default=PROJECT_ROOT / "outputs/paper_shared_10m/launch_manifest.json")
+    parser.add_argument("--manifest", type=Path,
+                        default=PROJECT_ROOT / f"outputs/paper_shared_10m_{PROTOCOL_VERSION}/launch_manifest.json")
     parser.add_argument("overrides", nargs="*", help="Resource/storage Hydra overrides only.")
     args = parser.parse_intermixed_args(argv)
     arms = args.arms.split(",")

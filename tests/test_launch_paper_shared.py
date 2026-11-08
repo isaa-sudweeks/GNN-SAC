@@ -31,7 +31,13 @@ class PaperSharedLaunchTest(unittest.TestCase):
                 self.assertEqual(set(cfg.truss_topologies), expected_train)
                 self.assertEqual(set(cfg.eval_extra_topologies), expected_heldout)
                 self.assertEqual(int(cfg.steps) * len(expected_train), TOTAL_TRANSITIONS)
-                self.assertFalse(cfg.pcgrad)
+                self.assertTrue(cfg.pcgrad)
+                self.assertEqual(cfg.project, "Paper-Generalists-v2")
+                self.assertEqual(cfg.wandb_project, "Paper-Generalists-v2")
+                self.assertEqual(cfg.wandb_entity, "i-suds")
+                self.assertEqual(cfg.wandb_dir, "/home/isuds/robotics/paper-generalists-v2")
+                self.assertTrue(cfg.enable_wandb)
+                self.assertTrue(cfg.set_wandb_offline)
                 self.assertEqual(cfg.critical_eig_threshold, .01)
                 self.assertEqual(cfg.discount, .95)
                 self.assertTrue(cfg.save_eval_agent)
@@ -48,19 +54,63 @@ class PaperSharedLaunchTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "divisible"):
             resolved_arm("gnn_scratch", ["num_envs=321"])
 
+    def test_fresh_protocol_enables_gnn_features_without_changing_mlp_inputs(self):
+        for arm, (backend, _) in ARMS.items():
+            with self.subTest(arm=arm):
+                cfg = resolved_arm(arm)
+                self.assertTrue(cfg.pcgrad)
+                self.assertEqual(dict(cfg.graph_features), {
+                    "node_roles": backend == "gnn",
+                    "edge_roles": backend == "gnn",
+                    "edge_distance": backend == "gnn",
+                    "edge_direction": backend == "gnn",
+                    "tube_nodes": backend == "gnn",
+                    "tube_physics": False,
+                })
+                self.assertEqual(cfg.use_virtual_node, backend == "gnn")
+                self.assertTrue(cfg.use_control_graph)
+                if backend == "gnn":
+                    self.assertTrue(cfg.message_attention)
+                    self.assertTrue(cfg.mpl_skip_connections)
+                    self.assertEqual(cfg.critic_readout, "physical_mean_virtual_node")
+                overrides = arm_overrides(arm)
+                self.assertIn(
+                    f"exp_name=paper-shared-{backend.replace('_', '-')}-{ARMS[arm][1]}-10m-v2",
+                    overrides,
+                )
+
+    def test_distilled_arms_end_with_three_quarters_teacher_weight(self):
+        for arm in ("gnn_distill", "padded_mlp_distill"):
+            with self.subTest(arm=arm):
+                cfg = resolved_arm(arm)
+                self.assertTrue(cfg.distillation.enabled)
+                self.assertTrue(cfg.distillation.reconstruct_control_metadata)
+                self.assertEqual(cfg.distillation.initial_weight, 1.0)
+                self.assertEqual(cfg.distillation.decay_steps, 40_000_000)
+                self.assertEqual(cfg.distillation.pretrain_updates, 10_000)
+
     def test_four_arms_have_three_seeds_and_ten_million_total_each(self):
         manifest = build_manifest(list(ARMS))
         self.assertEqual(manifest["job_count"], 12)
+        self.assertEqual(manifest["protocol_version"], "v2")
         for entry in manifest["arms"]:
             self.assertEqual([job["seed"] for job in entry["jobs"]], [1, 2, 3])
             self.assertEqual(entry["total_online_transitions"], 10_000_000)
             self.assertEqual(entry["per_topology_steps"], 1_000_000)
             self.assertEqual(set(entry["teachers"]) & set(entry["heldout_topologies"]), set())
+            self.assertTrue(entry["pcgrad"])
+            self.assertEqual(entry["wandb"], {
+                "entity": "i-suds", "project": "Paper-Generalists-v2",
+                "dir": "/home/isuds/robotics/paper-generalists-v2", "offline": True,
+            })
             if entry["arm"].endswith("distill"):
                 self.assertEqual(set(entry["teachers"]), set(entry["training_topologies"]))
                 self.assertEqual(entry["offline_pretrain_updates"], 10000)
+                self.assertEqual(entry["distillation_schedule"]["weight_at_online_limit"], .75)
             else:
                 self.assertEqual(entry["teachers"], {})
+                self.assertFalse(entry["distillation_schedule"]["enabled"])
+                self.assertEqual(entry["distillation_schedule"]["weight_at_online_limit"], 0.0)
         distilled = [entry for entry in manifest["arms"] if entry["arm"].endswith("distill")]
         self.assertEqual(distilled[0]["teachers"], distilled[1]["teachers"])
 
