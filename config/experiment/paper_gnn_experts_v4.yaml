@@ -1,0 +1,29 @@
+# @package _global_
+defaults:
+  - override /sac_backend: gnn
+  - override /sim_backend: mjx
+  - override /platform: supercomputer
+
+exp_name: paper-expert-gnn-v4-${truss_topology}
+run_root: /home/isuds/nobackup/autodelete/GNN-SAC
+wandb_dir: ${oc.env:HOME}/robotics/paper-gnn-experts-v4
+wandb_entity: i-suds
+wandb_project: Paper-Experts
+save_video: true
+
+graph_features:
+  node_roles: true
+  edge_roles: true
+  edge_distance: true
+  edge_direction: true
+  tube_nodes: true
+  tube_physics: false
+
+hydra:
+  sweeper:
+    params:
+      seed: 1,2,3
+      truss_topology: tetrahedron,henneberg_n5_1tube_1,henneberg_n6_1tube_2,henneberg_n6_2tube_1,henneberg_n7_1tube_3,henneberg_n7_3tube_1,octahedron,henneberg_n8_1tube_57,henneberg_n8_2tube_187,henneberg_n8_3tube_64,usevitch_60243677150_p1,usevitch_210272254_p1,usevitch_1514879
+  launcher:
+    gpus_per_node: null
+    gres: gpu:a100:1

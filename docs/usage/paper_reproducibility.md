@@ -12,6 +12,8 @@ signed routing, tube nodes and tube physics remain disabled by default.
 | `codex/paper-expert-comparison` | Ongoing paper configurations, evaluation and reproduction work. This branch can advance. |
 | `paper-experts-v1` | Annotated, fixed code-baseline tag. Never move or overwrite it. |
 | `paper-experts-v2` | Updated code baseline restoring the default SAC discount to `0.95`. |
+| `paper-experts-v3` | Code baseline with a normalized collapse threshold of `0.01`. |
+| `paper-experts-v4` | GNN expert rerun preset with five graph features. |
 
 The first tag records the integrated, locally tested code baseline: 424 tests
 passed and two CUDA-only tests were skipped. It does not assert GPU qualification,
@@ -36,6 +38,24 @@ The paper branch and annotated tag are published on the project
 work can advance the paper branch. Integration into `main` is tracked by the
 preparation PR containing this documentation. All 82 cleanup recovery tags are
 also published and verified; see the [branch inventory](../plans/paper_branch_inventory.md).
+
+## GNN expert rerun
+
+`paper-experts-v4` adds a GNN-only preset on top of the v3 training baseline.
+It enables node roles, edge roles, observed edge lengths, signed actuator
+routing, and one aggregation node per structural tube. Tube physics is disabled.
+The sweep uses the same 13 paper morphologies and seeds 1–3, with 10M steps per
+run, 1,536 MJX/Warp environments, native MuJoCo evaluation, and an A100 request
+matching the previous GNN expert relaunch.
+
+```bash
+uv run --frozen python sac/train.py --multirun +experiment=paper_gnn_experts_v4
+```
+
+Override `truss_topology` or `seed` on the command line to select a subset.
+The `paper-expert-gnn-v4-` prefix gives the reruns distinct checkpoint paths
+and W&B names. The preset logs offline for `i-suds/Paper-Experts` under
+`~/robotics/paper-gnn-experts-v4/wandb`.
 
 ## Before each production run
 
