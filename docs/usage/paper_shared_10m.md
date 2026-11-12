@@ -254,3 +254,14 @@ from a persistent login session. The launcher starts all seven three-seed
 sweeps together, preserving the baseline's scheduler resources and W&B
 project. Keep the source checkout and logs for reproducibility. Compare
 against the matched baseline seed at the same total transition budget.
+
+For later retries, pass the manifest written by the original `--submit`
+command. The launcher checks the recorded source commit and skips arms with
+active Slurm jobs. The Slurm launcher skips completed seeds and resumes
+unfinished seeds from their latest checkpoint when available. This preserves
+the original override order and job indices.
+
+```bash
+uv run --frozen python -m scripts.launch_generalist_ablation \
+  --relaunch-from /path/to/submitted/launch_manifest.json
+```

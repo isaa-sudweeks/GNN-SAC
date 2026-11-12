@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import hashlib
 import json
 import os
 import shlex
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
 from hydra import compose, initialize_config_dir
@@ -123,14 +125,52 @@ def build_manifest(baseline: dict, baseline_id: str, run_root: Path) -> dict:
     }
 
 
+def relaunch(manifest_path: Path) -> int:
+    """Replay the original sweeps for arms with no active Slurm jobs."""
+    manifest = json.loads(manifest_path.read_text())
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=PROJECT_ROOT, text=True).strip()
+    if head != manifest["source_commit"] or subprocess.check_output(
+        ["git", "status", "--porcelain"], cwd=PROJECT_ROOT,
+    ).strip():
+        raise ValueError("Relaunch from the clean source commit recorded in the launch manifest.")
+    active_names = subprocess.check_output(
+        ["squeue", "--noheader", "--user", getpass.getuser(), "--format", "%j"], text=True,
+    ).splitlines()
+    entries = []
+    for entry in manifest["arms"]:
+        exp_name = entry["jobs"][0]["resolved_config"]["exp_name"]
+        if any(name.strip().startswith(f"{exp_name}-") for name in active_names):
+            print(f"Skipping {entry['arm']}: Slurm still has active jobs for this arm.")
+        else:
+            entries.append(entry)
+    if not entries:
+        return 0
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    environment = dict(os.environ)
+    environment.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+    return submit_arms(entries, environment, manifest_path.parent / "relaunch_logs" / timestamp)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline-manifest", type=Path, required=True)
-    parser.add_argument("--baseline-id", required=True, help="Reference scratch Slurm array ID.")
-    parser.add_argument("--run-root", type=Path, required=True)
-    parser.add_argument("--manifest", type=Path, required=True)
-    parser.add_argument("--submit", action="store_true", help="Submit all arms together after preflight.")
+    parser.add_argument("--baseline-manifest", type=Path)
+    parser.add_argument("--baseline-id", help="Reference scratch Slurm array ID.")
+    parser.add_argument("--run-root", type=Path)
+    parser.add_argument("--manifest", type=Path)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--submit", action="store_true", help="Submit all arms together after preflight.")
+    mode.add_argument("--relaunch-from", type=Path, help="Replay the exact commands from a submitted launch manifest.")
     args = parser.parse_args()
+    new_run_args = (args.baseline_manifest, args.baseline_id, args.run_root, args.manifest)
+    if args.relaunch_from:
+        if any(new_run_args):
+            parser.error("--relaunch-from uses the original manifest without new run options.")
+        try:
+            return relaunch(args.relaunch_from)
+        except (KeyError, ValueError, OSError, subprocess.CalledProcessError) as error:
+            parser.error(str(error))
+    if not all(new_run_args):
+        parser.error("A fresh campaign requires --baseline-manifest, --baseline-id, --run-root and --manifest.")
     baseline = json.loads(args.baseline_manifest.read_text())
     try:
         manifest = build_manifest(baseline, args.baseline_id, args.run_root)

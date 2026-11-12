@@ -1,4 +1,5 @@
 import csv
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,7 +7,7 @@ from unittest.mock import patch
 
 from omegaconf import OmegaConf
 
-from scripts.launch_generalist_ablation import ARMS as ABLATIONS, build_manifest as build_ablation_manifest
+from scripts.launch_generalist_ablation import ARMS as ABLATIONS, build_manifest as build_ablation_manifest, relaunch
 from scripts.launch_paper_shared import (
     ARMS,
     PROJECT_ROOT,
@@ -131,6 +132,22 @@ class PaperSharedLaunchTest(unittest.TestCase):
                 self.assertEqual(config["seed"], job["seed"])
                 self.assertFalse(config["distillation"]["enabled"])
                 self.assertTrue(config["pcgrad"])
+
+    def test_ablation_relaunch_reuses_exact_commands_and_skips_active_arms(self):
+        manifest = build_ablation_manifest(
+            build_manifest(["gnn_scratch"]), "15267215", Path("/tmp/new-ablation-root"),
+        )
+        first = manifest["arms"][0]
+        active = first["jobs"][0]["resolved_config"]["exp_name"] + "-1\n"
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "launch.json"
+            path.write_text(json.dumps(manifest))
+            module = "scripts.launch_generalist_ablation"
+            with patch(f"{module}.subprocess.check_output",
+                       side_effect=[manifest["source_commit"] + "\n", b"", active]), \
+                    patch(f"{module}.submit_arms", return_value=0) as submit:
+                self.assertEqual(relaunch(path), 0)
+            self.assertEqual(submit.call_args.args[0], manifest["arms"][1:])
 
     def test_all_conditions_start_before_any_controller_is_waited_on(self):
         events = []
