@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from omegaconf import OmegaConf
 
+from scripts.launch_generalist_ablation import ARMS as ABLATIONS, build_manifest as build_ablation_manifest
 from scripts.launch_paper_shared import (
     ARMS,
     PROJECT_ROOT,
@@ -66,6 +67,9 @@ class PaperSharedLaunchTest(unittest.TestCase):
                     "edge_direction": backend == "gnn",
                     "tube_nodes": backend == "gnn",
                     "tube_physics": False,
+                    "mask_node_roles": False,
+                    "mask_edge_roles": False,
+                    "mask_rigidity": False,
                 })
                 self.assertEqual(cfg.use_virtual_node, backend == "gnn")
                 self.assertTrue(cfg.use_control_graph)
@@ -113,6 +117,20 @@ class PaperSharedLaunchTest(unittest.TestCase):
                 self.assertEqual(entry["distillation_schedule"]["weight_at_online_limit"], 0.0)
         distilled = [entry for entry in manifest["arms"] if entry["arm"].endswith("distill")]
         self.assertEqual(distilled[0]["teachers"], distilled[1]["teachers"])
+
+    def test_ablation_manifest_keeps_baseline_budget_and_seeds(self):
+        baseline = build_manifest(["gnn_scratch"])
+        manifest = build_ablation_manifest(baseline, "15267215", Path("/tmp/new-ablation-root"))
+        self.assertEqual(manifest["job_count"], 21)
+        self.assertEqual(manifest["total_online_transitions_per_job"], TOTAL_TRANSITIONS)
+        self.assertEqual([entry["arm"] for entry in manifest["arms"]], list(ABLATIONS))
+        for entry in manifest["arms"]:
+            self.assertEqual([job["seed"] for job in entry["jobs"]], [1, 2, 3])
+            for job in entry["jobs"]:
+                config = job["resolved_config"]
+                self.assertEqual(config["seed"], job["seed"])
+                self.assertFalse(config["distillation"]["enabled"])
+                self.assertTrue(config["pcgrad"])
 
     def test_all_conditions_start_before_any_controller_is_waited_on(self):
         events = []

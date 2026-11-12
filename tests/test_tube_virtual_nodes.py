@@ -111,6 +111,31 @@ class TubeVirtualNodeTest(unittest.TestCase):
             torch.testing.assert_close(dense[field], expected[field])
         torch.testing.assert_close(dense.x[dense.global_node_mask, -1], torch.tensor([.7, .2]))
 
+    def test_feature_masks_preserve_layout_and_match_dense_replay(self):
+        raw = fixture()
+        for mask in ("mask_node_roles", "mask_edge_roles", "mask_rigidity"):
+            with self.subTest(mask=mask):
+                cfg = replay_config(
+                    multitask=False, task="graph", use_virtual_node=True,
+                    graph_features=dict(tube_nodes=True, node_roles=True, edge_roles=True,
+                                        edge_distance=True, edge_direction=True, **{mask: True}),
+                )
+                expected = prepare_graph(raw, **FLAGS)
+                if mask == "mask_node_roles":
+                    expected.x[:, 3:5] = 0
+                elif mask == "mask_edge_roles":
+                    expected.edge_attr[:, :4] = 0
+                else:
+                    expected.x[expected.global_node_mask, -1] = 0
+                prepared = prepare_graph(raw, use_virtual_node=True, **graph_feature_flags(cfg))
+                static = build_graph_static(cfg, raw, torch.zeros(4, 1))
+                group = DenseGraphGroup(static, raw.x.unsqueeze(0), raw.rigidity.unsqueeze(0))
+                dense = dense_graph_batch(cfg, [group], "cpu")
+                for actual in (prepared, dense):
+                    for field in ("x", "edge_index", "edge_attr", "action_mask",
+                                  "physical_node_mask", "global_node_mask"):
+                        torch.testing.assert_close(actual[field], expected[field])
+
     def test_exact_source_membership_for_development_presets(self):
         from hydra import compose, initialize_config_dir
         from mujoco_truss_gen.mujoco_model import presets, builders

@@ -29,6 +29,9 @@ def graph_feature_flags(config) -> dict[str, bool]:
         "use_tube_nodes": bool(_cfg_get(features, "tube_nodes", False)),
         "use_tube_physics": bool(_cfg_get(features, "tube_physics", False)),
         "use_edge_direction": bool(_cfg_get(features, "edge_direction", False)),
+        "mask_node_roles": bool(_cfg_get(features, "mask_node_roles", False)),
+        "mask_edge_roles": bool(_cfg_get(features, "mask_edge_roles", False)),
+        "mask_rigidity": bool(_cfg_get(features, "mask_rigidity", False)),
     }
 
 
@@ -49,6 +52,11 @@ def graph_feature_schema(config) -> dict[str, object]:
         schema["edge_role_vocabulary"] = [*EDGE_ROLE_NAMES, "membership"]
     if flags["use_tube_physics"]:
         schema["tube_physics"] = "route_segments_reference_m_ratio_relative_residual_v1"
+    for key in ("mask_node_roles", "mask_edge_roles", "mask_rigidity"):
+        if flags[key]:
+            schema[key] = True
+    if _cfg_get(config, "message_attention_uniform", False):
+        schema["message_attention_uniform"] = True
     return schema
 
 
@@ -201,6 +209,9 @@ def prepare_graph(
     use_edge_direction: bool = False,
     use_tube_nodes: bool = False,
     use_tube_physics: bool = False,
+    mask_node_roles: bool = False,
+    mask_edge_roles: bool = False,
+    mask_rigidity: bool = False,
 ) -> Data:
     """Add global context and optional typed tube hubs to a raw physical graph.
 
@@ -209,6 +220,12 @@ def prepare_graph(
     Architectural edges carry no geometric distance or controller incidence.
     Legacy feature widths and schemas remain unchanged when tube hubs are off.
     """
+    if mask_node_roles and not use_node_roles:
+        raise ValueError("Masking node roles requires graph_features.node_roles=true.")
+    if mask_edge_roles and not use_edge_roles:
+        raise ValueError("Masking edge roles requires graph_features.edge_roles=true.")
+    if mask_rigidity and not use_virtual_node:
+        raise ValueError("Masking rigidity requires use_virtual_node=true.")
     if not (use_virtual_node or use_node_roles or use_edge_roles or use_edge_distance or use_edge_direction or use_tube_nodes or use_tube_physics):
         return graph
 
@@ -243,6 +260,8 @@ def prepare_graph(
                 f"Graph has {num_nodes} nodes but {action_mask.numel()} action-mask entries."
             )
         node_roles = torch.stack((action_mask, ~action_mask), dim=-1).to(prepared.x.dtype)
+        if mask_node_roles:
+            node_roles.zero_()
         prepared.x = torch.cat((prepared.x, node_roles), dim=-1)
 
     edge_attr = _physical_edge_features(
@@ -264,6 +283,8 @@ def prepare_graph(
         prepared.x = torch.cat((prepared.x, prepared.x.new_zeros((num_nodes, 1))), dim=-1)
 
     if not use_virtual_node:
+        if mask_edge_roles:
+            prepared.edge_attr[:, :EDGE_ROLE_DIM] = 0
         return prepared
 
     prepared.physical_node_mask = torch.ones(
@@ -278,7 +299,7 @@ def prepare_graph(
         prepared.edge_attr[physical_edge_count:, VIRTUAL_EDGE_ROLE] = 1.0
 
     rigidity = getattr(graph, "rigidity", None)
-    if rigidity is None:
+    if rigidity is None or mask_rigidity:
         rigidity_value = prepared.x.new_zeros(())
     else:
         rigidity_value = torch.as_tensor(
@@ -315,6 +336,8 @@ def prepare_graph(
         if "edge_type" in prepared:
             prepared.edge_type = torch.cat((prepared.edge_type, prepared.edge_type.new_full((membership.size(1),), int(prepared.edge_type.max()) + 1)))
         prepared.num_nodes = prepared.x.size(0)
+    if mask_edge_roles:
+        prepared.edge_attr[:, :EDGE_ROLE_DIM + int(use_tube_nodes)] = 0
     return prepared
 
 

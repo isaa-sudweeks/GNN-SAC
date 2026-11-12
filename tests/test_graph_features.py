@@ -174,6 +174,22 @@ class GraphFeatureTransformTest(unittest.TestCase):
 
 
 class GraphFeatureIntegrationTest(unittest.TestCase):
+    def test_uniform_attention_matches_zero_logits_at_every_layer(self):
+        raw = graph()
+        attention = GNN(3, mpl_dims=[8, 8], hidden_channels=[10], message_attention=True)
+        uniform = GNN(3, mpl_dims=[8, 8], hidden_channels=[10], message_attention=True,
+                      message_attention_uniform=True)
+        with torch.no_grad():
+            attention.attention_score.weight.zero_()
+            attention.extra_mpls[0].attention_score.weight.zero_()
+        uniform.load_state_dict({
+            key: value for key, value in attention.state_dict().items()
+            if "attention_score" not in key
+        })
+        torch.testing.assert_close(
+            uniform(raw.x, raw.edge_index), attention(raw.x, raw.edge_index),
+        )
+
     def test_upstream_edge_types_map_to_semantic_roles(self):
         with patch(
             "env.mujoco_gen.topology_envs.get_edge_types",

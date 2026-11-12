@@ -151,7 +151,7 @@ def _dense_prepared_features(cfg, group: DenseGraphGroup, device):
     template_x = static["prepared_x_template"].to(device)
     x = template_x.unsqueeze(0).expand(count, -1, -1).clone()
     x[:, :raw_nodes, :raw_features] = raw_x
-    if flags["use_node_roles"]:
+    if flags["use_node_roles"] and not flags["mask_node_roles"]:
         if group.action_mask is not None:
             action_mask = group.action_mask.bool()
         else:
@@ -162,7 +162,7 @@ def _dense_prepared_features(cfg, group: DenseGraphGroup, device):
     if flags["use_tube_physics"]:
         x[:, raw_nodes + 1:, -7:-3] = tube_physics_features(
             raw_x, static["edge_index"].to(device), static["tube_groups"], static["tube_physics_metadata"])
-    if bool(getattr(cfg, "use_virtual_node", False)):
+    if bool(getattr(cfg, "use_virtual_node", False)) and not flags["mask_rigidity"]:
         rigidity = (
             torch.zeros(count, device=device, dtype=x.dtype)
             if group.rigidity is None else group.rigidity.reshape(-1)

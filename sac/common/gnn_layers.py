@@ -48,8 +48,9 @@ class _MessagePassingLayer(MessagePassing):
         dropout: float,
         edge_channels: int,
         message_attention: bool,
+        message_attention_uniform: bool,
     ):
-        super().__init__(aggr="add")
+        super().__init__(aggr="mean" if message_attention_uniform else "add")
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.edge_channels = edge_channels
@@ -93,8 +94,11 @@ class GNN(MessagePassing):
         skip_connections: bool = True,
         edge_channels: int = 0,
         message_attention: bool = False,
+        message_attention_uniform: bool = False,
     ):
-        super().__init__(aggr="add")
+        super().__init__(aggr="mean" if message_attention_uniform else "add")
+        if message_attention_uniform and not message_attention:
+            raise ValueError("Uniform attention requires message_attention=true.")
         if mpl_dims is None:
             if out_channels is None:
                 raise ValueError("out_channels is required when mpl_dims is not provided")
@@ -108,7 +112,8 @@ class GNN(MessagePassing):
         self.edge_channels = int(edge_channels)
         if self.edge_channels < 0:
             raise ValueError("edge_channels must be nonnegative")
-        self.message_attention = bool(message_attention)
+        self.message_attention = bool(message_attention) and not message_attention_uniform
+        self.message_attention_uniform = message_attention_uniform
 
         # Keep these names for compatibility with existing one-layer checkpoints.
         self.phi = mlp(in_channels * 2 + self.edge_channels, self.hidden_channels, self.mpl_dims[0], dropout=dropout)
@@ -124,6 +129,7 @@ class GNN(MessagePassing):
                 dropout,
                 self.edge_channels,
                 self.message_attention,
+                self.message_attention_uniform,
             )
             for input_dim, output_dim in zip(self.mpl_dims, self.mpl_dims[1:])
         )
@@ -159,7 +165,8 @@ class GNN(MessagePassing):
             f"message_hidden_dims={self.hidden_channels}, dropout={self.dropout}, "
             f"skip_connections={self.skip_connections}, "
             f"edge_channels={self.edge_channels}, "
-            f"message_attention={self.message_attention})\n"
+            f"message_attention={self.message_attention}, "
+            f"message_attention_uniform={self.message_attention_uniform})\n"
             f"Phi(Message Passing):\t{self.phi}\n"
             f"Gamma(Update):\t{self.gamma}\n"
             f"Additional MPLs:\t{self.extra_mpls}"
@@ -179,6 +186,7 @@ class Q_GNN(GNN):
         edge_channels: int = 0,
         critic_readout: str = "physical_mean",
         message_attention: bool = False,
+        message_attention_uniform: bool = False,
     ):
         super().__init__(
             in_channels,
@@ -189,6 +197,7 @@ class Q_GNN(GNN):
             skip_connections=skip_connections,
             edge_channels=edge_channels,
             message_attention=message_attention,
+            message_attention_uniform=message_attention_uniform,
         )
         valid_readouts = {
             "physical_mean",

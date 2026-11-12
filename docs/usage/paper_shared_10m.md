@@ -230,3 +230,27 @@ Original campaign validation:
 
 The plotting labels were also corrected to the generated presets' actual
 multi-triangle physical node counts: 1514879=7, 210272254_p1=8, 60243677150_p1=9.
+
+## Shared scratch GNN architecture ablations
+
+Use `scripts/launch_generalist_ablation.py` with the launch manifest from the
+reference scratch campaign. It composes each of seven arms for all three
+recorded seeds and checks that each changes only the targeted setting and
+the run identifiers/output paths. The full scratch GNN serves as the
+reference. The masks retain the input channels, graph layout, and action
+mask. Uniform attention uses per-destination mean aggregation in the actor
+and critics. The legacy attention-off setting uses sum aggregation.
+
+```bash
+uv run python -m scripts.launch_generalist_ablation \
+  --baseline-manifest /path/to/baseline/launch_manifest.json \
+  --baseline-id 15267215 \
+  --run-root /path/to/new/ablation-run-root \
+  --manifest /path/to/preflight.json
+```
+
+On ORC, use a fresh output root and a new manifest path with `--submit`
+from a persistent login session. The launcher starts all seven three-seed
+sweeps together, preserving the baseline's scheduler resources and W&B
+project. Keep the source checkout and logs for reproducibility. Compare
+against the matched baseline seed at the same total transition budget.
