@@ -102,6 +102,27 @@ python sac/real_robot_infer.py \
 
 For each joint, the code intersects its two measured planes and orthogonally projects the rigidly connected tracker's position onto that line. A frame is skipped when the planes are parallel or nearly parallel because the joint is not observable from that plane pair. The mechanical perpendicularity assumption must hold for each configured tracker/joint pair; mounting a puck on a triangle alone does not guarantee it.
 
+## Tracking loss and live preview
+
+The first observation requires a complete live tracker frame. After that, a tracker
+that drops out contributes its last valid sample until it returns. For the six-tracker
+triangle-plane setup this holds the tracker's position and orientation, so its plane and
+anchor can still be used with the other trackers' live poses. If all trackers drop
+out, reconstruction continues from all six held poses. The hold has no time limit.
+Live poses replace held poses as soon as SteamVR reports valid tracking again.
+The session log preserves live raw samples and records held ages in
+`held_tracker_age_s_by_serial`.
+
+Add `state_preview=true` to your inference command to open the live 3D policy-node
+graph, in meters before observation centering and normalization. The window lists
+held tracker IDs and their ages. Use the pause/resume button or Ctrl+P in the window
+to switch between policy commands and zero-velocity commands. Pause takes effect
+on the next command if the transmitter is already processing one. The emergency
+stop button or E ends the session and sends a best-effort zero command. Use
+`operator_keyboard=true` to enable Ctrl+P and E in the terminal too, and
+`start_paused=true` to open the session paused. Ctrl+C remains available in the
+terminal.
+
 ## Hand-authored graph and position checker
 
 When the physical layout is not a registered `mujoco-truss-gen` preset, define the four logical triangles and six tracker locations directly. The loader generates the complete policy graph and plane-intersection metadata:

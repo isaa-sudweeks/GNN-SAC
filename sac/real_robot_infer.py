@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from contextlib import ExitStack
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -28,6 +29,8 @@ from common.seed import set_seed
 from env import make_env
 from gnn_infer import load_agent_checkpoint, resolve_checkpoint
 from gnn_sac import GNNSAC
+from robot_operator import OperatorControls, OperatorEmergencyStop
+from robot_preview import RobotPreview
 from sim_to_real_io import (
     JsonlWriter,
     numpy_value,
@@ -236,6 +239,7 @@ class SerialCommandTransport:
         self.dropped_node_deliveries = 0
         self.node_drop_counts: Counter[int] = Counter()
         self.last_delivery_result: dict[str, object] | None = None
+        self.operator_controls: OperatorControls | None = None
         if self.startup_delay_seconds > 0.0:
             self._sleep(self.startup_delay_seconds)
         reset_input_buffer = getattr(self._serial, "reset_input_buffer", None)
@@ -324,6 +328,8 @@ class SerialCommandTransport:
             self._write_line(command)
             deadline = send_time + self.ack_timeout_seconds
             while True:
+                if self.operator_controls is not None:
+                    self.operator_controls.poll()
                 if self._monotonic() >= deadline:
                     self.ack_timeouts += 1
                     self.last_delivery_result = {
@@ -461,6 +467,8 @@ class SteamVRTrackerSource:
         tracker_poses = {}
         for device_index, pose in enumerate(poses):
             if not pose.bDeviceIsConnected or not pose.bPoseIsValid:
+                continue
+            if pose.eTrackingResult != self.openvr.TrackingResult_Running_OK:
                 continue
             device_class = self.system.getTrackedDeviceClass(device_index)
             if device_class != self.openvr.TrackedDeviceClass_GenericTracker:
@@ -1489,6 +1497,52 @@ def _read_tracker_sample(source, layout) -> tuple[Mapping[str, object], Mapping[
     return positions, positions
 
 
+class TrackerPoseHold:
+    """Keep the last valid sample for each tracker used by the current layout."""
+
+    def __init__(self, layout: TrackerLayout) -> None:
+        self.layout = layout
+        self.samples: dict[str, tuple[float, TrackerPose | np.ndarray]] = {}
+        self.initialized = False
+
+    def update(
+        self, frame: Mapping[str, object], timestamp: float
+    ) -> tuple[dict[str, TrackerPose | np.ndarray], dict[str, float]]:
+        layout = self.layout
+        tracker_ids = (
+            layout.tracker_mounts if layout.requires_orientations else layout.tracker_id_to_node
+        )
+        fresh = {}
+        for serial, tracker_id in layout.serial_to_tracker_id.items():
+            if serial not in frame or (tracker_ids and tracker_id not in tracker_ids):
+                continue
+            try:
+                if layout.requires_orientations:
+                    pose = layout._coerce_tracker_pose(frame[serial], serial)
+                    sample = TrackerPose(pose.position.copy(), pose.rotation_matrix.copy())
+                else:
+                    sample = np.array(frame[serial], dtype=np.float64, copy=True)
+                    if sample.shape != (3,) or not np.isfinite(sample).all():
+                        continue
+            except (TypeError, ValueError):
+                continue
+            fresh[serial] = sample
+        if not self.initialized:
+            # Bootstrap graph assignment and observation scaling from a live frame.
+            self.samples.clear()
+        self.samples.update({serial: (timestamp, sample) for serial, sample in fresh.items()})
+        effective = {}
+        held_ages = {}
+        for serial, (last_seen, sample) in self.samples.items():
+            tracker_id = layout.serial_to_tracker_id[serial]
+            if tracker_ids and tracker_id not in tracker_ids:
+                continue
+            effective[serial] = sample
+            if serial not in fresh:
+                held_ages[serial] = timestamp - last_seen
+        return effective, held_ages
+
+
 class RealRobotSessionRecorder:
     """Versioned recorder for raw tracker samples and command delivery events."""
 
@@ -1528,6 +1582,9 @@ def _run_control_loop(
     formatter,
     transport: CommandTransport,
     recorder: RealRobotSessionRecorder | None = None,
+    *,
+    controls: OperatorControls | None = None,
+    preview: RobotPreview | None = None,
 ) -> str:
     frequency_hz = float(cfg.control_frequency_hz)
     if not np.isfinite(frequency_hz) or frequency_hz <= 0.0:
@@ -1535,21 +1592,41 @@ def _run_control_loop(
     period = 1.0 / frequency_hz
     next_tick = time.monotonic()
     step = 0
+    first_action = True
+    pose_hold = TrackerPoseHold(layout) if isinstance(layout, TrackerLayout) else None
+    previously_held: set[str] = set()
     last_raw_frame: Mapping[str, object] | None = None
     try:
         while cfg.control_steps is None or step < int(cfg.control_steps):
             time.sleep(max(0.0, next_tick - time.monotonic()))
             now = time.monotonic()
             last_raw_frame = None
+            held_ages: dict[str, float] = {}
             try:
+                if controls is not None:
+                    controls.poll()
                 raw_frame, tracker_frame = _read_tracker_sample(source, layout)
+                now = time.monotonic()
                 last_raw_frame = raw_frame
+                if pose_hold is not None:
+                    tracker_frame, held_ages = pose_hold.update(tracker_frame, now)
+                    held = set(held_ages)
+                    if held != previously_held:
+                        ids = [layout.serial_to_tracker_id[serial] for serial in sorted(held)]
+                        message = (
+                            f"Using last known poses for trackers: {', '.join(ids)}"
+                            if ids else "All required trackers are live"
+                        )
+                        print(message, file=sys.stderr, flush=True)
+                        previously_held = held
                 positions, reconstruction_diagnostics = (
                     layout.ordered_positions_with_diagnostics(tracker_frame)
                     if hasattr(layout, "ordered_positions_with_diagnostics")
                     else (layout.ordered_positions(tracker_frame), {})
                 )
                 observation = builder.build(positions, now)
+                if pose_hold is not None:
+                    pose_hold.initialized = True
                 if recorder is not None:
                     recorder.write(
                         "tracker_frame",
@@ -1562,13 +1639,26 @@ def _run_control_loop(
                         node_positions=numpy_value(positions),
                         rigidity=float(observation.rigidity.detach().cpu().numpy()[0]),
                         reconstruction_diagnostics=reconstruction_diagnostics,
+                        held_tracker_age_s_by_serial=held_ages,
                     )
-                action = agent.act(
-                    observation,
-                    t0=step == 0,
-                    eval_mode=bool(cfg.deterministic),
-                )
-                normalized_node_velocity = action.detach().cpu().numpy()
+                paused = controls.poll() if controls is not None else False
+                if not paused:
+                    action = agent.act(
+                        observation,
+                        t0=first_action,
+                        eval_mode=bool(cfg.deterministic),
+                    )
+                    first_action = False
+                    normalized_node_velocity = action.detach().cpu().numpy()
+                if paused or (controls is not None and controls.poll()):
+                    paused = True
+                    normalized_node_velocity = np.zeros(len(formatter.graph_node_names))
+                if preview is not None:
+                    preview.publish(
+                        positions,
+                        {layout.serial_to_tracker_id[serial]: age for serial, age in held_ages.items()},
+                        paused,
+                    )
                 send_time = time.monotonic()
                 command = formatter.velocity_command(normalized_node_velocity)
                 parsed_command = parse_firmware_command(
@@ -1586,6 +1676,7 @@ def _run_control_loop(
                         duration_s=parsed_command.duration_seconds,
                         command=command,
                         transport=("serial" if transport.acknowledgment_gated else "print"),
+                        control_state="paused" if paused else "running",
                     )
                 transport.send(command)
                 completed_time = time.monotonic()
@@ -1605,6 +1696,13 @@ def _run_control_loop(
                 else:
                     next_tick += period
             except MissingTrackerFrame as exc:
+                if preview is not None:
+                    preview.publish(
+                        None,
+                        {layout.serial_to_tracker_id[serial]: age for serial, age in held_ages.items()},
+                        controls.paused if controls is not None else False,
+                        str(exc),
+                    )
                 if recorder is not None:
                     recorder.write(
                         "tracker_frame",
@@ -1614,6 +1712,7 @@ def _run_control_loop(
                         sampled_at_utc=utc_now_iso(),
                         raw_poses_by_serial=_serializable_tracker_frame(last_raw_frame),
                         error=str(exc),
+                        held_tracker_age_s_by_serial=held_ages,
                     )
                 print(f"tracker frame skipped: {exc}", file=sys.stderr, flush=True)
                 if transport.acknowledgment_gated:
@@ -1647,18 +1746,20 @@ def _run_control_loop(
                         reason="acknowledgment timeout",
                     )
                 return "acknowledgment_timeout"
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, OperatorEmergencyStop) as exc:
+        operator_stop = isinstance(exc, OperatorEmergencyStop)
+        reason = "operator emergency stop" if operator_stop else "Ctrl-C"
         emergency_command = formatter.emergency_stop_command()
-        transport.emergency_stop(emergency_command, reason="Ctrl-C")
+        transport.emergency_stop(emergency_command, reason=reason)
         if recorder is not None:
             recorder.write(
                 "emergency_command",
                 step=step,
                 relative_time_s=recorder.relative_time(),
                 command=emergency_command,
-                reason="Ctrl-C",
+                reason=reason,
             )
-        return "ctrl_c"
+        return "operator_emergency_stop" if operator_stop else "ctrl_c"
     return "control_steps_complete"
 
 
@@ -1818,25 +1919,33 @@ def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
     load_agent_checkpoint(agent, checkpoint)
     agent.model.eval()
     source = source or SteamVRTrackerSource()
-    transport = None
-    recorder = None
     session_reason = "error"
-    try:
+    with ExitStack() as stack:
+        stack.callback(source.close)
         transport = _make_command_transport(cfg, formatter)
+        stack.callback(transport.close)
+        recorder = None
         if bool(getattr(cfg, "record_session", True)):
             recorder = RealRobotSessionRecorder(
                 _recording_path(cfg), _session_metadata(cfg, layout, formatter)
             )
+            stack.callback(lambda: recorder.close(reason=session_reason))
             print(f"Recording sim-to-real session to {recorder.path}", flush=True)
+        controls = stack.enter_context(OperatorControls(
+            enabled=bool(getattr(cfg, "operator_keyboard", False)),
+            start_paused=bool(getattr(cfg, "start_paused", False)),
+        ))
+        preview = None
+        if bool(getattr(cfg, "state_preview", False)):
+            preview = RobotPreview(layout.node_names, layout.edge_index)
+            stack.callback(preview.close)
+            controls.external_events = preview.events
+        if isinstance(transport, SerialCommandTransport):
+            transport.operator_controls = controls
         session_reason = _run_control_loop(
-            cfg, source, layout, builder, agent, formatter, transport, recorder
+            cfg, source, layout, builder, agent, formatter, transport, recorder,
+            controls=controls, preview=preview,
         )
-    finally:
-        if recorder is not None:
-            recorder.close(reason=session_reason)
-        if transport is not None:
-            transport.close()
-        source.close()
 
 
 @hydra.main(config_name="inference/real_robot", config_path="../config", version_base=None)

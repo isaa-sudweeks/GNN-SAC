@@ -2,6 +2,7 @@ import json
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from queue import Queue
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ import unittest
 from unittest.mock import patch
 
 import numpy as np
+import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 SAC_ROOT = ROOT / "sac"
@@ -19,9 +21,11 @@ for path in (ROOT, SAC_ROOT):
 from real_robot_infer import (
     PrintCommandTransport,
     RealRobotObservationBuilder,
+    RealRobotSessionRecorder,
     SerialAcknowledgmentTimeout,
     SerialCommandTransport,
     SerialVelocityCommandFormatter,
+    SteamVRTrackerSource,
     TrackerLayout,
     TrackerMount,
     TrackerPose,
@@ -29,6 +33,9 @@ from real_robot_infer import (
     _run_control_loop,
     _run_print_only_control_loop,
 )
+from robot_operator import OperatorControls
+from robot_preview import draw_frame
+from sim_to_real_io import read_jsonl
 from tests.test_gnn_mujoco_truss_gen_smoke import graph_test_cfg
 
 
@@ -748,6 +755,174 @@ class ControlLoopPacingTest(unittest.TestCase):
                 transport,
             )
         np.testing.assert_allclose(transport.send_times, [0.0, 0.15, 0.25])
+
+    def test_six_tracker_loss_and_reacquisition_feed_policy_and_preview(self):
+        layout = TrackerLayout.from_files(
+            str(ROOT / "config/tracker_maps/vive_serial_map.json"),
+            str(ROOT / "config/tracker_maps/robot_def.json"),
+        )
+        serials = [
+            serial for serial, tracker_id in layout.serial_to_tracker_id.items()
+            if tracker_id in layout.tracker_mounts
+        ]
+        full = {}
+        for i, serial in enumerate(serials):
+            mount = layout.tracker_mounts[layout.serial_to_tracker_id[serial]]
+            angle = 0.4 * int(mount.triangle[-1])
+            c, s = np.cos(angle), np.sin(angle)
+            full[serial] = TrackerPose(
+                np.asarray([i % 2, i / 5, i % 3], dtype=float),
+                np.asarray([[c, 0, s], [0, 1, 0], [-s, 0, c]]),
+            )
+        dropped, live = serials[:2]
+        partial = dict(full)
+        partial.pop(dropped)
+        partial[live] = TrackerPose(
+            full[live].position + [0.2, 0.1, 0.3], full[live].rotation_matrix
+        )
+        invalid = dict(partial)
+        invalid[dropped] = TrackerPose(np.full(3, np.nan), np.eye(3))
+        recovered = dict(partial)
+        recovered[dropped] = TrackerPose(
+            full[dropped].position + [0.3, 0.2, 0.1], np.eye(3)
+        )
+        mixed = {**partial, dropped: full[dropped]}
+        frames = iter(({dropped: full[dropped]}, partial, full, invalid, {}, recovered))
+        source = SimpleNamespace(poses_by_serial=lambda: next(frames))
+        builder = RealRobotObservationBuilder(layout, False, 1.0, com_relative_axes=(False,) * 3)
+        observations, previews, commands = [], [], []
+
+        def act(observation, **kwargs):
+            observations.append(observation.x[:, :3].numpy())
+            return torch.full((len(layout.node_names),), 0.5)
+
+        formatter = SerialVelocityCommandFormatter(
+            layout.node_names, layout.action_mask,
+            max_velocity_ticks_per_second=1800, duration_seconds=0.2,
+        )
+        cfg = SimpleNamespace(control_steps=4, control_frequency_hz=5.0, deterministic=True)
+        clock = _FakeClock()
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "real_robot_infer.time.monotonic", clock.monotonic
+        ), patch("real_robot_infer.time.sleep", clock.sleep), redirect_stderr(StringIO()):
+            path = Path(directory) / "capture.jsonl"
+            recorder = RealRobotSessionRecorder(path, {})
+            reason = _run_control_loop(
+                cfg, source, layout, builder, SimpleNamespace(act=act), formatter,
+                SimpleNamespace(acknowledgment_gated=False, send=commands.append),
+                recorder, preview=SimpleNamespace(publish=lambda *frame: previews.append(frame)),
+            )
+            recorder.close(reason=reason)
+            recorded = [row for row in read_jsonl(path) if row["type"] == "tracker_frame"]
+        expected = [layout.ordered_positions(frame) for frame in (full, mixed, mixed, recovered)]
+        np.testing.assert_allclose(observations, expected, atol=1e-6)
+        np.testing.assert_allclose([frame[0] for frame in previews[2:]], expected)
+        self.assertEqual([frame["status"] for frame in recorded], ["skipped"] * 2 + ["complete"] * 4)
+        self.assertEqual(len(commands), 4)
+        self.assertEqual(set(recorded[3]["held_tracker_age_s_by_serial"]), {dropped})
+        self.assertAlmostEqual(recorded[3]["held_tracker_age_s_by_serial"][dropped], 0.2)
+        self.assertEqual(set(recorded[4]["held_tracker_age_s_by_serial"]), set(serials))
+        self.assertEqual(recorded[4]["raw_poses_by_serial"], {})
+        self.assertEqual(recorded[5]["held_tracker_age_s_by_serial"], {})
+
+    def test_preview_controls_pause_resume_and_stop(self):
+        cfg, source, layout, builder, _, formatter = self._loop_fixture()
+        controls = OperatorControls(enabled=False, start_paused=True)
+        controls.external_events = Queue()
+        commands, stops = [], []
+        action_steps = []
+        transport = SimpleNamespace(
+            acknowledgment_gated=False,
+            send=lambda command: (
+                commands.append(command),
+                controls.external_events.put("toggle_pause" if len(commands) == 1 else "stop"),
+            ),
+            emergency_stop=lambda command, *, reason: stops.append(command),
+        )
+        agent = SimpleNamespace(
+            act=lambda observation, *, t0, eval_mode: action_steps.append(t0) or torch.ones(1)
+        )
+        clock = _FakeClock()
+        with patch("real_robot_infer.time.monotonic", clock.monotonic), patch(
+            "real_robot_infer.time.sleep", clock.sleep
+        ):
+            reason = _run_control_loop(cfg, source, layout, builder, agent, formatter, transport, controls=controls)
+        self.assertEqual(commands, ["VEL_DUR:0:0.2", "VEL_DUR:1800:0.2"])
+        self.assertEqual(action_steps, [True])
+        self.assertEqual(stops, ["VEL_DUR:0:0"])
+        self.assertEqual(reason, "operator_emergency_stop")
+
+    def test_operator_stop_interrupts_serial_acknowledgment_wait(self):
+        clock = _FakeClock()
+        fake_serial = _FakeSerial(clock)
+        transport = SerialCommandTransport(
+            "/dev/fake", 115200, ("node",), ack_timeout_seconds=5.0,
+            startup_delay_seconds=0.0, serial_factory=lambda **kwargs: fake_serial,
+            monotonic=clock.monotonic, sleep=clock.sleep,
+        )
+        controls = OperatorControls(enabled=False)
+        transport.operator_controls = controls
+        read_line = fake_serial.readline
+
+        def stop_during_read():
+            controls.request("stop")
+            return read_line()
+
+        fake_serial.readline = stop_during_read
+        cfg, source, layout, builder, agent, formatter = self._loop_fixture()
+        with redirect_stdout(StringIO()), redirect_stderr(StringIO()), patch(
+            "real_robot_infer.time.monotonic", clock.monotonic
+        ), patch("real_robot_infer.time.sleep", clock.sleep):
+            reason = _run_control_loop(
+                cfg, source, layout, builder, agent, formatter, transport, controls=controls,
+            )
+        self.assertEqual(reason, "operator_emergency_stop")
+        self.assertEqual(fake_serial.writes, [b"VEL_DUR:0:0.2\n", b"VEL_DUR:0:0\n"])
+        self.assertFalse(transport.command_in_flight)
+        self.assertEqual(transport.ack_timeouts, 0)
+
+    def test_preview_renders_graph_and_held_status_headlessly(self):
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+
+        fig = Figure()
+        canvas = FigureCanvasAgg(fig)
+        ax = fig.add_subplot(projection="3d")
+        frame = {
+            "held_tracker_ages": {"B11": 1.25},
+            "positions": [[0, 0, 0], [0, 1, 0]],
+            "paused": True,
+            "error": None,
+            "generated_at": _FakeClock().monotonic(),
+        }
+        draw_frame(ax, ("node_1", "node_2"), [(0, 1)], frame)
+        canvas.draw()
+        self.assertIn("PAUSED | Held poses: B11", ax.get_title())
+        self.assertEqual(len(ax.lines), 1)
+        draw_frame(ax, ("node_1", "node_2"), [(0, 1)], {**frame, "error": "Missing poses"})
+        canvas.draw()
+        self.assertIn("WAITING FOR POSES", ax.get_title())
+        self.assertEqual(len(ax.lines), 0)
+
+    def test_openvr_filters_non_tracking_poses_even_when_marked_valid(self):
+        source = SteamVRTrackerSource.__new__(SteamVRTrackerSource)
+        source.openvr = SimpleNamespace(
+            TrackingUniverseStanding=1, k_unMaxTrackedDeviceCount=4,
+            TrackingResult_Running_OK=200, TrackedDeviceClass_GenericTracker=3,
+            Prop_SerialNumber_String=1002,
+        )
+        live = dict(bDeviceIsConnected=True, bPoseIsValid=True, eTrackingResult=200,
+                    mDeviceToAbsoluteTracking=np.eye(4)[:3])
+        source.system = SimpleNamespace(
+            getDeviceToAbsoluteTrackingPose=lambda *_: [
+                SimpleNamespace(**(live | override)) for override in (
+                    {}, {"eTrackingResult": 201}, {"bPoseIsValid": False}, {"bDeviceIsConnected": False},
+                )
+            ],
+            getTrackedDeviceClass=lambda _: 3,
+            getStringTrackedDeviceProperty=lambda index, _: f"S{index}",
+        )
+        self.assertEqual(set(source.poses_by_serial()), {"S0"})
 
     def test_ack_timeout_stops_loop_and_writes_one_emergency_command(self):
         clock = _FakeClock()

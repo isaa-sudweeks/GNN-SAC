@@ -18,6 +18,9 @@ velocity_filter_alpha: 1.0
 deterministic: true
 record_session: true
 record_output: null # null writes real_robot_session.jsonl under the Hydra run directory.
+state_preview: false # Open the live 3D policy-position preview on a desktop.
+operator_keyboard: false # Also accept Ctrl+P and E in the terminal.
+start_paused: false
 
 # USB transmitter command output. Keep print mode until graph/channel ordering and
 # tracker calibration have been verified; serial mode actuates the physical robot.

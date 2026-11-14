@@ -118,6 +118,7 @@ def tracker_health_metrics(
     complete_times = np.asarray([float(frame["relative_time_s"]) for frame in complete], dtype=float)
     intervals = np.diff(all_times)
     skipped = [frame.get("status") != "complete" for frame in frames]
+    held_frames = sum(bool(frame.get("held_tracker_age_s_by_serial")) for frame in complete)
     longest_dropout = current = 0
     for missing in skipped:
         current = current + 1 if missing else 0
@@ -219,6 +220,7 @@ def tracker_health_metrics(
         "capture": str(capture["path"]),
         "expected_frames": len(frames),
         "valid_frames": len(complete),
+        "held_pose_frames": held_frames,
         "dropout_frames": len(frames) - len(complete),
         "dropout_percentage": 100.0 * (len(frames) - len(complete)) / max(len(frames), 1),
         "longest_dropout_burst_frames": longest_dropout,
