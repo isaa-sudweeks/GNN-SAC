@@ -104,14 +104,19 @@ For each joint, the code intersects its two measured planes and orthogonally pro
 
 ## Tracking loss and live preview
 
-The first observation requires a complete live tracker frame. After that, a tracker
-that drops out contributes its last valid sample until it returns. For the six-tracker
-triangle-plane setup this holds the tracker's position and orientation, so its plane and
-anchor can still be used with the other trackers' live poses. If all trackers drop
-out, reconstruction continues from all six held poses. The hold has no time limit.
-Live poses replace held poses as soon as SteamVR reports valid tracking again.
-The session log preserves live raw samples and records held ages in
-`held_tracker_age_s_by_serial`.
+The first observation requires a complete live tracker frame. Each subsequent
+valid sample updates its tracker's filtered pose before joint reconstruction.
+`tracker_pose_filter_alpha=0.65` moves the position and orientation 65% of the way
+toward each new sample. Lower values reduce jitter and add lag. Use
+`tracker_pose_filter_alpha=1.0` to pass live poses through directly.
+`velocity_filter_alpha` separately controls smoothing of the calculated joint
+velocities.
+
+When a tracker drops out, its last filtered pose stays fixed while the other
+trackers keep updating. Reconstruction continues from all six held poses if all
+trackers drop out. The hold has no time limit. When a tracker returns, its first
+live sample updates the filter from the held pose. The session log preserves raw
+samples and records the filter setting and held tracker ages.
 
 Add `state_preview=true` to your inference command to open the live 3D policy-node
 graph, in meters before observation centering and normalization. The window lists

@@ -19,6 +19,7 @@ for path in (PROJECT_ROOT, SAC_ROOT):
         sys.path.insert(0, str(path))
 
 import hydra
+import mujoco
 import numpy as np
 import torch
 from omegaconf import OmegaConf, open_dict
@@ -1498,12 +1499,36 @@ def _read_tracker_sample(source, layout) -> tuple[Mapping[str, object], Mapping[
 
 
 class TrackerPoseHold:
-    """Keep the last valid sample for each tracker used by the current layout."""
+    """Filter live tracker samples and hold the latest estimate through dropouts."""
 
-    def __init__(self, layout: TrackerLayout) -> None:
+    def __init__(self, layout: TrackerLayout, alpha: float) -> None:
+        if not 0.0 < alpha <= 1.0:
+            raise ValueError("tracker_pose_filter_alpha must be in (0, 1]")
         self.layout = layout
+        self.alpha = alpha
         self.samples: dict[str, tuple[float, TrackerPose | np.ndarray]] = {}
         self.initialized = False
+
+    def _smooth(
+        self, previous: TrackerPose | np.ndarray, current: TrackerPose | np.ndarray
+    ) -> TrackerPose | np.ndarray:
+        alpha = self.alpha
+        if isinstance(current, TrackerPose):
+            assert isinstance(previous, TrackerPose)
+            position = previous.position + alpha * (current.position - previous.position)
+            previous_quat = np.empty(4)
+            current_quat = np.empty(4)
+            mujoco.mju_mat2Quat(previous_quat, previous.rotation_matrix.ravel())
+            mujoco.mju_mat2Quat(current_quat, current.rotation_matrix.ravel())
+            # Move a fraction of the shortest rotation from the previous pose.
+            delta = np.empty(3)
+            mujoco.mju_subQuat(delta, current_quat, previous_quat)
+            mujoco.mju_quatIntegrate(previous_quat, delta, alpha)
+            rotation = np.empty(9)
+            mujoco.mju_quat2Mat(rotation, previous_quat)
+            return TrackerPose(position, rotation.reshape(3, 3))
+        assert isinstance(previous, np.ndarray)
+        return previous + alpha * (current - previous)
 
     def update(
         self, frame: Mapping[str, object], timestamp: float
@@ -1530,7 +1555,10 @@ class TrackerPoseHold:
         if not self.initialized:
             # Bootstrap graph assignment and observation scaling from a live frame.
             self.samples.clear()
-        self.samples.update({serial: (timestamp, sample) for serial, sample in fresh.items()})
+        for serial, sample in fresh.items():
+            if self.alpha < 1.0 and serial in self.samples:
+                sample = self._smooth(self.samples[serial][1], sample)
+            self.samples[serial] = timestamp, sample
         effective = {}
         held_ages = {}
         for serial, (last_seen, sample) in self.samples.items():
@@ -1593,7 +1621,9 @@ def _run_control_loop(
     next_tick = time.monotonic()
     step = 0
     first_action = True
-    pose_hold = TrackerPoseHold(layout) if isinstance(layout, TrackerLayout) else None
+    pose_hold = None
+    if isinstance(layout, TrackerLayout):
+        pose_hold = TrackerPoseHold(layout, float(getattr(cfg, "tracker_pose_filter_alpha", 1.0)))
     previously_held: set[str] = set()
     last_raw_frame: Mapping[str, object] | None = None
     try:
@@ -1856,6 +1886,7 @@ def _session_metadata(cfg, layout: TrackerLayout, formatter: SerialVelocityComma
         "command_duration_s": formatter.duration_seconds,
         "control_frequency_hz": float(cfg.control_frequency_hz),
         "tracker_assignment": layout.assignment_mode,
+        "tracker_pose_filter_alpha": float(getattr(cfg, "tracker_pose_filter_alpha", 1.0)),
         "serial_to_tracker_id": dict(layout.serial_to_tracker_id),
     }
 
