@@ -231,13 +231,8 @@ Repeat bounded tests while moving one tracker/mount slowly by hand. Do not conne
 - [ ] Raise one node and verify the correct node is represented.
 - [ ] Hold the robot still and inspect whether finite-difference velocity noise produces unstable commands.
 - [ ] If necessary, reduce velocity noise using `velocity_filter_alpha` below `1.0`.
-- [ ] Briefly occlude one tracker and confirm the frame is skipped rather than inferred from incomplete data.
-
-Expected dropout message:
-
-```text
-tracker frame skipped: Missing valid SteamVR poses for nodes: [...]
-```
+- [ ] With `state_preview=true`, briefly occlude each tracker after startup and confirm the window reports its held pose while inference continues. Restore tracking and confirm the held status clears.
+- [ ] Start with one tracker occluded and confirm inference waits for a complete live frame.
 
 The initial observation has zero velocity by design. Velocity is calculated from subsequent positions using monotonic elapsed time.
 

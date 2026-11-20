@@ -1,0 +1,81 @@
+"""Terminal pause/resume and latched operator stop; no motor I/O in signal handlers."""
+
+from __future__ import annotations
+
+import os
+from queue import Empty
+import select
+import sys
+
+
+class OperatorEmergencyStop(RuntimeError):
+    pass
+
+
+class OperatorControls:
+    """Ctrl+P toggles pause; E or the preview stop button latches emergency stop.
+
+    Ctrl+C keeps the terminal's normal SIGINT behavior. Commands remain zero
+    throughout pause; returning to running requires a newly built observation.
+    """
+
+    def __init__(self, *, enabled: bool = True, start_paused: bool = False) -> None:
+        self.paused = bool(start_paused)
+        self.stopped = False
+        self.enabled = enabled
+        self.fd = None
+        self.saved = None
+        self.external_events = None
+        self.windows_console = False
+
+    def __enter__(self) -> OperatorControls:
+        if self.enabled and os.name == "nt":
+            self.windows_console = True
+        elif self.enabled and sys.stdin.isatty():
+            import termios
+            self.fd = sys.stdin.fileno()
+            self.saved = termios.tcgetattr(self.fd)
+            changed = termios.tcgetattr(self.fd)
+            changed[3] &= ~(termios.ICANON | termios.ECHO)
+            changed[6][termios.VMIN] = 0
+            changed[6][termios.VTIME] = 0
+            termios.tcsetattr(self.fd, termios.TCSANOW, changed)
+        return self
+
+    def __exit__(self, *_) -> None:
+        if self.saved is not None:
+            import termios
+            termios.tcsetattr(self.fd, termios.TCSANOW, self.saved)
+
+    def request(self, event: str) -> None:
+        if event == "stop":
+            self.stopped = True
+            self.paused = True
+        elif event == "toggle_pause" and not self.stopped:
+            self.paused = not self.paused
+
+    def feed(self, value: bytes) -> None:
+        for character in value:
+            if character == 16:
+                self.request("toggle_pause")
+            elif character in (ord("e"), ord("E")):
+                self.request("stop")
+            elif character == 3:
+                raise KeyboardInterrupt
+
+    def poll(self) -> bool:
+        if self.windows_console:
+            import msvcrt
+            while msvcrt.kbhit():
+                self.feed(msvcrt.getwch().encode("utf-8"))
+        if self.fd is not None and select.select([self.fd], [], [], 0)[0]:
+            self.feed(os.read(self.fd, 128))
+        if self.external_events is not None:
+            while True:
+                try:
+                    self.request(self.external_events.get_nowait())
+                except Empty:
+                    break
+        if self.stopped:
+            raise OperatorEmergencyStop("operator emergency stop")
+        return self.paused

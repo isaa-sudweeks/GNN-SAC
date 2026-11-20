@@ -102,6 +102,32 @@ python sac/real_robot_infer.py \
 
 For each joint, the code intersects its two measured planes and orthogonally projects the rigidly connected tracker's position onto that line. A frame is skipped when the planes are parallel or nearly parallel because the joint is not observable from that plane pair. The mechanical perpendicularity assumption must hold for each configured tracker/joint pair; mounting a puck on a triangle alone does not guarantee it.
 
+## Tracking loss and live preview
+
+The first observation requires a complete live tracker frame. Each subsequent
+valid sample updates its tracker's filtered pose before joint reconstruction.
+`tracker_pose_filter_alpha=0.65` moves the position and orientation 65% of the way
+toward each new sample. Lower values reduce jitter and add lag. Use
+`tracker_pose_filter_alpha=1.0` to pass live poses through directly.
+`velocity_filter_alpha` separately controls smoothing of the calculated joint
+velocities.
+
+When a tracker drops out, its last filtered pose stays fixed while the other
+trackers keep updating. Reconstruction continues from all six held poses if all
+trackers drop out. The hold has no time limit. When a tracker returns, its first
+live sample updates the filter from the held pose. The session log preserves raw
+samples and records the filter setting and held tracker ages.
+
+Add `state_preview=true` to your inference command to open the live 3D policy-node
+graph, in meters before observation centering and normalization. The window lists
+held tracker IDs and their ages. Use the pause/resume button or Ctrl+P in the window
+to switch between policy commands and zero-velocity commands. Pause takes effect
+on the next command if the transmitter is already processing one. The emergency
+stop button or E ends the session and sends a best-effort zero command. Use
+`operator_keyboard=true` to enable Ctrl+P and E in the terminal too, and
+`start_paused=true` to open the session paused. Ctrl+C remains available in the
+terminal.
+
 ## Hand-authored graph and position checker
 
 When the physical layout is not a registered `mujoco-truss-gen` preset, define the four logical triangles and six tracker locations directly. The loader generates the complete policy graph and plane-intersection metadata:
