@@ -26,3 +26,9 @@ run_root: /home/isuds/nobackup/autodelete/GNN-SAC
 wandb_entity: i-suds
 wandb_project: sim_to_real
 save_video: true
+
+hydra:
+  sweeper:
+    params:
+      edge_extension_weight: 0.0,1.0
+      seed: 1,2,3

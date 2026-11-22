@@ -102,23 +102,23 @@ uv run python sac/train.py platform=supercomputer --multirun \
   hydra.launcher.skip_completed_jobs=false
 ```
 
-### Realistic octahedron sim-to-real pair
+### Realistic octahedron sim-to-real sweep
 
 ```bash
-uv run --frozen python sac/train.py --multirun +experiment=sim_to_real_octahedron \
-  seed=1 edge_extension_weight=0.0,1.0 \
-  hydra.launcher.gpus_per_node=null hydra.launcher.gres=gpu:a100:1
+uv run --frozen python sac/train.py --multirun +experiment=sim_to_real_octahedron
 ```
 
-This submits two A100 jobs with the same seed and 10 million training
-transitions each. The preset uses the realistic octahedron in MJX Warp,
+This submits six jobs, one per seed (1, 2, and 3) in each arm, with 10 million
+training transitions per job. Slurm can assign any compatible GPU. The
+supercomputer launcher excludes the P100 and V100 nodes for CUDA 13
+compatibility. The preset uses the realistic octahedron in MJX Warp,
 enables the expert/generalist graph features (tube nodes, node and edge roles,
 edge distance, and signed routing), and samples the internal angle-bisector
 hinge position gain uniformly from 6 to 8 at reset. It uses the v3 collapse
 threshold of 0.01, records native MuJoCo evaluation video, and writes offline
 W&B runs to the `sim_to_real` project.
 
-Job 0 is the baseline. Job 1 subtracts
+Jobs 0–2 are the baseline. Jobs 3–5 subtract
 `edge_extension_weight * sum(max(L - L_nominal, 0)^2)` from the existing
 reward each step, with the sum taken over the undirected physical control-graph
 edges. Lengths are in meters and their nominal values come from the compiled
