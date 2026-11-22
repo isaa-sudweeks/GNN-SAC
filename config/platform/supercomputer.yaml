@@ -41,6 +41,7 @@ hydra:
     signal_delay_s: 120
     max_num_timeout: 20
     qos: standby
+    account: nusey
     additional_parameters:
       # CUDA 13 does not support the Pascal P100 GPUs on ORC's m9g nodes.
       exclude: m9g-[1-2]-[1-20]

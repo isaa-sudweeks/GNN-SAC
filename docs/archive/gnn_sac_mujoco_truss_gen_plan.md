@@ -1,3 +1,5 @@
+> **Archived (2026-09-25).** Completed one-off implementation plan for the first `mujoco_truss_gen` octahedron integration. Kept for history only.
+
 # Plan: Get GNN-SAC Rolling With `mujoco_truss_gen`
 
 ## Summary

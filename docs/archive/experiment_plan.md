@@ -1,3 +1,5 @@
+> **Archived (2026-09-25).** Original staged plan (April 2026). Stages 0–4 are largely superseded by the implemented GNN/padded-MLP pipeline, held-out evaluation, and [cross-validation](../usage/cross_validation.md).
+
 # Experiment Plan
 
 This document outlines the staged experiment plan for the project. Each stage should produce a clear yes/no signal before moving to the next one.

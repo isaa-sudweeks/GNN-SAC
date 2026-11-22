@@ -2,6 +2,7 @@ from copy import deepcopy
 
 import torch 
 import torch.nn as nn 
+from torch_geometric.data import Data
 from torch_geometric.nn import global_add_pool, global_mean_pool
 
 from common import math 
@@ -49,10 +50,14 @@ class GNNActorCritic(nn.Module):
             cfg.obs_dim,
             use_virtual_node=use_virtual_node,
             use_node_roles=feature_flags["use_node_roles"],
+            use_tube_nodes=feature_flags["use_tube_nodes"],
+            use_tube_physics=feature_flags["use_tube_physics"],
         )
         edge_channels = graph_edge_input_dim(
             use_edge_roles=feature_flags["use_edge_roles"],
             use_edge_distance=feature_flags["use_edge_distance"],
+            use_edge_direction=feature_flags["use_edge_direction"],
+            use_tube_nodes=feature_flags["use_tube_nodes"],
         )
 
         self._pi = gnn_layers.GNN(
@@ -113,6 +118,28 @@ class GNNActorCritic(nn.Module):
         for param, target_param in zip(self._Qs.parameters(), self._target_Qs.parameters()):
             target_param.data.lerp_(param.data, self.cfg.tau)
 
+    def policy_distribution(
+        self, obs: Data, *, deterministic: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return pre-tanh Gaussian parameters in active-node action order.
+
+        The public default disables actor dropout without disabling gradients.
+        SAC sampling opts into the actor's existing train/eval mode.
+        """
+        modes = self._pi.training, self._action_head.training
+        try:
+            if deterministic:
+                self._pi.eval()
+                self._action_head.eval()
+            action_mask = policy_action_mask(obs)
+            embeddings = self._pi(obs.x, obs.edge_index, getattr(obs, "edge_attr", None))
+            mean, log_std = self._action_head(embeddings[action_mask]).chunk(2, dim=-1)
+            return mean, math.log_std(log_std, self.log_std_min, self.log_std_dif)
+        finally:
+            if deterministic:
+                self._pi.train(modes[0])
+                self._action_head.train(modes[1])
+
     def pi(self, obs):
         """
         Compute the action, entropy and log probability. 
@@ -121,9 +148,7 @@ class GNNActorCritic(nn.Module):
             obs:Observation data of a graph in the torch geometric Data format
         """
         action_mask = policy_action_mask(obs)
-        embeddings = self._pi(obs.x, obs.edge_index, getattr(obs, "edge_attr", None))
-        mean, log_std = self._action_head(embeddings[action_mask]).chunk(2, dim=-1)
-        log_std = math.log_std(log_std, self.log_std_min, self.log_std_dif)
+        mean, log_std = self.policy_distribution(obs, deterministic=False)
         
         eps = torch.randn_like(mean)
         log_prob = math.gaussian_logprob(eps, log_std)
@@ -174,11 +199,7 @@ class GNNActorCritic(nn.Module):
             obs, "_physical_node_count_cache", None
         )
         if physical_node_count is None:
-            if bool(getattr(self.cfg, "use_virtual_node", False)):
-                graph_count = int(getattr(obs, "num_graphs", 1))
-                physical_node_count = obs.x.size(0) - graph_count
-            else:
-                physical_node_count = obs.x.size(0)
+            physical_node_count = int(pool_mask.sum())
         policy_action_count = getattr(
             obs, "_policy_action_count_cache", None
         )
@@ -209,6 +230,7 @@ class GNNActorCritic(nn.Module):
             pool_mask,
             getattr(obs, "edge_attr", None),
             num_graphs=int(getattr(obs, "num_graphs", 1)),
+            global_mask=getattr(obs, "global_node_mask", None),
         )
 
         if return_type == "all":

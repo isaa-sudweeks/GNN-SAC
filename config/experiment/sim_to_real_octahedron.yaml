@@ -1,0 +1,28 @@
+# @package _global_
+defaults:
+  - override /sac_backend: gnn
+  - override /sim_backend: mjx
+  - override /platform: supercomputer
+
+exp_name: v4-sim-to-real-octahedron
+truss_topology: octahedron:realistic
+pcgrad: false
+critical_eig_threshold: 0.01
+domain_randomization: true
+domain_randomization_params:
+  hinge_position_kp:
+    enabled: true
+    min: 6.0
+    max: 8.0
+
+graph_features:
+  node_roles: true
+  edge_roles: true
+  edge_distance: true
+  edge_direction: true
+  tube_nodes: true
+
+run_root: /home/isuds/nobackup/autodelete/GNN-SAC
+wandb_entity: i-suds
+wandb_project: sim_to_real
+save_video: true

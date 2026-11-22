@@ -183,6 +183,8 @@ class TrainingProfilerTest(unittest.TestCase):
         )
         self.assertFalse(profiler.metadata["pcgrad"])
         self.assertFalse(profiler.metadata["gradient_diagnostics"])
+        self.assertEqual(profiler.metadata["replay_backend"], "torchrl_tensor")
+        self.assertEqual(profiler.metadata["replay_storage_mode"], "auto")
         self.assertEqual(
             profiler.metadata["replay_batching_strategy"],
             "direct_balanced_collation",

@@ -8,12 +8,19 @@ import torch.nn.functional as F
 from torch_geometric.data import Batch, Data
 
 from common.gnn_actor_critic import GNNActorCritic 
+from common.finite_checks import (
+    NonFiniteTrainingError,
+    require_finite,
+    require_finite_gradients,
+    require_finite_optimizer,
+)
 from common.graph_transforms import (
     graph_feature_flags,
     graph_feature_schema,
     policy_action_mask,
     prepare_graph,
 )
+from common.tensor_gnn_buffer import DenseGraphGroup, dense_graph_batch
 
 class GNNSAC(torch.nn.Module):
     """
@@ -23,10 +30,23 @@ class GNNSAC(torch.nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
+        self.distillation = None
         self.device = torch.device(getattr(cfg, "device", "cuda"))
         self.model = self._make_model(cfg).to(self.device)
         self._q_parameters = tuple(self.model._Qs.parameters())
         self._actor_parameters = tuple(self.model.actor_parameters())
+        q_parameter_ids = {id(parameter) for parameter in self._q_parameters}
+        actor_parameter_ids = {id(parameter) for parameter in self._actor_parameters}
+        self._q_named_parameters = tuple(
+            (name, parameter)
+            for name, parameter in self.model.named_parameters()
+            if id(parameter) in q_parameter_ids
+        )
+        self._actor_named_parameters = tuple(
+            (name, parameter)
+            for name, parameter in self.model.named_parameters()
+            if id(parameter) in actor_parameter_ids
+        )
         capturable = self.device.type in {"cuda", "xpu", "hpu", "privateuseone", "xla"}
 
         self.q_optim = torch.optim.Adam(self._q_parameters, lr=self.cfg.lr, capturable=capturable)
@@ -48,7 +68,7 @@ class GNNSAC(torch.nn.Module):
             self.target_entropy = float(target_entropy)
 
         self.model.eval()
-        self.discount = float(getattr(self.cfg, "discount", self._get_discount(self.cfg.episode_length)))
+        self.discount = self._resolve_discount()
 
         print("Episode length:", cfg.episode_length)
         print("Discount factor:", self.discount)
@@ -62,11 +82,60 @@ class GNNSAC(torch.nn.Module):
     def alpha(self):
         return self.log_alpha.exp()
 
-    def _safe_action(self, action):
-        """
-        TODO: I think it would be benefitial to add some sort of checking to make sure that the GNN stuff is right for the actions.
+    @property
+    def finite_checks_enabled(self):
+        return bool(getattr(self.cfg, "finite_checks", True))
 
-        """
+    def _require_finite(self, label, value):
+        if self.finite_checks_enabled:
+            require_finite(label, value)
+
+    def _require_finite_gradients(self, label, named_parameters):
+        if self.finite_checks_enabled:
+            require_finite_gradients(label, named_parameters)
+
+    def _require_finite_optimizer(self, label, optimizer):
+        if self.finite_checks_enabled:
+            require_finite_optimizer(label, optimizer)
+
+    def _clip_grad_norm(self, label, parameters, named_parameters):
+        self._require_finite_gradients(f"{label} gradients before clipping", named_parameters)
+        try:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                parameters,
+                self.cfg.grad_clip_norm,
+                error_if_nonfinite=self.finite_checks_enabled,
+            )
+        except RuntimeError as exc:
+            if not self.finite_checks_enabled:
+                raise
+            raise NonFiniteTrainingError(
+                f"{label} gradient norm became non-finite during clipping."
+            ) from exc
+        self._require_finite(f"{label} gradient norm", grad_norm)
+        self._require_finite_gradients(f"{label} gradients after clipping", named_parameters)
+        return grad_norm
+
+    def _validate_finite_model_state(self, label):
+        self._require_finite(f"{label} model state", self.model.state_dict())
+        self._validate_finite_temperature(label)
+
+    def _validate_finite_temperature(self, label):
+        self._require_finite(
+            f"{label} entropy temperature",
+            {"log_alpha": self.log_alpha, "alpha": self.alpha},
+        )
+
+    def _validate_finite_training_state(self, label):
+        self._validate_finite_model_state(label)
+        self._require_finite_optimizer(f"{label} critic optimizer", self.q_optim)
+        self._require_finite_optimizer(f"{label} actor optimizer", self.pi_optim)
+        self._require_finite_optimizer(f"{label} alpha optimizer", self.alpha_optim)
+
+    def _safe_action(self, action):
+        if self.finite_checks_enabled:
+            require_finite("policy action", action)
+            return action.clamp(-1, 1)
         return torch.nan_to_num(action, nan=0.0, posinf=1.0, neginf=-1.0).clamp(-1, 1)
 
     def project_action(self, obs, action):
@@ -80,11 +149,19 @@ class GNNSAC(torch.nn.Module):
         projected[~mask.cpu()] = 0
         return projected.numpy()
 
+    def _resolve_discount(self):
+        """Return the configured discount, or derive it from episode length when unset."""
+        discount = getattr(self.cfg, "discount", None)
+        if discount is None:
+            return float(self._get_discount(self.cfg.episode_length))
+        return float(discount)
+
     def _get_discount(self, episode_length):
         frac = episode_length / self.cfg.discount_denom
         return min(max((frac - 1) / frac, self.cfg.discount_min), self.cfg.discount_max)
 
     def save(self, fp):
+        self._validate_finite_model_state("agent save")
         torch.save(
             {
                 "model": self.model.state_dict(),
@@ -99,8 +176,10 @@ class GNNSAC(torch.nn.Module):
         self.model.load_state_dict(state_dict["model"] if "model" in state_dict else state_dict)
         if isinstance(state_dict, dict) and "log_alpha" in state_dict:
             self.log_alpha.data.copy_(state_dict["log_alpha"].to(self.device))
+        self._validate_finite_model_state("loaded checkpoint")
 
     def training_state_dict(self):
+        self._validate_finite_training_state("trainer checkpoint save")
         return {
             "model": self.model.state_dict(),
             "log_alpha": self.log_alpha.detach().cpu(),
@@ -117,8 +196,8 @@ class GNNSAC(torch.nn.Module):
             saved_schema = state_dict.get("graph_feature_schema")
         expected_schema = graph_feature_schema(self.cfg)
         features_enabled = any(
-            expected_schema[name]
-            for name in ("node_roles", "edge_roles", "edge_distance")
+            expected_schema.get(name, False)
+            for name in ("node_roles", "edge_roles", "edge_distance", "edge_direction")
         )
         if saved_schema is None:
             if features_enabled:
@@ -141,6 +220,7 @@ class GNNSAC(torch.nn.Module):
             self._load_actor_optimizer_state(state_dict["pi_optim"])
         if "alpha_optim" in state_dict:
             self.alpha_optim.load_state_dict(state_dict["alpha_optim"])
+        self._validate_finite_training_state("loaded trainer checkpoint")
 
     def _load_actor_optimizer_state(self, saved_state):
         """Load actor Adam state, upgrading checkpoints that omitted the GNN head."""
@@ -234,6 +314,37 @@ class GNNSAC(torch.nn.Module):
         return full_actions
 
     @torch.no_grad()
+    def act_dense(self, groups: Sequence[DenseGraphGroup], eval_mode: bool = False) -> list[torch.Tensor]:
+        """Compute ``[B, N, A]`` actions for dense same-topology groups in one forward pass.
+
+        Rows for passive and broken nodes are zero, matching ``act_batch``.
+        """
+        if not groups:
+            return []
+        obs_batch = dense_graph_batch(self.cfg, groups, self.device)
+        if eval_mode:
+            action = self.model.pi_mean(obs_batch)
+        else:
+            action, _ = self.model.pi(obs_batch)
+        action = self._safe_action(action)
+        mask = policy_action_mask(obs_batch)
+        if action.size(0) != int(obs_batch._policy_action_count_cache):
+            raise RuntimeError(
+                f"Actor produced {action.size(0)} node actions for "
+                f"{int(obs_batch._policy_action_count_cache)} actuated observation nodes"
+            )
+        full = action.new_zeros((mask.numel(), action.size(-1)))
+        full[mask] = action
+        results, offset = [], 0
+        for group in groups:
+            count, raw_nodes = int(group.x.size(0)), int(group.x.size(1))
+            nodes = int(group.static["prepared_x_template"].size(0))
+            block = full[offset: offset + count * nodes].view(count, nodes, -1)
+            results.append(block[:, :raw_nodes])
+            offset += count * nodes
+        return results
+
+    @torch.no_grad()
     def _td_target(self, next_obs, reward, terminated):
         """
         Again this assumes that next_obs is coming in as a torch geometric Data object.
@@ -247,28 +358,68 @@ class GNNSAC(torch.nn.Module):
 
     def update_q(self, obs, action, reward, terminated, next_obs):
         q_loss = self._q_loss(obs, action, reward, terminated, next_obs)
+        self._require_finite("critic loss", q_loss)
 
         self.q_optim.zero_grad(set_to_none=True)
         q_loss.backward()
-        q_grad_norm = torch.nn.utils.clip_grad_norm_(self.model._Qs.parameters(), self.cfg.grad_clip_norm)
+        q_grad_norm = self._clip_grad_norm(
+            "critic",
+            self._q_parameters,
+            self._q_named_parameters,
+        )
         self.q_optim.step()
+        self._require_finite("critic parameters after optimizer step", self._q_parameters)
         return q_loss.detach(), q_grad_norm.detach()
 
-    def update_pi_and_alpha(self, obs):
+    def update_pi_and_alpha(self, obs, task_batches=None,
+                            raw_observations_by_task=None,
+                            performance_profiler=None):
         pi_loss, info = self._pi_loss(obs)
+        distillation = getattr(self, "distillation", None)
+        if distillation is not None:
+            distillation.metrics["sac_actor_loss"] = pi_loss.detach()
+            if distillation.weight > 0:
+                if task_batches is None:
+                    raise ValueError("Distillation requires replay grouped by topology.")
+                # Broken-node regime tasks (see tensor_gnn_buffer._task_names)
+                # have no teacher and must never receive the KL term.
+                losses = [
+                    self._teacher_loss(
+                        task,
+                        batch[0],
+                        None if raw_observations_by_task is None else
+                        raw_observations_by_task.get(task),
+                        performance_profiler=performance_profiler,
+                    )
+                    for task, batch in task_batches.items()
+                    if task in distillation.teachers
+                ]
+                if losses:
+                    pi_loss = pi_loss + distillation.weight * torch.stack(losses).mean()
         log_prob = info["log_prob"]
+        self._require_finite("actor loss", pi_loss)
+        self._require_finite("actor distribution statistics", info)
 
         self.pi_optim.zero_grad(set_to_none=True)
         pi_loss.backward()
-        pi_grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.model.actor_parameters(), self.cfg.grad_clip_norm
+        pi_grad_norm = self._clip_grad_norm(
+            "actor",
+            self._actor_parameters,
+            self._actor_named_parameters,
         )
         self.pi_optim.step()
+        self._require_finite("actor parameters after optimizer step", self._actor_parameters)
 
         alpha_loss = -(self.log_alpha * (log_prob.detach() + self.target_entropy)).mean()
+        self._require_finite("entropy temperature loss", alpha_loss)
         self.alpha_optim.zero_grad(set_to_none=True)
         alpha_loss.backward()
+        self._require_finite_gradients(
+            "entropy temperature gradients",
+            (("log_alpha", self.log_alpha),),
+        )
         self.alpha_optim.step()
+        self._validate_finite_temperature("after optimizer step")
 
         return {
             "pi_loss": pi_loss.detach(),
@@ -286,6 +437,32 @@ class GNNSAC(torch.nn.Module):
         action, info = self.model.pi(obs)
         q = self.model.Q(obs, action, return_type="min")
         return (self.alpha.detach() * info["log_prob"] - q).mean(), info
+
+    def _teacher_loss(self, task, obs, raw_observations=None,
+                      performance_profiler=None):
+        with self._optimization_subphase(performance_profiler, "distillation_kl"):
+            loss = self.distillation.loss(
+                self.model, task, obs, raw_observations=raw_observations
+            )
+        self.distillation.metrics[f"kl/{task}"] = loss.detach()
+        return loss
+
+    def _task_pi_loss(self, task, obs, raw_observations=None,
+                      performance_profiler=None):
+        loss, info = self._pi_loss(obs)
+        distillation = getattr(self, "distillation", None)
+        if distillation is not None:
+            distillation.metrics[f"sac_actor_loss/{task}"] = loss.detach()
+            # Broken-node regime tasks have no teacher and must never receive
+            # the KL term, unconditionally (not just while weight is decaying).
+            if distillation.weight > 0 and task in distillation.teachers:
+                loss = loss + distillation.weight * self._teacher_loss(
+                    task,
+                    obs,
+                    raw_observations,
+                    performance_profiler=performance_profiler,
+                )
+        return loss, info
 
     @staticmethod
     def _parameter_gradients(loss, parameters):
@@ -409,9 +586,11 @@ class GNNSAC(torch.nn.Module):
     def _diagnostic_key(task):
         return re.sub(r"[^0-9a-zA-Z_.-]+", "_", str(task)).strip("_") or "task"
 
-    def _gradient_diagnostics(self, task_batches):
+    def _gradient_diagnostics(self, task_batches, raw_observations_by_task=None):
         cpu_rng = torch.random.get_rng_state()
         cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+        distillation = getattr(self, "distillation", None)
+        saved_metrics = dict(distillation.metrics) if distillation is not None else None
         try:
             gradients = {"critic": {}, "actor": {}}
             q_parameters = tuple(self.model._Qs.parameters())
@@ -422,12 +601,19 @@ class GNNSAC(torch.nn.Module):
                     self._q_loss(obs, action, reward, terminated, next_obs),
                     q_parameters,
                 )
-                pi_loss, _ = self._pi_loss(obs)
+                pi_loss, _ = self._task_pi_loss(
+                    task,
+                    obs,
+                    None if raw_observations_by_task is None else
+                    raw_observations_by_task.get(task),
+                )
                 gradients["actor"][task] = self._parameter_gradients(pi_loss, pi_parameters)
         finally:
             torch.random.set_rng_state(cpu_rng)
             if cuda_rng is not None:
                 torch.cuda.set_rng_state_all(cuda_rng)
+            if distillation is not None:
+                distillation.metrics = saved_metrics
 
         return self._gradient_metrics(gradients)
 
@@ -472,8 +658,10 @@ class GNNSAC(torch.nn.Module):
             for task, batch in task_batches.items():
                 obs, action, reward, terminated, next_obs = batch
                 loss = self._q_loss(obs, action, reward, terminated, next_obs)
+                self._require_finite(f"critic loss for task {task!r}", loss)
                 losses.append(loss.detach())
                 gradients = self._parameter_gradients(loss, parameters)
+                self._require_finite(f"critic gradients for task {task!r}", gradients)
                 task_gradient_values.append(gradients)
                 if retained_gradients is not None:
                     retained_gradients[task] = gradients
@@ -482,14 +670,18 @@ class GNNSAC(torch.nn.Module):
             performance_profiler, "pcgrad_critic_projection"
         ):
             projected_gradients = self.pcgrad_project(task_gradient_values)
+            self._require_finite("projected critic gradients", projected_gradients)
             self._set_parameter_gradients(parameters, projected_gradients)
         with self._optimization_subphase(
             performance_profiler, "pcgrad_critic_step"
         ):
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                parameters, self.cfg.grad_clip_norm
+            grad_norm = self._clip_grad_norm(
+                "critic",
+                parameters,
+                self._q_named_parameters,
             )
             self.q_optim.step()
+            self._require_finite("critic parameters after optimizer step", parameters)
         return (
             torch.stack(losses).mean(),
             grad_norm.detach(),
@@ -500,6 +692,7 @@ class GNNSAC(torch.nn.Module):
         self,
         task_batches,
         *,
+        raw_observations_by_task=None,
         retain_task_gradients=False,
         performance_profiler=None,
     ):
@@ -514,11 +707,22 @@ class GNNSAC(torch.nn.Module):
             performance_profiler, "pcgrad_actor_gradients"
         ):
             for task, batch in task_batches.items():
-                pi_loss, info = self._pi_loss(batch[0])
+                pi_loss, info = self._task_pi_loss(
+                    task,
+                    batch[0],
+                    None if raw_observations_by_task is None else
+                    raw_observations_by_task.get(task),
+                    performance_profiler=performance_profiler,
+                )
+                self._require_finite(f"actor loss for task {task!r}", pi_loss)
+                self._require_finite(
+                    f"actor distribution statistics for task {task!r}", info
+                )
                 losses.append(pi_loss.detach())
                 log_probabilities.append(info["log_prob"].detach())
                 entropies.append(info["entropy"].detach().mean())
                 gradients = self._parameter_gradients(pi_loss, parameters)
+                self._require_finite(f"actor gradients for task {task!r}", gradients)
                 task_gradient_values.append(gradients)
                 if retained_gradients is not None:
                     retained_gradients[task] = gradients
@@ -527,14 +731,18 @@ class GNNSAC(torch.nn.Module):
             performance_profiler, "pcgrad_actor_projection"
         ):
             projected_gradients = self.pcgrad_project(task_gradient_values)
+            self._require_finite("projected actor gradients", projected_gradients)
             self._set_parameter_gradients(parameters, projected_gradients)
         with self._optimization_subphase(
             performance_profiler, "pcgrad_actor_step"
         ):
-            pi_grad_norm = torch.nn.utils.clip_grad_norm_(
-                parameters, self.cfg.grad_clip_norm
+            pi_grad_norm = self._clip_grad_norm(
+                "actor",
+                parameters,
+                self._actor_named_parameters,
             )
             self.pi_optim.step()
+            self._require_finite("actor parameters after optimizer step", parameters)
 
         with self._optimization_subphase(
             performance_profiler, "pcgrad_entropy_step"
@@ -545,9 +753,15 @@ class GNNSAC(torch.nn.Module):
             alpha_loss = -(
                 self.log_alpha * (log_prob + self.target_entropy)
             ).mean()
+            self._require_finite("entropy temperature loss", alpha_loss)
             self.alpha_optim.zero_grad(set_to_none=True)
             alpha_loss.backward()
+            self._require_finite_gradients(
+                "entropy temperature gradients",
+                (("log_alpha", self.log_alpha),),
+            )
             self.alpha_optim.step()
+            self._validate_finite_temperature("after optimizer step")
 
         entropy = torch.stack(entropies).mean()
         return (
@@ -563,6 +777,19 @@ class GNNSAC(torch.nn.Module):
 
     def update(self, buffer, compute_diagnostics=False, performance_profiler=None):
         pcgrad_enabled = bool(getattr(self.cfg, "pcgrad", False))
+        distillation = getattr(self, "distillation", None)
+        needs_teachers = distillation is not None and distillation.weight > 0
+        if distillation is not None:
+            distillation.metrics = {}
+        raw_observations_by_task = None
+        finite_checks_enabled = bool(getattr(self.cfg, "finite_checks", True))
+        check_finite = getattr(self, "_require_finite", None)
+        if check_finite is None:
+            check_finite = (
+                require_finite
+                if finite_checks_enabled
+                else lambda _label, _value: None
+            )
         sampling_phase = (
             performance_profiler.phase("replay_sampling")
             if performance_profiler is not None
@@ -571,16 +798,29 @@ class GNNSAC(torch.nn.Module):
         with sampling_phase:
             if getattr(buffer, "supports_replay_profiling", False):
                 if pcgrad_enabled:
-                    task_batches = buffer.sample_task_batches(
-                        performance_profiler=performance_profiler
-                    )
+                    if needs_teachers:
+                        replay_batch = buffer.sample_with_tasks(
+                            performance_profiler=performance_profiler,
+                            combine=False,
+                        )
+                        task_batches = replay_batch.by_task
+                        raw_observations_by_task = (
+                            replay_batch.raw_observations_by_task
+                        )
+                    else:
+                        task_batches = buffer.sample_task_batches(
+                            performance_profiler=performance_profiler
+                        )
                     obs = action = reward = terminated = next_obs = None
-                elif compute_diagnostics:
+                elif compute_diagnostics or needs_teachers:
                     replay_batch = buffer.sample_with_tasks(
                         performance_profiler=performance_profiler
                     )
                     obs, action, reward, terminated, next_obs = replay_batch.combined
                     task_batches = replay_batch.by_task
+                    raw_observations_by_task = (
+                        replay_batch.raw_observations_by_task
+                    )
                 else:
                     obs, action, reward, terminated, next_obs = buffer.sample(
                         performance_profiler=performance_profiler
@@ -590,6 +830,9 @@ class GNNSAC(torch.nn.Module):
                 replay_batch = buffer.sample_with_tasks()
                 obs, action, reward, terminated, next_obs = replay_batch.combined
                 task_batches = replay_batch.by_task
+                raw_observations_by_task = getattr(
+                    replay_batch, "raw_observations_by_task", None
+                )
             else:
                 if pcgrad_enabled:
                     raise ValueError(
@@ -597,6 +840,13 @@ class GNNSAC(torch.nn.Module):
                     )
                 obs, action, reward, terminated, next_obs = buffer.sample()
                 task_batches = None
+        if pcgrad_enabled:
+            check_finite("replay task batches", task_batches)
+        else:
+            check_finite(
+                "replay batch",
+                (obs, action, reward, terminated, next_obs),
+            )
        # if self.device.type == 'cuda':
        #     torch.compiler.cudagraph_mark_step_begin()
         
@@ -615,6 +865,7 @@ class GNNSAC(torch.nn.Module):
                 )
                 pi_info, pi_task_gradients = self._pcgrad_pi_and_alpha_update(
                     task_batches,
+                    raw_observations_by_task=raw_observations_by_task,
                     retain_task_gradients=compute_diagnostics,
                     performance_profiler=performance_profiler,
                 )
@@ -626,17 +877,36 @@ class GNNSAC(torch.nn.Module):
                     else None
                 )
             else:
-                diagnostics = (
-                    self._gradient_diagnostics(task_batches)
-                    if compute_diagnostics and task_batches is not None
-                    else None
-                )
+                if compute_diagnostics and task_batches is not None:
+                    diagnostics = (
+                        self._gradient_diagnostics(task_batches)
+                        if raw_observations_by_task is None
+                        else self._gradient_diagnostics(
+                            task_batches, raw_observations_by_task
+                        )
+                    )
+                else:
+                    diagnostics = None
                 q_loss, q_grad_norm = self.update_q(obs, action, reward, terminated, next_obs)
-                pi_info = self.update_pi_and_alpha(obs)
+                if needs_teachers:
+                    pi_info = self.update_pi_and_alpha(
+                        obs,
+                        task_batches=task_batches,
+                        raw_observations_by_task=raw_observations_by_task,
+                        performance_profiler=performance_profiler,
+                    )
+                else:
+                    pi_info = self.update_pi_and_alpha(obs)
             with GNNSAC._optimization_subphase(
                 performance_profiler, "target_update"
             ):
                 self.model.soft_update_target_Q()
+                target_critics = getattr(self.model, "_target_Qs", None)
+                if target_critics is not None:
+                    check_finite(
+                        "target critic after soft update",
+                        target_critics.state_dict(),
+                    )
             self.model.eval()
 
         info = {
@@ -644,6 +914,17 @@ class GNNSAC(torch.nn.Module):
             "q_grad_norm": q_grad_norm,
         }
         info.update(pi_info)
+        if distillation is not None:
+            metrics = distillation.metrics
+            kl_values = [value for key, value in metrics.items() if key.startswith("kl/")]
+            kl = torch.stack(kl_values).mean() if kl_values else torch.tensor(0.0)
+            sac_values = [value for key, value in metrics.items() if key.startswith("sac_actor_loss/")]
+            if sac_values:
+                metrics["sac_actor_loss"] = torch.stack(sac_values).mean()
+            metrics.update(kl=kl, weighted_kl=distillation.weight * kl,
+                           weight=distillation.weight, offline_updates=distillation.completed_updates,
+                           stage="online")
+            info.update({f"distillation/{key}": value for key, value in metrics.items()})
         if diagnostics is not None:
             info["gradient_diagnostics"] = diagnostics
         return info

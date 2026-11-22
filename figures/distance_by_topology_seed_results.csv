@@ -1,39 +1,79 @@
-topology,seed,distance_m,run_id,run_name,run_state,logged_step,run_url
-henneberg_n5_1tube_1,1,4.362653036680852,4sehfqs2,paper-v2-henneberg_n5_1tube_1-1-job_0000_47852991ec13,crashed,1600512,https://wandb.ai/i-suds/paper_results/runs/4sehfqs2
-henneberg_n5_1tube_1,2,1.1643949818712085,2qa67mq4,paper-v2-henneberg_n5_1tube_1-2-job_0001_2eae0e10e9ec,crashed,1628160,https://wandb.ai/i-suds/paper_results/runs/2qa67mq4
-henneberg_n5_1tube_1,3,1.5923571782914565,okqzh0a0,paper-v2-henneberg_n5_1tube_1-3-job_0002_79dad1514723,crashed,1598976,https://wandb.ai/i-suds/paper_results/runs/okqzh0a0
-henneberg_n6_1tube_2,1,2.4861840895125806,x3z8apcc,paper-v2-henneberg_n6_1tube_2-1-job_0003_7d924ea87868,crashed,1597440,https://wandb.ai/i-suds/paper_results/runs/x3z8apcc
-henneberg_n6_1tube_2,2,3.331088693284505,ign2tixt,paper-v2-henneberg_n6_1tube_2-2-job_0004_fd083a645933,crashed,1594368,https://wandb.ai/i-suds/paper_results/runs/ign2tixt
-henneberg_n6_1tube_2,3,0.7229647896299609,7ohsuyqn,paper-v2-henneberg_n6_1tube_2-3-job_0005_02131ba9d2c7,crashed,1594368,https://wandb.ai/i-suds/paper_results/runs/7ohsuyqn
-henneberg_n6_2tube_1,1,1.9080042029262017,7uw6jhxq,paper-v2-henneberg_n6_2tube_1-1-job_0012_25d3da618692,crashed,695808,https://wandb.ai/i-suds/paper_results/runs/7uw6jhxq
-henneberg_n6_2tube_1,2,1.5872888302223078,gae85g9o,paper-v2-henneberg_n6_2tube_1-2-job_0013_216728ce5d2d,crashed,697344,https://wandb.ai/i-suds/paper_results/runs/gae85g9o
-henneberg_n6_2tube_1,3,1.6450624758405217,rsla3zjb,paper-v2-henneberg_n6_2tube_1-3-job_0014_16e621aec9b0,crashed,1019904,https://wandb.ai/i-suds/paper_results/runs/rsla3zjb
-henneberg_n7_1tube_3,1,1.3002736752003965,yvuzcl8r,paper-v2-henneberg_n7_1tube_3-1-job_0006_1e7ed42115b2,running,2459136,https://wandb.ai/i-suds/paper_results/runs/yvuzcl8r
-henneberg_n7_1tube_3,2,2.0270943967359116,9b0o4s95,paper-v2-henneberg_n7_1tube_3-2-job_0007_19a474774a01,crashed,1502208,https://wandb.ai/i-suds/paper_results/runs/9b0o4s95
-henneberg_n7_1tube_3,3,0.1831106237731565,9hksnacr,paper-v2-henneberg_n7_1tube_3-3-job_0008_d5da46a6344f,finished,0,https://wandb.ai/i-suds/paper_results/runs/9hksnacr
-henneberg_n7_3tube_1,1,1.1486385602567464,icwb8njc,paper-v2-henneberg_n7_3tube_1-1-job_0021_9a799f035c5c,crashed,2001408,https://wandb.ai/i-suds/paper_results/runs/icwb8njc
-henneberg_n7_3tube_1,2,3.7931946382596617,rqn9dqxr,paper-v2-henneberg_n7_3tube_1-2-job_0022_e55fb212a4f9,failed,1995264,https://wandb.ai/i-suds/paper_results/runs/rqn9dqxr
-henneberg_n7_3tube_1,3,1.6724606683513392,e0mht8kh,paper-v2-henneberg_n7_3tube_1-3-job_0023_c533413bee67,crashed,1542144,https://wandb.ai/i-suds/paper_results/runs/e0mht8kh
-henneberg_n8_1tube_57,1,2.334481863387909,1ss21eap,paper-v2-henneberg_n8_1tube_57-1-job_0009_ba8cd907684d,crashed,1496064,https://wandb.ai/i-suds/paper_results/runs/1ss21eap
-henneberg_n8_1tube_57,2,2.2893606653252734,995i2bx1,paper-v2-henneberg_n8_1tube_57-2-job_0010_97733a435489,crashed,1468416,https://wandb.ai/i-suds/paper_results/runs/995i2bx1
-henneberg_n8_1tube_57,3,2.497367639502852,6iifp5uw,paper-v2-henneberg_n8_1tube_57-3-job_0011_d664015d625a,crashed,1898496,https://wandb.ai/i-suds/paper_results/runs/6iifp5uw
-henneberg_n8_2tube_187,1,14.61484038797613,cpr1ucw8,paper-v2-henneberg_n8_2tube_187-1-job_0015_b02f4f54b26e,running,3213312,https://wandb.ai/i-suds/paper_results/runs/cpr1ucw8
-henneberg_n8_2tube_187,2,2.5211556404810227,r5haldw6,paper-v2-henneberg_n8_2tube_187-2-job_0016_5aafe107af65,crashed,669696,https://wandb.ai/i-suds/paper_results/runs/r5haldw6
-henneberg_n8_2tube_187,3,2.809922133791866,zdsyhubh,paper-v2-henneberg_n8_2tube_187-3-job_0017_b4562437b5a5,crashed,646656,https://wandb.ai/i-suds/paper_results/runs/zdsyhubh
-henneberg_n8_3tube_64,1,1.5970285346031106,2eewsh0o,paper-v2-henneberg_n8_3tube_64-1-job_0024_3a7add10a7b2,crashed,1508352,https://wandb.ai/i-suds/paper_results/runs/2eewsh0o
-henneberg_n8_3tube_64,2,1.1187814475233862,xhglp30z,paper-v2-henneberg_n8_3tube_64-2-job_0025_09603a957572,crashed,1528320,https://wandb.ai/i-suds/paper_results/runs/xhglp30z
-henneberg_n8_3tube_64,3,1.2272602149811098,fufjz24v,paper-v2-henneberg_n8_3tube_64-3-job_0026_22d6ecaec36b,crashed,1502208,https://wandb.ai/i-suds/paper_results/runs/fufjz24v
-octahedron,2,4.195044862686055,76tjnecv,paper-v2-octahedron-2-job_0037_29148e481320,crashed,1265664,https://wandb.ai/i-suds/paper_results/runs/76tjnecv
-octahedron,3,2.9538172636111475,wk0fynmt,paper-v2-octahedron-3-job_0038_8d425eb37750,crashed,1284096,https://wandb.ai/i-suds/paper_results/runs/wk0fynmt
-tetrahedron,1,0.42357218149087583,wxl60hoq,paper-v2-tetrahedron-1-job_0018_5e26c35f814b,crashed,1254912,https://wandb.ai/i-suds/paper_results/runs/wxl60hoq
-tetrahedron,2,0.3246583056194121,gp4t6zd8,paper-v2-tetrahedron-2-job_0019_a3c860f2638e,crashed,1271808,https://wandb.ai/i-suds/paper_results/runs/gp4t6zd8
-tetrahedron,3,6.203118821359944,b59kj8t3,paper-v2-tetrahedron-3-job_0020_968213ca5ffc,running,3299328,https://wandb.ai/i-suds/paper_results/runs/b59kj8t3
-usevitch_1514879,1,0.9019481577687276,klk0beex,paper-v2-usevitch_1514879-1-job_0033_2c8cfa7a48cf,crashed,898560,https://wandb.ai/i-suds/paper_results/runs/klk0beex
-usevitch_1514879,2,1.171801023673111,r7guka1w,paper-v2-usevitch_1514879-2-job_0034_597e12a1aa7d,crashed,898560,https://wandb.ai/i-suds/paper_results/runs/r7guka1w
-usevitch_1514879,3,0.6508365227576689,r5pxm56e,paper-v2-usevitch_1514879-3-job_0035_3ac48fec56b3,crashed,897024,https://wandb.ai/i-suds/paper_results/runs/r5pxm56e
-usevitch_210272254_p1,1,2.0690521602799143,jhhrux3b,paper-v2-usevitch_210272254_p1-1-job_0030_942a5eec6c1f,crashed,850944,https://wandb.ai/i-suds/paper_results/runs/jhhrux3b
-usevitch_210272254_p1,2,1.6187406808062392,a0f6tkyz,paper-v2-usevitch_210272254_p1-2-job_0031_9b6d984fcb17,crashed,877056,https://wandb.ai/i-suds/paper_results/runs/a0f6tkyz
-usevitch_210272254_p1,3,2.483553913624926,t81jbxub,paper-v2-usevitch_210272254_p1-3-job_0032_ef924673a6c0,crashed,895488,https://wandb.ai/i-suds/paper_results/runs/t81jbxub
-usevitch_60243677150_p1,1,1.220342278739221,2335bqsd,paper-v2-usevitch_60243677150_p1-1-job_0027_940b0d2dd84c,crashed,1502208,https://wandb.ai/i-suds/paper_results/runs/2335bqsd
-usevitch_60243677150_p1,2,0.7264981103446639,fh68u7jz,paper-v2-usevitch_60243677150_p1-2-job_0028_381a8255b1b5,crashed,873984,https://wandb.ai/i-suds/paper_results/runs/fh68u7jz
-usevitch_60243677150_p1,3,1.1359073766222083,wrsn9eux,paper-v2-usevitch_60243677150_p1-3-job_0029_060b41144f1c,crashed,895488,https://wandb.ai/i-suds/paper_results/runs/wrsn9eux
+topology,seed,run_id,run_name,run_state,run_url,evaluation_step,distance_m,selection_mean_distance_m,controller
+henneberg_n5_1tube_1,1,gxckjo9q,paper-v4-henneberg_n5_1tube_1-1-job_0003_138070075220,finished,https://wandb.ai/i-suds/Paper-Experts/runs/gxckjo9q,9300480,21.872831117186003,38.059002326580135,GNN specialist
+henneberg_n5_1tube_1,2,nafbgzg1,paper-v4-henneberg_n5_1tube_1-2-job_0004_c0437a23dfbe,finished,https://wandb.ai/i-suds/Paper-Experts/runs/nafbgzg1,9300480,56.61377433469263,38.059002326580135,GNN specialist
+henneberg_n5_1tube_1,3,d2u4oads,paper-v4-henneberg_n5_1tube_1-3-job_0005_968dd32ed072,finished,https://wandb.ai/i-suds/Paper-Experts/runs/d2u4oads,9300480,35.690401527861766,38.059002326580135,GNN specialist
+henneberg_n6_1tube_2,1,aucfg0v1,paper-v4-henneberg_n6_1tube_2-1-job_0009_9321629a089b,finished,https://wandb.ai/i-suds/Paper-Experts/runs/aucfg0v1,9040896,2.287476515322675,35.37346280761742,GNN specialist
+henneberg_n6_1tube_2,2,en4murd1,paper-v4-henneberg_n6_1tube_2-2-job_0010_e47c26b01f6d,finished,https://wandb.ai/i-suds/Paper-Experts/runs/en4murd1,9040896,59.58012315829567,35.37346280761742,GNN specialist
+henneberg_n6_1tube_2,3,gqkmiezm,paper-v4-henneberg_n6_1tube_2-3-job_0011_4341cfccb2da,finished,https://wandb.ai/i-suds/Paper-Experts/runs/gqkmiezm,9040896,44.25278874923392,35.37346280761742,GNN specialist
+henneberg_n6_2tube_1,1,86jelsoj,paper-v4-henneberg_n6_2tube_1-1-job_0012_e3d474e39f64,finished,https://wandb.ai/i-suds/Paper-Experts/runs/86jelsoj,6021120,43.48916386138586,62.99390087158352,GNN specialist
+henneberg_n6_2tube_1,2,zdv02va7,paper-v4-henneberg_n6_2tube_1-2-job_0013_47410a102943,finished,https://wandb.ai/i-suds/Paper-Experts/runs/zdv02va7,6021120,94.08111300997767,62.99390087158352,GNN specialist
+henneberg_n6_2tube_1,3,eyfny5jf,paper-v4-henneberg_n6_2tube_1-3-job_0014_f8f0cf6eab7c,finished,https://wandb.ai/i-suds/Paper-Experts/runs/eyfny5jf,6021120,51.41142574338701,62.99390087158352,GNN specialist
+henneberg_n7_1tube_3,1,mz03jnwg,paper-v4-henneberg_n7_1tube_3-1-job_0063_8553951d4d8d,finished,https://wandb.ai/i-suds/Paper-Experts/runs/mz03jnwg,7921152,66.15154617795972,34.33208652349583,GNN specialist
+henneberg_n7_1tube_3,2,xv59ig7d,paper-v4-henneberg_n7_1tube_3-2-job_0064_679bbc90efc4,finished,https://wandb.ai/i-suds/Paper-Experts/runs/xv59ig7d,7921152,33.33930163501237,34.33208652349583,GNN specialist
+henneberg_n7_1tube_3,3,9g3btb9h,paper-v4-henneberg_n7_1tube_3-3-job_0065_64a30373fd65,finished,https://wandb.ai/i-suds/Paper-Experts/runs/9g3btb9h,7921152,3.505411757515417,34.33208652349583,GNN specialist
+henneberg_n7_3tube_1,1,jd7z5uha,paper-v4-henneberg_n7_3tube_1-1-job_0060_12e4a96725a3,finished,https://wandb.ai/i-suds/Paper-Experts/runs/jd7z5uha,7761408,74.28514676548419,42.896132668511946,GNN specialist
+henneberg_n7_3tube_1,2,7ma80iq8,paper-v4-henneberg_n7_3tube_1-2-job_0061_247db3452046,finished,https://wandb.ai/i-suds/Paper-Experts/runs/7ma80iq8,7761408,30.954055970501315,42.896132668511946,GNN specialist
+henneberg_n7_3tube_1,3,44b8gx5m,paper-v4-henneberg_n7_3tube_1-3-job_0062_32ee4efc6d95,finished,https://wandb.ai/i-suds/Paper-Experts/runs/44b8gx5m,7761408,23.449195269550337,42.896132668511946,GNN specialist
+henneberg_n8_1tube_57,1,cnl2ze85,paper-v4-henneberg_n8_1tube_57-1-job_0021_0230488dcee0,finished,https://wandb.ai/i-suds/Paper-Experts/runs/cnl2ze85,9861120,73.10440386985746,59.914945624080765,GNN specialist
+henneberg_n8_1tube_57,2,xsuvf0a7,paper-v4-henneberg_n8_1tube_57-2-job_0022_1af8c8df7ac4,finished,https://wandb.ai/i-suds/Paper-Experts/runs/xsuvf0a7,9861120,42.08011435347449,59.914945624080765,GNN specialist
+henneberg_n8_1tube_57,3,hxhwujdz,paper-v4-henneberg_n8_1tube_57-3-job_0023_12142815a21a,finished,https://wandb.ai/i-suds/Paper-Experts/runs/hxhwujdz,9861120,64.56031864891034,59.914945624080765,GNN specialist
+henneberg_n8_2tube_187,1,9enlzqq9,paper-v4-henneberg_n8_2tube_187-1-job_0030_eb4c0c235976,finished,https://wandb.ai/i-suds/Paper-Experts/runs/9enlzqq9,6640128,53.54154010399444,112.98794471887754,GNN specialist
+henneberg_n8_2tube_187,2,0dilgkpe,paper-v4-henneberg_n8_2tube_187-2-job_0031_f83bbd36756e,finished,https://wandb.ai/i-suds/Paper-Experts/runs/0dilgkpe,6640128,162.65983012448788,112.98794471887754,GNN specialist
+henneberg_n8_2tube_187,3,tgca3fm1,paper-v4-henneberg_n8_2tube_187-3-job_0032_a124f7a6cf87,finished,https://wandb.ai/i-suds/Paper-Experts/runs/tgca3fm1,6640128,122.76246392815031,112.98794471887754,GNN specialist
+henneberg_n8_3tube_64,1,j11auo69,paper-expert-gnn-henneberg_n8_3tube_64-1-job_0000_f2faacd8b945,finished,https://wandb.ai/i-suds/Paper-Experts/runs/j11auo69,4480512,24.197175905605036,10.216381148767029,GNN specialist
+henneberg_n8_3tube_64,2,6c8pc081,paper-expert-gnn-henneberg_n8_3tube_64-2-job_0001_91a0b93446af,finished,https://wandb.ai/i-suds/Paper-Experts/runs/6c8pc081,4480512,3.3803138392386685,10.216381148767029,GNN specialist
+henneberg_n8_3tube_64,3,gt2q1clt,paper-expert-gnn-henneberg_n8_3tube_64-3-job_0002_16b0c0ec07ab,finished,https://wandb.ai/i-suds/Paper-Experts/runs/gt2q1clt,4480512,3.071653701457384,10.216381148767029,GNN specialist
+octahedron,1,uosotpbe,paper-v4-octahedron-1-job_0018_724c9a9f07ce,finished,https://wandb.ai/i-suds/Paper-Experts/runs/uosotpbe,8420352,71.5833531393844,68.0719210422871,GNN specialist
+octahedron,2,sk0vzp5d,paper-v4-octahedron-2-job_0019_cf0f0ebfa89a,finished,https://wandb.ai/i-suds/Paper-Experts/runs/sk0vzp5d,8420352,79.35324036510846,68.0719210422871,GNN specialist
+octahedron,3,gtrmmiaz,paper-v4-octahedron-3-job_0020_edca45628497,finished,https://wandb.ai/i-suds/Paper-Experts/runs/gtrmmiaz,8420352,53.27916962236844,68.0719210422871,GNN specialist
+tetrahedron,1,s7el6q53,paper-v4-tetrahedron-1-job_0000_d699b420c3d8,finished,https://wandb.ai/i-suds/Paper-Experts/runs/s7el6q53,9060864,8.926698115539732,19.313504188786705,GNN specialist
+tetrahedron,2,ss0xehvy,paper-v4-tetrahedron-2-job_0001_904f67f0ee84,finished,https://wandb.ai/i-suds/Paper-Experts/runs/ss0xehvy,9060864,24.47993739846681,19.313504188786705,GNN specialist
+tetrahedron,3,cznp8y9a,paper-v4-tetrahedron-3-job_0002_df97aa8b8710,finished,https://wandb.ai/i-suds/Paper-Experts/runs/cznp8y9a,9060864,24.533877052353574,19.313504188786705,GNN specialist
+usevitch_1514879,1,ps343z5q,paper-v4-usevitch_1514879-1-job_0057_30c98693a787,finished,https://wandb.ai/i-suds/Paper-Experts/runs/ps343z5q,9100800,46.130494809792836,53.52984124195524,GNN specialist
+usevitch_1514879,2,sdt5zdyu,paper-v4-usevitch_1514879-2-job_0058_178109840473,finished,https://wandb.ai/i-suds/Paper-Experts/runs/sdt5zdyu,9100800,36.52685734295481,53.52984124195524,GNN specialist
+usevitch_1514879,3,fotvo1va,paper-v4-usevitch_1514879-3-job_0059_6cf2f86279d2,finished,https://wandb.ai/i-suds/Paper-Experts/runs/fotvo1va,9100800,77.93217157311807,53.52984124195524,GNN specialist
+usevitch_210272254_p1,1,2yjuhu3a,paper-expert-gnn-usevitch_210272254_p1-1-job_0003_37e9b709b6a5,finished,https://wandb.ai/i-suds/Paper-Experts/runs/2yjuhu3a,9940992,22.310974278035225,37.55896919448826,GNN specialist
+usevitch_210272254_p1,2,jv4se4fp,paper-expert-gnn-usevitch_210272254_p1-2-job_0004_30afc3abab54,finished,https://wandb.ai/i-suds/Paper-Experts/runs/jv4se4fp,9940992,29.060605302122234,37.55896919448826,GNN specialist
+usevitch_210272254_p1,3,jtzthcwf,paper-expert-gnn-usevitch_210272254_p1-3-job_0005_e8c462604ad5,finished,https://wandb.ai/i-suds/Paper-Experts/runs/jtzthcwf,9940992,61.30532800330733,37.55896919448826,GNN specialist
+usevitch_60243677150_p1,1,ud76gif1,paper-v4-usevitch_60243677150_p1-1-job_0039_1f0cf9b222a7,finished,https://wandb.ai/i-suds/Paper-Experts/runs/ud76gif1,8060928,31.299700404548492,52.45086263393762,GNN specialist
+usevitch_60243677150_p1,2,1giiuwox,paper-v4-usevitch_60243677150_p1-2-job_0040_8a3b7252cd5b,finished,https://wandb.ai/i-suds/Paper-Experts/runs/1giiuwox,8060928,64.62677000240008,52.45086263393762,GNN specialist
+usevitch_60243677150_p1,3,4zi61fq7,paper-v4-usevitch_60243677150_p1-3-job_0041_270d7b261bbe,finished,https://wandb.ai/i-suds/Paper-Experts/runs/4zi61fq7,8060928,61.42611749486427,52.45086263393762,GNN specialist
+henneberg_n5_1tube_1,1,nx1zaqht,paper-expert-mlp-henneberg_n5_1tube_1-1-job_0000_4df6f97e46b9,finished,https://wandb.ai/i-suds/Paper-Experts/runs/nx1zaqht,8941056,50.06382903895532,51.1522999992446,MLP specialist
+henneberg_n5_1tube_1,2,y1ul0clx,paper-expert-mlp-henneberg_n5_1tube_1-2-job_0001_6e103f14b63e,finished,https://wandb.ai/i-suds/Paper-Experts/runs/y1ul0clx,8941056,52.287862742258156,51.1522999992446,MLP specialist
+henneberg_n5_1tube_1,3,j968fbee,paper-expert-mlp-henneberg_n5_1tube_1-3-job_0002_ffb8fdd46f8a,finished,https://wandb.ai/i-suds/Paper-Experts/runs/j968fbee,8941056,51.105208216520296,51.1522999992446,MLP specialist
+henneberg_n6_1tube_2,1,m9m01s4w,paper-expert-mlp-henneberg_n6_1tube_2-1-job_0003_6a15bc811d62,finished,https://wandb.ai/i-suds/Paper-Experts/runs/m9m01s4w,9801216,14.949360441873813,34.84177970970453,MLP specialist
+henneberg_n6_1tube_2,2,76mt5kx4,paper-expert-mlp-henneberg_n6_1tube_2-2-job_0004_1fd5f2761691,finished,https://wandb.ai/i-suds/Paper-Experts/runs/76mt5kx4,9801216,37.75057140062544,34.84177970970453,MLP specialist
+henneberg_n6_1tube_2,3,9gstfu46,paper-expert-mlp-henneberg_n6_1tube_2-3-job_0005_70db488ee335,finished,https://wandb.ai/i-suds/Paper-Experts/runs/9gstfu46,9801216,51.82540728661436,34.84177970970453,MLP specialist
+henneberg_n6_2tube_1,1,6ksqxdlh,paper-expert-mlp-henneberg_n6_2tube_1-1-job_0012_c0ef42c1e28f,finished,https://wandb.ai/i-suds/Paper-Experts/runs/6ksqxdlh,8782848,86.84692919348605,80.37358771804979,MLP specialist
+henneberg_n6_2tube_1,2,zl9zbbzs,paper-expert-mlp-henneberg_n6_2tube_1-2-job_0013_ff434b20f9fb,finished,https://wandb.ai/i-suds/Paper-Experts/runs/zl9zbbzs,8782848,57.39526731627566,80.37358771804979,MLP specialist
+henneberg_n6_2tube_1,3,rh3yax6l,paper-expert-mlp-henneberg_n6_2tube_1-3-job_0014_f89445db2fb9,finished,https://wandb.ai/i-suds/Paper-Experts/runs/rh3yax6l,8782848,96.87856664438769,80.37358771804979,MLP specialist
+henneberg_n7_1tube_3,1,kbowfrxj,paper-expert-mlp-henneberg_n7_1tube_3-1-job_0006_3b0a663eb599,finished,https://wandb.ai/i-suds/Paper-Experts/runs/kbowfrxj,7741440,72.71092856033175,47.757761294857495,MLP specialist
+henneberg_n7_1tube_3,2,oopjbcx5,paper-expert-mlp-henneberg_n7_1tube_3-2-job_0007_ced1dba6f56e,failed,https://wandb.ai/i-suds/Paper-Experts/runs/oopjbcx5,7741440,26.413300114314133,47.757761294857495,MLP specialist
+henneberg_n7_1tube_3,3,vh6ubb07,paper-expert-mlp-henneberg_n7_1tube_3-3-job_0008_8e6d3f91c5f3,finished,https://wandb.ai/i-suds/Paper-Experts/runs/vh6ubb07,7741440,44.1490552099266,47.757761294857495,MLP specialist
+henneberg_n7_3tube_1,1,n7rywrwz,paper-expert-mlp-henneberg_n7_3tube_1-1-job_0021_c26dcb6c8a69,finished,https://wandb.ai/i-suds/Paper-Experts/runs/n7rywrwz,9580032,66.66569605193864,58.018199358840285,MLP specialist
+henneberg_n7_3tube_1,2,gptlj7hj,paper-expert-mlp-henneberg_n7_3tube_1-2-job_0022_8e45084d8b1d,finished,https://wandb.ai/i-suds/Paper-Experts/runs/gptlj7hj,9580032,54.79374286221112,58.018199358840285,MLP specialist
+henneberg_n7_3tube_1,3,nm6y2ubv,paper-expert-mlp-henneberg_n7_3tube_1-3-job_0023_c21817b5a002,finished,https://wandb.ai/i-suds/Paper-Experts/runs/nm6y2ubv,9580032,52.595159162371075,58.018199358840285,MLP specialist
+henneberg_n8_1tube_57,1,3ddg3erp,paper-expert-mlp-henneberg_n8_1tube_57-1-job_0009_2866bc87befb,finished,https://wandb.ai/i-suds/Paper-Experts/runs/3ddg3erp,6340608,44.912725014388336,44.165281693649554,MLP specialist
+henneberg_n8_1tube_57,2,qdqmepui,paper-expert-mlp-henneberg_n8_1tube_57-2-job_0010_53271bf38af7,finished,https://wandb.ai/i-suds/Paper-Experts/runs/qdqmepui,6340608,8.044538393699899,44.165281693649554,MLP specialist
+henneberg_n8_1tube_57,3,7teav5ge,paper-expert-mlp-henneberg_n8_1tube_57-3-job_0011_1ba0b6771aa2,finished,https://wandb.ai/i-suds/Paper-Experts/runs/7teav5ge,6340608,79.53858167286043,44.165281693649554,MLP specialist
+henneberg_n8_2tube_187,1,xg8hh32z,paper-expert-mlp-henneberg_n8_2tube_187-1-job_0015_1dbfc62c0921,finished,https://wandb.ai/i-suds/Paper-Experts/runs/xg8hh32z,9380352,112.59110264444223,133.62946590041588,MLP specialist
+henneberg_n8_2tube_187,2,29vmy35k,paper-expert-mlp-henneberg_n8_2tube_187-2-job_0016_2fdba7df37d9,finished,https://wandb.ai/i-suds/Paper-Experts/runs/29vmy35k,9380352,187.33275321955944,133.62946590041588,MLP specialist
+henneberg_n8_2tube_187,3,6b85h6ye,paper-expert-mlp-henneberg_n8_2tube_187-3-job_0017_e4dced08acba,finished,https://wandb.ai/i-suds/Paper-Experts/runs/6b85h6ye,9380352,100.964541837246,133.62946590041588,MLP specialist
+henneberg_n8_3tube_64,1,afksne2m,paper-expert-mlp-henneberg_n8_3tube_64-1-job_0024_f3b0c69110a1,finished,https://wandb.ai/i-suds/Paper-Experts/runs/afksne2m,9741312,69.9292840430816,69.46404901538287,MLP specialist
+henneberg_n8_3tube_64,2,hnsg68ye,paper-expert-mlp-henneberg_n8_3tube_64-2-job_0025_fc3f09e30c77,finished,https://wandb.ai/i-suds/Paper-Experts/runs/hnsg68ye,9741312,49.650600770693096,69.46404901538287,MLP specialist
+henneberg_n8_3tube_64,3,75qw9tkw,paper-expert-mlp-henneberg_n8_3tube_64-3-job_0026_39b1f1531861,finished,https://wandb.ai/i-suds/Paper-Experts/runs/75qw9tkw,9741312,88.81226223237391,69.46404901538287,MLP specialist
+octahedron,1,ttisatn4,paper-expert-mlp-octahedron-1-job_0036_a26352b85fda,finished,https://wandb.ai/i-suds/Paper-Experts/runs/ttisatn4,7660032,27.10767569976871,33.863541398015265,MLP specialist
+octahedron,2,jornmkqs,paper-expert-mlp-octahedron-2-job_0037_535107866ce5,finished,https://wandb.ai/i-suds/Paper-Experts/runs/jornmkqs,7660032,30.631843530584298,33.863541398015265,MLP specialist
+octahedron,3,jebx93zp,paper-expert-mlp-octahedron-3-job_0038_a8109e79ccb6,finished,https://wandb.ai/i-suds/Paper-Experts/runs/jebx93zp,7660032,43.851104963692784,33.863541398015265,MLP specialist
+tetrahedron,1,3j56uudh,paper-expert-mlp-tetrahedron-1-job_0018_998a06139dc3,finished,https://wandb.ai/i-suds/Paper-Experts/runs/3j56uudh,8961024,20.274488759393673,20.87501445151185,MLP specialist
+tetrahedron,2,rqazvzvz,paper-expert-mlp-tetrahedron-2-job_0019_7be2c7dcfe7f,failed,https://wandb.ai/i-suds/Paper-Experts/runs/rqazvzvz,8961024,21.154604950500737,20.87501445151185,MLP specialist
+tetrahedron,3,998rt7lh,paper-expert-mlp-tetrahedron-3-job_0020_3c7e066264a8,finished,https://wandb.ai/i-suds/Paper-Experts/runs/998rt7lh,8961024,21.195949644641132,20.87501445151185,MLP specialist
+usevitch_1514879,1,uj03igob,paper-expert-mlp-usevitch_1514879-1-job_0033_ed7f097baa7a,finished,https://wandb.ai/i-suds/Paper-Experts/runs/uj03igob,8941056,39.06389646743111,43.111747304420796,MLP specialist
+usevitch_1514879,2,ivw255p3,paper-expert-mlp-usevitch_1514879-2-job_0034_a030dc6e2a4b,finished,https://wandb.ai/i-suds/Paper-Experts/runs/ivw255p3,8941056,39.105937336172055,43.111747304420796,MLP specialist
+usevitch_1514879,3,p81nq8k2,paper-expert-mlp-usevitch_1514879-3-job_0035_ca2171ae7958,finished,https://wandb.ai/i-suds/Paper-Experts/runs/p81nq8k2,8941056,51.16540810965924,43.111747304420796,MLP specialist
+usevitch_210272254_p1,1,il72h6ue,paper-expert-mlp-usevitch_210272254_p1-1-job_0030_b51e2048cfdc,finished,https://wandb.ai/i-suds/Paper-Experts/runs/il72h6ue,7821312,49.789347884825574,49.81139343751141,MLP specialist
+usevitch_210272254_p1,2,c4n440uw,paper-expert-mlp-usevitch_210272254_p1-2-job_0031_11309d240456,finished,https://wandb.ai/i-suds/Paper-Experts/runs/c4n440uw,7821312,21.474440848440004,49.81139343751141,MLP specialist
+usevitch_210272254_p1,3,b0i8reae,paper-expert-mlp-usevitch_210272254_p1-3-job_0032_69a228a0364d,finished,https://wandb.ai/i-suds/Paper-Experts/runs/b0i8reae,7821312,78.17039157926865,49.81139343751141,MLP specialist
+usevitch_60243677150_p1,1,7w7hmzcm,paper-expert-mlp-usevitch_60243677150_p1-1-job_0027_426eedbaaa2d,finished,https://wandb.ai/i-suds/Paper-Experts/runs/7w7hmzcm,8721408,67.05919999587852,75.86855435231395,MLP specialist
+usevitch_60243677150_p1,2,hqtq3os9,paper-expert-mlp-usevitch_60243677150_p1-2-job_0028_f49cfe0d315b,finished,https://wandb.ai/i-suds/Paper-Experts/runs/hqtq3os9,8721408,83.9082703863765,75.86855435231395,MLP specialist
+usevitch_60243677150_p1,3,e8qtqtsw,paper-expert-mlp-usevitch_60243677150_p1-3-job_0029_7dea5915190a,finished,https://wandb.ai/i-suds/Paper-Experts/runs/e8qtqtsw,8721408,76.63819267468685,75.86855435231395,MLP specialist

@@ -1,0 +1,11 @@
+# @package _global_
+tube_experiment_base: tube-v1
+exp_name: ${tube_experiment_base}-physics
+tube_ablation_arm: physics
+graph_features:
+  tube_nodes: true
+  tube_physics: true
+  node_roles: true
+  edge_distance: true
+  edge_roles: true
+  edge_direction: true

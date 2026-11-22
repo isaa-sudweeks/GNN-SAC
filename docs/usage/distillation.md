@@ -1,0 +1,275 @@
+# Multi-teacher Gaussian KL distillation
+
+Distillation is optional and disabled by default. It supports `gnn` and
+`padded_mlp` teachers and students, including GNN specialists teaching a padded
+MLP. Each teacher uses its checkpoint's input schema; the student uses the
+resolved run configuration. Topology, physical action order, base observation
+width, normalization and control conventions must match. Virtual-node use and
+graph feature flags may differ: each policy gets its own prepared view of the
+same raw physical graph. Padded MLPs require virtual nodes and optional graph
+features disabled. Flat actuator-action `mlp` experts are unsupported.
+
+## Start a run
+
+Supply **full trainer checkpoints** containing `config`, `agent`, and `buffer`.
+Agent-only exports such as `final.pt` or `latest.agent.pt` are insufficient.
+Map topology names to checkpoint paths; the runner selects only the topologies
+in the resolved training split. Missing training teachers are errors. Extra
+mapping entries, including held-out teachers, are never opened.
+
+```bash
+uv run python sac/train.py sac_backend=gnn distillation=kl \
+  'truss_topologies=[tetrahedron,octahedron]' \
+  '+distillation.teachers={tetrahedron:/path/to/tetrahedron/checkpoints/latest.pt,octahedron:/path/to/octahedron/checkpoints/latest.pt}' \
+  distillation.cache_dir=/path/to/target-cache
+```
+
+For cross-validation, use the existing `cross_validation` overrides **instead
+of** setting `truss_topologies`. Supply a mapping covering every possible
+training topology; the resolved fold controls which entries are used.
+
+For the completed paper-v4 development experts on ORC, use the saved preset
+instead of typing the mapping:
+
+```bash
+uv run python scripts/launch_cross_validation.py cross_validation=node_count_loso \
+  --seeds 1,2,3 platform=supercomputer distillation=kl_paper_v4
+```
+
+`config/distillation/kl_paper_v4.yaml` inherits the `kl` schedule and maps all
+19 development topologies to pinned full `step_10000000.pt` checkpoints. It uses
+seed 1 except for octahedron, which uses seed 3; selection is independent of CV
+student seed. The three reserved seven-node topologies are absent. The same
+preset covers `random_5fold` and `farthest_point_5fold`. Paths refer to the ORC
+checkpoint tree, so copy that tree or override
+`distillation.teacher_root=/path/to/truss-graph` when running elsewhere.
+
+The `distillation=kl` preset performs 10,000 offline updates, using 256
+observations per topology per update. Then ordinary online SAC begins with
+an actor KL weight of 1, decaying linearly to zero over half of `cfg.steps`.
+These are initial experiment settings, not tuned or empirically validated
+hyperparameters. The online schedule uses the trainer's total collected
+transition counter, including seed collection; offline updates do not advance it.
+
+Useful overrides:
+
+```bash
+# Skip offline pretraining, retaining the decaying online KL objective.
+distillation.pretrain_updates=0
+
+# Set an explicit transition count instead of a fraction of cfg.steps.
+distillation.decay_steps=2000000
+
+# Tune offline work, sampling, and initial online guidance.
+distillation.pretrain_updates=20000 distillation.batch_size=128 distillation.initial_weight=0.1
+
+# Return to the existing SAC behavior, without opening teacher files.
+distillation=disabled
+```
+
+Offline `distillation.pretrain_updates` is unrelated to the existing
+`pretrain_steps`: the latter performs SAC updates on newly collected seed data.
+Student replay starts empty, critics are initialized normally, and the seed-data
+SAC phase retains its existing behavior.
+
+## Padded students and offline-only training
+
+Use `sac_backend=padded_mlp` with the same teacher mapping and split controls:
+
+```bash
+uv run python sac/train.py sac_backend=padded_mlp distillation=kl \
+  'truss_topologies=[tetrahedron,octahedron]' \
+  '+distillation.teachers={tetrahedron:/path/to/tetrahedron.pt,octahedron:/path/to/octahedron.pt}'
+```
+
+The morphology names above are a runnable example, not a selected paper split.
+Both teacher backends require full specialist trainer checkpoints with replay.
+Padded teachers additionally require a matching saved padded-input schema.
+Teacher and student capacities may differ if both accommodate the physical
+graphs. No actuator-to-node policy conversion is inferred.
+
+To distill without collecting online SAC data, add:
+
+```bash
+distillation.offline_only=true steps=0
+```
+
+This requires enabled distillation and positive `pretrain_updates`. It evaluates
+the distilled student, writes `checkpoints/distillation_complete.pt`,
+`latest.pt` and agent-only companions, and stops with zero collected training
+transitions and zero SAC updates. Evaluation episodes are separate from training
+interactions. The completion checkpoint/export is written even when periodic
+checkpointing and ordinary final agent saving are disabled. Online decay is
+unused in this mode.
+
+Resume offline-only work with its original config and `resume_from_checkpoint`.
+A completed resume does not repeat offline updates or start online training.
+For a fresh online fine-tuning run, load the exported weights explicitly:
+
+```bash
+uv run python sac/train.py sac_backend=padded_mlp distillation=disabled \
+  truss_topology=tetrahedron \
+  init_from_agent=/path/to/student/checkpoints/latest.agent.pt
+```
+
+Repeat the student's architecture, capacity and environment settings. This
+loads model weights and alpha with fresh optimizers, replay and counters.
+`init_from_agent` and `resume_from_checkpoint` are mutually exclusive. Keep
+distillation enabled with the teacher mapping in the fresh run if online KL
+guidance is desired.
+
+## Objective and data
+
+Both actor-critic backends' `policy_distribution(obs)` expose the pre-squash diagonal
+Gaussian mean and log standard deviation, in active-node order. Distillation
+minimizes analytic **KL(teacher || student)**, matching both parameters. Because
+both policies use the same invertible `tanh` squash, this is also their squashed
+distribution KL. It is computed before any safety projection or actuator routing.
+
+Each loss sums action coordinates per active node, averages nodes within each
+graph, and then averages graphs and topology groups equally. Passive and virtual
+nodes contribute nothing. No KL clipping or teacher variance floor is applied;
+nonfinite parameters/losses fail explicitly. A very narrow teacher/student
+distribution can produce a large KL, so inspect the logged KL and gradient norms
+when choosing the weight.
+
+Offline training uses the **final teacher checkpoint's distribution** evaluated
+on stored observations, not historical actions. All valid observations in each
+replay remain eligible, including wrapped ring buffers. Only actor weights and
+the actor optimizer change. Adam moments are cleared once when offline training
+finishes; actor weights are retained. Evaluation runs immediately afterward.
+Teacher Gaussian means and bounded log standard deviations are computed once
+while creating the cache. Offline optimizer updates then run only the student.
+
+Online actor optimization adds `lambda * KL` on student replay observations,
+with the appropriate frozen teacher for each topology. PCGrad combines SAC and
+KL within each topology before projection. Critic, temperature, and target
+updates retain their SAC objectives. At zero weight, teacher forward passes stop.
+
+## Memory, caching, and resume
+
+Teacher checkpoints are read sequentially on CPU. The first extraction still
+requires enough RAM to deserialize **one full checkpoint**, including its replay.
+Versioned tensor shards store prepared observations plus teacher distribution
+targets without retaining every teacher's full transition buffer.
+The default cache is `work_dir/distillation_cache`; set `cache_dir` explicitly to
+reuse it across student runs. Cache directories and manifests include the
+checkpoint SHA-256, cache schema, graph-feature/topology contract, and shard size;
+old observation-only caches cannot be loaded as target caches. Keep this generated
+cache outside version control.
+
+Offline sampling selects a shard proportional to its observation count, then
+samples the minibatch uniformly inside that shard. Every observation has equal
+marginal probability; observations within a batch share a shard. The current and
+at most one prefetched shard per topology are resident. The prefetched sample
+indices are checkpointed with the sampler RNG, preserving exact offline resume.
+`target_batch_size` bounds accelerator memory while creating a missing cache;
+`shard_size` bounds each resident CPU tensor shard. With CUDA, `pin_memory=true`
+uses pinned sampled tensors and non-blocking transfers. Set `prefetch=false` or
+`pin_memory=false` for synchronous/diagnostic operation. Topology losses are
+accumulated sequentially into one actor update. Frozen policies remain on the
+training device for online KL; offline updates do not invoke them after caching.
+The cache-build batch size, pinning, and prefetch options may change when resuming;
+they do not alter the saved optimizer/sampler contract.
+For focused online profiling, enable `profiling.optimization_subphases`; teacher
+and student KL work is reported as the `distillation_kl` optimization subphase.
+Target caches are opened or built only after checkpoint loading establishes that
+the run is still in the offline stage. Resuming an online-stage checkpoint does
+not require the offline target cache, even if its configured directory is absent.
+
+Offline checkpoints use `distillation.pt` and also update `latest.pt` and the
+agent-only sidecars. `distillation.checkpoint_freq` is measured in offline updates
+(default 1,000; zero disables these writes). Normal online checkpoint cadence
+remains controlled by `checkpoint_freq`.
+
+```bash
+# Repeat the original options and teacher mapping, adding:
+resume_from_checkpoint=/path/to/student/checkpoints/latest.pt
+```
+
+Checkpoints preserve offline progress, stage, Adam state, sampler RNG, teacher
+paths/hashes, and schedule settings. Resume rejects changed teacher sources or
+distillation settings and does not repeat finished pretraining or clear online
+Adam moments again. Exact offline continuation is covered by regression tests;
+online simulator-state resume retains the repository's existing limitations.
+
+Inference uses the ordinary student export and requires no teacher artifacts.
+
+## Teacher and student feature schemas
+
+`graph_features.node_roles`, `graph_features.edge_roles`, and
+`graph_features.edge_distance` may differ independently between teachers and
+the student. Distillation prepares two views of the same raw graph: the teacher
+view produces the Gaussian target, and the student view receives gradients.
+Online KL therefore retains the raw student replay observations alongside the
+ordinary student-prepared learner batch. Runs with identical complete input
+contracts (backend, dimensions, graph features, virtual-node use and padded
+schema where applicable) reuse the learner batch directly. Feature flags alone
+do not establish compatible teacher inputs.
+
+For example, specialists trained without node identification can supervise a
+student that appends actuated/passive node roles:
+
+```bash
+uv run python sac/train.py sac_backend=gnn distillation=kl \
+  graph_features.node_roles=true \
+  '+distillation.teachers={tetrahedron:/path/to/teacher.pt}'
+```
+
+Optional features must be constructible from the raw replay. Node roles use the
+action mask and edge distance uses observed xyz coordinates. Edge roles require
+`edge_role` metadata; a checkpoint collected without that metadata cannot be
+used for an offline student that requires edge roles. Likewise, online teacher
+edge roles require the student's raw replay to retain them. Missing metadata
+fails during compatibility validation with the affected policy and schema.
+Distillation never guesses semantic roles. With the explicit opt-in
+`distillation.reconstruct_control_metadata=true`, it can instead rebuild the
+teacher control graph from the checkpoint configuration and verify its exact
+ordered adjacency, observation shape, base action mask, and any existing metadata
+against replay before adding roles or routing signs. This supports legacy teacher
+replays without those fields. Reconstructed values are fingerprinted in the cache
+contract; teacher network inputs/targets retain their own saved feature schema.
+No held-out teachers are used by training. The separate read-only development
+diagnostic script described in [routing_ablation.md](routing_ablation.md) opens
+held-out teachers for evaluation only.
+
+Target-cache contracts include both feature schemas, both prepared graph
+signatures and complete policy input contracts, so incompatible pairs cannot
+share tensors. Caches use the v3 target format, including rigidity for padded
+students. Supported earlier v3 equal-schema GNN cache contracts remain reusable
+when teacher/student virtual-node use matches. New checkpoints persist feature
+schema pairs and policy input contracts. Legacy checkpoints without input
+contracts remain loadable only for the corresponding previously supported
+GNN-to-GNN preparation conventions.
+
+## Metrics and validation
+
+Offline logs use `distillation/kl`, per-task KL, `offline_updates`, and `stage`.
+Online training logs include `train/distillation/kl`, per-task KL,
+`sac_actor_loss`, `weighted_kl`, `weight`, and `offline_updates`.
+Distillation-enabled W&B runs use one monotonic global step. Offline updates
+occupy steps `1..pretrain_updates`; online environment step `k` is logged at
+`pretrain_updates + k`. The raw `offline_updates` and per-category `step`
+metrics remain available, and runs with distillation disabled keep their
+existing environment-step behavior.
+
+```bash
+uv run python -m unittest tests.test_distillation -v
+uv run python -m unittest discover -s tests -v
+```
+
+Coverage includes analytic KL, gradients and masks, teacher compatibility,
+replay/shard handling, held-out exclusion, both actor optimizers, zero-weight
+baseline equivalence, offline resume, and a short two-topology native MuJoCo
+training smoke test using generated fixture teachers. This validates mechanics;
+it does not establish transfer performance for trained specialist checkpoints.
+
+Students may also enable `graph_features.edge_direction=true` while keeping
+legacy teachers unchanged. This adds signed actuator-routing metadata to edge
+features, not an action-space or controller change. Metadata reconstruction is
+required if those teacher replays did not retain the field.
+
+`distillation.offline_only=true` stops after offline pretraining, deterministic
+evaluation, and saving `checkpoints/distillation_complete.pt`, without SAC transitions.
+It requires enabled distillation. The tube-membership screen uses this mode; see
+[tube virtual nodes](tube_virtual_nodes.md).

@@ -1,0 +1,10 @@
+# @package _global_
+tube_experiment_base: tube-v1
+exp_name: ${tube_experiment_base}-signed
+tube_ablation_arm: signed
+graph_features:
+  tube_nodes: false
+  node_roles: true
+  edge_distance: true
+  edge_roles: true
+  edge_direction: true

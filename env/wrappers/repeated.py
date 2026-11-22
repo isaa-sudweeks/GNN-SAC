@@ -3,6 +3,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import gymnasium as gym
 
+from env.mujoco_gen.topology_envs import (
+    broken_node_regime_fraction,
+    broken_node_regime_slots,
+    broken_node_schedule,
+)
+
 
 class RepeatedEnvWrapper(gym.Env):
     """
@@ -16,7 +22,25 @@ class RepeatedEnvWrapper(gym.Env):
         if self.num_envs < 1:
             raise ValueError("RepeatedEnvWrapper requires at least one environment")
 
-        self.envs = [self._make_env(cfg, make_env_fns) for _ in range(self.num_envs)]
+        regime_fraction = broken_node_regime_fraction(cfg)
+        if (
+            broken_node_schedule(cfg) == "interleaved"
+            and regime_fraction > 0.0
+            and self.num_envs > 1
+        ):
+            self._broken_regime_slots = broken_node_regime_slots(self.num_envs, regime_fraction)
+        else:
+            # None (rather than an all-False array) preserves the exact
+            # legacy behavior when no regime split is configured -- including
+            # the single-env case, which cannot represent both regimes at
+            # once and must stay eligible for the plain per-node Bernoulli
+            # draw rather than being silently locked to standard.
+            self._broken_regime_slots = None
+
+        self.envs = [
+            self._make_env(cfg, make_env_fns, env_idx)
+            for env_idx in range(self.num_envs)
+        ]
         self._validate_spaces()
 
         self.active_env_idx = 0
@@ -25,9 +49,13 @@ class RepeatedEnvWrapper(gym.Env):
         self.action_space = self.env.action_space
         self._executor = ThreadPoolExecutor(max_workers=self.num_envs)
 
-    def _make_env(self, cfg, make_env_fns):
+    def _make_env(self, cfg, make_env_fns, env_idx):
         env_cfg = deepcopy(cfg)
         env_cfg.num_envs = 1
+        if getattr(env_cfg, "seed", None) is not None:
+            env_cfg.seed = int(env_cfg.seed) + int(env_idx)
+        if self._broken_regime_slots is not None and not self._broken_regime_slots[env_idx]:
+            self._lock_to_standard_regime(env_cfg)
         errors = []
         for fn in make_env_fns:
             try:
@@ -36,6 +64,35 @@ class RepeatedEnvWrapper(gym.Env):
                 errors.append(str(exc))
         details = "; ".join(errors)
         raise ValueError(f'Failed to make environment "{cfg.task}": {details}')
+
+    @staticmethod
+    def _cfg_get(config, name, default=None):
+        if hasattr(config, "get"):
+            return config.get(name, default)
+        return getattr(config, name, default)
+
+    @classmethod
+    def _lock_to_standard_regime(cls, env_cfg):
+        """Force this slot's copy to the nominal (all-active) topology.
+
+        Broken-node sampling is a per-episode reset-time draw; disabling it
+        here keeps this slot's episodes teacher-compatible for the lifetime
+        of the env, guaranteeing a "clean" standard-regime data source.
+
+        A parsed config's nested sections may be plain dicts rather than
+        attribute-style namespaces (see common.parser.Config), so both the
+        read and the write below need to support either shape.
+        """
+        params = cls._cfg_get(env_cfg, "domain_randomization_params", None)
+        if params is None:
+            return
+        broken_nodes = cls._cfg_get(params, "broken_nodes", None)
+        if broken_nodes is None:
+            return
+        if isinstance(broken_nodes, dict):
+            broken_nodes["enabled"] = False
+        else:
+            broken_nodes.enabled = False
 
     def set_active_env(self, env_idx):
         if env_idx < 0 or env_idx >= self.num_envs:
@@ -76,6 +133,8 @@ class RepeatedEnvWrapper(gym.Env):
     def _annotate_info(self, info, env_idx):
         info["task"] = self.task
         info["env_idx"] = env_idx
+        if self._broken_regime_slots is not None:
+            info["regime"] = "broken" if self._broken_regime_slots[env_idx] else "standard"
 
     def _normalize_indices(self, env_indices):
         if env_indices is None:

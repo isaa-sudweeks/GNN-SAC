@@ -1,13 +1,16 @@
 import inspect
 from time import time 
 
-import numpy as np 
+import numpy as np
 import re
-import torch 
-from tensordict.tensordict import TensorDict 
+import torch
+from tensordict.tensordict import TensorDict
+from common.finite_checks import NonFiniteTrainingError
+from env.mujoco_gen.topology_envs import broken_node_schedule, is_broken_regime_task, regime_task_name
 from common.reward_normalizer import TaskRewardNormalizer
 from common.training_profiler import TrainingProfiler
-from trainer.base import Trainer 
+from trainer.base import Trainer
+from trainer.vector_collection import VectorBucket, select_rows
 
 try:
     from torch_geometric.data import Data
@@ -39,6 +42,10 @@ class OnlineTrainer(Trainer):
         self._record_video_this_eval = True
         self.reward_normalizer = self._make_reward_normalizer()
         self.performance_profiler = TrainingProfiler.from_config(self.cfg, self.logger)
+        if hasattr(self.buffer, "runtime_storage_metadata"):
+            self.performance_profiler.metadata["replay_storage"] = (
+                self.buffer.runtime_storage_metadata()
+            )
         self._eval_training_topologies = []
         self._eval_heldout_topologies = self._topology_list(
             getattr(self.cfg, "eval_extra_topologies", None)
@@ -126,7 +133,113 @@ class OnlineTrainer(Trainer):
                         topology: env_idx for env_idx, topology in enumerate(eval_topologies)
                     }
             
+        from common.distillation import Distillation, enabled
+
+        self.distillation = None
+        if enabled(self.cfg):
+            # Broken-node regime tasks (see tensor_gnn_buffer._task_names) have
+            # no teacher-compatible episodes and must never be visible to
+            # Distillation: this is what makes skipping the KL term for them
+            # an unconditional structural guarantee rather than a schedule-
+            # dependent one (see the actor-loss gating in gnn_sac.py).
+            standard_task_names = [
+                task for task in self.buffer.task_names if not is_broken_regime_task(task)
+            ]
+            self.distillation = Distillation(
+                self.cfg, standard_task_names, device=self.agent.device,
+                defer_target_cache=True,
+            )
+            self.distillation.bind_replay(self.buffer)
+            self.agent.distillation = self.distillation
         self.maybe_load_checkpoint()
+        self._sync_broken_nodes_curriculum()
+        if self.distillation is not None:
+            self.distillation.prepare_offline_datasets()
+
+    def _run_distillation_pretraining(self):
+        distillation = getattr(self, "distillation", None)
+        if distillation is None or distillation.stage != "offline":
+            return
+        options = self.cfg.distillation
+        offline_eval_freq = int(options.get("eval_freq", 0) if hasattr(options, "get") else getattr(options, "eval_freq", 0))
+        if offline_eval_freq < 0:
+            raise ValueError("distillation.eval_freq must be nonnegative.")
+        while distillation.completed_updates < distillation.pretrain_updates:
+            metrics = distillation.offline_update(self.agent)
+            log_update = distillation.completed_updates % distillation.log_freq == 0 or distillation.completed_updates == 1
+            if distillation.checkpoint_freq and distillation.completed_updates % distillation.checkpoint_freq == 0:
+                self.save_checkpoint(identifier="distillation")
+            if offline_eval_freq and distillation.completed_updates % offline_eval_freq == 0:
+                # Evaluation must not change optimization/sampling randomness.
+                rng = self._rng_state_dict()
+                try:
+                    self._record_video_this_eval = False
+                    evaluation = self.eval()
+                    metrics.update(evaluation)
+                    log_update = True
+                finally:
+                    self._load_rng_state_dict(rng)
+                self.save_checkpoint(identifier=f"distillation_{distillation.completed_updates}")
+            if log_update:
+                # One W&B record per update: a second committed record at the
+                # same explicit step would discard the evaluation metrics.
+                self.logger.log({"step": self._step, **metrics}, "distillation")
+        distillation.finish_pretraining(self.agent)
+        self.logger.log({"step": self._step, "stage": distillation.stage,
+                         "offline_updates": distillation.completed_updates}, "distillation")
+        self._evaluate_and_log()
+        if distillation.checkpoint_freq:
+            self.save_checkpoint(identifier="distillation")
+
+    def _buffer_task(self, info):
+        """Replay/reward-normalization task key for a transition's info dict.
+
+        Folds the env's per-slot ``regime`` (see RepeatedEnvWrapper and
+        MjxVectorGraphEnv) into the task name so broken-node and standard
+        transitions land in separate buffers (tensor_gnn_buffer._task_names).
+        A transition without a ``regime`` key (regime splitting disabled, or
+        single-env runs) is unaffected.
+        """
+        return regime_task_name(info.get("task"), info.get("regime"))
+
+    def _sync_broken_nodes_curriculum(self) -> bool:
+        """Gate broken-node sampling per `broken_node_schedule`.
+
+        "staged" (legacy): broken-node sampling stays off for every env until
+        the online KL coefficient has fully decayed to zero.
+        "interleaved" (default): each env slot's regime was already fixed at
+        construction time (see RepeatedEnvWrapper/MjxVectorGraphEnv), so this
+        just keeps sampling enabled from step zero.
+
+        Environment setters deliberately affect only future resets, so episodes
+        already in progress keep the mask with which they started.
+        """
+        distillation = getattr(self, "distillation", None)
+        if distillation is not None:
+            distillation.step = int(self._step)
+        if broken_node_schedule(self.cfg) == "staged":
+            enabled = distillation is None or distillation.weight == 0.0
+        else:
+            enabled = True
+
+        pending = [self.env]
+        visited = set()
+        while pending:
+            current = pending.pop()
+            if current is None or id(current) in visited:
+                continue
+            visited.add(id(current))
+            setter = getattr(current, "set_broken_nodes_sampling_enabled", None)
+            if callable(setter):
+                setter(enabled)
+            nested = getattr(current, "env", None)
+            if nested is not None:
+                pending.append(nested)
+            for attribute in ("envs", "buckets"):
+                children = getattr(current, attribute, None)
+                if children is not None:
+                    pending.extend(children)
+        return enabled
 
     def _make_reward_normalizer(self):
         if not bool(getattr(self.cfg, "normalize_rewards", False)):
@@ -146,7 +259,7 @@ class OnlineTrainer(Trainer):
     def _normalization_task(self, info):
         task = info.get("task")
         if task is not None:
-            return str(task)
+            return str(self._buffer_task(info))
         task_names = getattr(self.buffer, "task_names", None)
         if task_names is not None and len(task_names) == 1:
             return str(task_names[0])
@@ -418,6 +531,9 @@ class OnlineTrainer(Trainer):
 
     def _run_agent_updates(self, num_updates):
         self._ensure_performance_profiler()
+        distillation = getattr(self, "distillation", None)
+        if distillation is not None:
+            distillation.step = self._step
         update_metrics = {}
         for _ in range(int(num_updates)):
             next_update = self._optimizer_updates + 1
@@ -430,12 +546,18 @@ class OnlineTrainer(Trainer):
             update_kwargs = {}
             if "compute_diagnostics" in update_parameters:
                 update_kwargs["compute_diagnostics"] = run_diagnostics
-            if "performance_profiler" in update_parameters:
-                update_kwargs["performance_profiler"] = self.performance_profiler
-                update_metrics = self.agent.update(self.buffer, **update_kwargs)
-            else:
-                with self.performance_profiler.phase("optimization"):
+            try:
+                if "performance_profiler" in update_parameters:
+                    update_kwargs["performance_profiler"] = self.performance_profiler
                     update_metrics = self.agent.update(self.buffer, **update_kwargs)
+                else:
+                    with self.performance_profiler.phase("optimization"):
+                        update_metrics = self.agent.update(self.buffer, **update_kwargs)
+            except NonFiniteTrainingError as exc:
+                raise NonFiniteTrainingError(
+                    "Non-finite training state detected at "
+                    f"environment step {self._step}, optimizer update {next_update}: {exc}"
+                ) from exc
             self._optimizer_updates = next_update
             diagnostics = update_metrics.pop("gradient_diagnostics", None)
             if diagnostics:
@@ -713,8 +835,25 @@ class OnlineTrainer(Trainer):
         """
         Train the SAC agent.
         """
+        self._run_distillation_pretraining()
         self._ensure_performance_profiler()
+        if getattr(getattr(self, "distillation", None), "offline_only", False):
+            if self.distillation.stage != "complete":
+                raise RuntimeError("Offline-only distillation did not reach completion.")
+            # Offline pretraining evaluates once after its final actor update.
+            # A completed resume retains that evaluation and never enters SAC.
+            if self._best_eval_metrics is None:
+                self._evaluate_and_log()
+            self.save_checkpoint(identifier="distillation_complete")
+            self.performance_profiler.finalize(global_step=self._step)
+            self.logger.finish(self.agent)
+            if self.eval_env is not self.env:
+                self.eval_env.close()
+            return self._best_eval_metrics
         num_envs = int(getattr(self.env, "num_envs", getattr(self.cfg, "num_envs", 1)))
+        buckets = self._vector_collection_buckets()
+        if buckets is not None:
+            return self._train_vectorized(buckets)
         if num_envs > 1:
             return self._train_multi_env(num_envs)
 
@@ -725,7 +864,9 @@ class OnlineTrainer(Trainer):
             updates_before_step = self._optimizer_updates
             inserted_transitions = 0
             # Evaluate agent periodically 
-            if self._step % self.cfg.eval_freq == 0:
+            if self._step % self.cfg.eval_freq == 0 and not (
+                getattr(self, "distillation", None) is not None and self._last_eval_step == self._step
+            ):
                 eval_next = True 
             
             # Reset environment
@@ -754,6 +895,7 @@ class OnlineTrainer(Trainer):
                             reward_metrics.update(self._episode_reward_components)
                             self.logger.log(reward_metrics, 'training_rewards')
                     self._reset_reward_normalizer_streams([0])
+                    self._sync_broken_nodes_curriculum()
                     obs = self._apply_observation_noise(self.env.reset())
                     self._tds = [self.to_td(obs)]
                     self._episode_reward_components = {}
@@ -789,7 +931,7 @@ class OnlineTrainer(Trainer):
                     previous_td,
                     current_td,
                     completed=bool(done),
-                    task=info.get("task"),
+                    task=self._buffer_task(info),
                 )
             self._queue_collected_transitions(inserted_transitions)
 
@@ -822,6 +964,224 @@ class OnlineTrainer(Trainer):
             self.eval_env.close()
         return self._best_eval_metrics
 
+    def _vector_collection_buckets(self):
+        """Return tensor-batched rollout buckets, or ``None`` to use per-env collection."""
+        mode = str(getattr(self.cfg, "vectorized_collection", "auto")).lower()
+        if mode not in {"auto", "true", "false"}:
+            raise ValueError("vectorized_collection must be auto, true, or false.")
+        if mode == "false":
+            return None
+        vector_env = getattr(self, "env", None)
+        while vector_env is not None and not getattr(vector_env, "supports_batched_tensors", False):
+            vector_env = getattr(vector_env, "env", None)
+        missing = []
+        if vector_env is None:
+            missing.append("an MJX vector environment (sim_backend=mjx)")
+        if not callable(getattr(getattr(self, "agent", None), "act_dense", None)):
+            missing.append("an agent with act_dense (sac_backend=gnn or padded_mlp)")
+        if not getattr(getattr(self, "buffer", None), "supports_dense_insertion", False):
+            missing.append("tensor replay (replay_backend=torchrl_tensor)")
+        if missing:
+            if mode == "true":
+                raise ValueError("vectorized_collection=true requires " + ", ".join(missing) + ".")
+            return None
+        return [VectorBucket(env, indices) for env, indices in vector_env.batched_groups()]
+
+    def _select_vector_actions(self, buckets, using_seed_actions):
+        if using_seed_actions:
+            actions = [
+                torch.rand(bucket.obs["x"].shape[:2] + (1,), device=bucket.device) * 2.0 - 1.0
+                for bucket in buckets
+            ]
+        else:
+            actions = self.agent.act_dense([bucket.policy_group(self.cfg) for bucket in buckets])
+            # The learner device may differ from the simulator device (device=cpu with MJX on CUDA).
+            actions = [action.to(bucket.device) for bucket, action in zip(buckets, actions)]
+        if self._should_apply_action_noise(seed_action=using_seed_actions):
+            actions = [self._apply_action_noise(action) for action in actions]
+        if callable(getattr(type(self.agent), "project_action", None)):
+            actions = [
+                action.masked_fill(~bucket.obs["action_mask"].unsqueeze(-1), 0.0)
+                for bucket, action in zip(buckets, actions)
+            ]
+        return actions
+
+    def _log_vector_episodes(self, buckets, train_metrics):
+        for bucket in buckets:
+            slots, summary, components = bucket.finished_episodes()
+            for position, slot in enumerate(slots):
+                env_idx = int(bucket.global_indices[slot])
+                train_metrics.update(
+                    {name: float(values[position]) for name, values in summary.items()}
+                )
+                train_metrics["episode_length"] = int(summary["episode_length"][position])
+                train_metrics["episode_env_idx"] = env_idx
+                train_metrics.update(self.common_metrics())
+                self.logger.log(train_metrics, 'train')
+                if components:
+                    reward_metrics = dict(
+                        step=self._step,
+                        episode=self._ep_idx,
+                        episode_length=train_metrics["episode_length"],
+                        episode_env_idx=env_idx,
+                    )
+                    reward_metrics.update(
+                        {name: float(values[position]) for name, values in components.items()}
+                    )
+                    self.logger.log(reward_metrics, 'training_rewards')
+
+    def _normalize_vector_rewards(self, bucket, reward, keep=None):
+        """Normalize one bucket's rewards, updating statistics only from kept slots.
+
+        On the final partial vector step, slots beyond the step budget are
+        simulated but never stored, so they must not affect normalization.
+        """
+        if getattr(self, "reward_normalizer", None) is None:
+            return reward
+        normalized = reward.clone()
+        for task, slots in bucket.task_groups(keep):
+            if slots is None:
+                return self.reward_normalizer.normalize_batch(
+                    reward, bucket.normalizer_returns, task=task
+                )
+            returns = bucket.normalizer_returns.index_select(0, slots)
+            normalized[slots] = self.reward_normalizer.normalize_batch(
+                reward.index_select(0, slots), returns, task=task
+            )
+            bucket.normalizer_returns[slots] = returns
+        return normalized
+
+    def _train_vectorized(self, buckets):
+        """Collect with whole-batch tensor operations per topology bucket.
+
+        Follows ``_train_multi_env`` step for step (evaluation timing, update
+        scheduling, checkpoints, and profiling phases), but keeps observations,
+        actions, rewards, and episode statistics as tensors so the cost of a
+        vector step does not grow with Python work per environment.
+        """
+        train_metrics, eval_next = {}, False
+        pretrain_steps = int(getattr(self.cfg, 'pretrain_steps', min(self.cfg.seed_steps, 1000)))
+        num_envs = sum(bucket.size for bucket in buckets)
+        episodic = bool(self.cfg.episodic)
+        observation_noise = (
+            self._apply_observation_noise if self._should_apply_observation_noise() else (lambda x: x)
+        )
+
+        while self._step < self.cfg.steps:
+            self.performance_profiler.begin_vector_step(global_step=self._step)
+            updates_before_step = self._optimizer_updates
+            inserted_transitions = 0
+            if self._step % self.cfg.eval_freq == 0 and not (
+                getattr(self, "distillation", None) is not None and self._last_eval_step == self._step
+            ):
+                eval_next = True
+
+            done_buckets = [bucket for bucket in buckets if bucket.done.any()]
+            if done_buckets:
+                if eval_next:
+                    with self.performance_profiler.phase("evaluation"):
+                        first_done = min(
+                            int(bucket.global_indices[np.flatnonzero(bucket.done)[0]])
+                            for bucket in done_buckets
+                        )
+                        self._activate_shared_eval_env(first_done)
+                        self._evaluate_and_log()
+                    eval_next = False
+                with self.performance_profiler.phase("episode_reset"):
+                    self._log_vector_episodes(done_buckets, train_metrics)
+                    self._sync_broken_nodes_curriculum()
+                    for bucket in done_buckets:
+                        bucket.reset_done(observation_noise)
+
+            remaining_steps = self.cfg.steps - self._step
+            keep_count = min(num_envs, remaining_steps)
+            using_seed_actions = self._step <= self.cfg.seed_steps
+
+            with self.performance_profiler.phase("action_selection"):
+                actions = self._select_vector_actions(buckets, using_seed_actions)
+
+            with self.performance_profiler.phase("environment_step"):
+                results = [bucket.env.step_batch(action) for bucket, action in zip(buckets, actions)]
+
+            with self.performance_profiler.phase("transition_processing"):
+                pending = []
+                for bucket, action, (next_obs, reward, done, info) in zip(buckets, actions, results):
+                    keep = None if keep_count >= num_envs else bucket.global_indices < keep_count
+                    next_obs["x"] = observation_noise(next_obs["x"])
+                    terminated = (
+                        info["terminated"].float() if episodic and "terminated" in info
+                        else torch.zeros_like(reward)
+                    )
+                    normalized_reward = self._normalize_vector_rewards(bucket, reward, keep)
+                    bucket.normalizer_returns.masked_fill_(done, 0.0)
+                    bucket.record_step(reward, done, info)
+                    pending.append((bucket, keep, action, next_obs, normalized_reward, terminated))
+                done_flags = [done.cpu().numpy() for _, _, done, _ in results]
+
+            with self.performance_profiler.phase("replay_insertion"):
+                for (bucket, keep, action, next_obs, reward, terminated), done in zip(pending, done_flags):
+                    for task, slots in bucket.task_groups(keep):
+                        transitions = {
+                            "obs_x": bucket.obs["x"],
+                            "next_obs_x": next_obs["x"],
+                            "obs_rigidity": bucket.obs["rigidity"],
+                            "next_obs_rigidity": next_obs["rigidity"],
+                            "obs_action_mask": bucket.obs["action_mask"],
+                            "next_obs_action_mask": next_obs["action_mask"],
+                            "action": action,
+                            "reward": reward,
+                            "terminated": terminated,
+                        }
+                        transitions = {
+                            key: select_rows(value, slots) for key, value in transitions.items()
+                        }
+                        slot_done = done if slots is None else done[slots.cpu().numpy()]
+                        self._ep_idx = self.buffer.add_dense(
+                            task,
+                            transitions,
+                            completed_episodes=int(slot_done.sum()),
+                            edge_index=bucket.env.edge_index,
+                            edge_role=bucket.env.edge_role,
+                            edge_direction=getattr(bucket.env, "edge_direction", None),
+                            tube_physics_metadata=getattr(bucket.env, "tube_physics_metadata", None),
+                        )
+                        inserted_transitions += int(transitions["obs_x"].size(0))
+                    bucket.obs = next_obs
+                    bucket.done = done.copy()
+
+            previous_step = self._step
+            self._step += keep_count
+            self._queue_collected_transitions(inserted_transitions)
+            if self._crossed_eval_interval(previous_step, self._step, self.cfg.eval_freq):
+                eval_next = True
+
+            with self.performance_profiler.phase("update_scheduling"):
+                num_updates = self._updates_due(pretrain_steps)
+            if num_updates > 0:
+                train_metrics.update(self._run_agent_updates(num_updates))
+            if self._step < self.cfg.steps:
+                with self.performance_profiler.phase("progress_logging"):
+                    self._log_collection_progress(previous_step)
+            with self.performance_profiler.phase("checkpoint_dispatch"):
+                self.maybe_save_checkpoint(previous_step)
+            self.performance_profiler.end_vector_step(
+                transitions=inserted_transitions,
+                optimizer_updates=self._optimizer_updates - updates_before_step,
+                global_step=self._step,
+            )
+
+        num_updates = self._updates_due(pretrain_steps, force=True)
+        if num_updates > 0:
+            train_metrics.update(self._run_agent_updates(num_updates))
+        self._log_collection_progress(force=True)
+        self._evaluate_final_policy()
+        self.maybe_save_checkpoint(force=True)
+        self.performance_profiler.finalize(global_step=self._step)
+        self.logger.finish(self.agent)
+        if self.eval_env is not self.env:
+            self.eval_env.close()
+        return self._best_eval_metrics
+
     def _train_multi_env(self, num_envs):
         """
         Train from multiple independent copies of the same task.
@@ -839,7 +1199,9 @@ class OnlineTrainer(Trainer):
             self.performance_profiler.begin_vector_step(global_step=self._step)
             updates_before_step = self._optimizer_updates
             inserted_transitions = 0
-            if self._step % self.cfg.eval_freq == 0:
+            if self._step % self.cfg.eval_freq == 0 and not (
+                getattr(self, "distillation", None) is not None and self._last_eval_step == self._step
+            ):
                 eval_next = True
 
             done_indices = [env_idx for env_idx, is_done in enumerate(done) if is_done]
@@ -876,6 +1238,7 @@ class OnlineTrainer(Trainer):
                     self._episode_reward_components = previous_components
 
                     self._reset_reward_normalizer_streams(done_indices)
+                    self._sync_broken_nodes_curriculum()
                     reset_obs = [
                         self._apply_observation_noise(obs)
                         for obs in self.env.reset_many(env_indices=done_indices)
@@ -927,7 +1290,7 @@ class OnlineTrainer(Trainer):
                     )
                     episode_tds[env_idx].append(current_td)
                     pending_insertions.append(
-                        (previous_td, current_td, bool(is_done), info.get("task"))
+                        (previous_td, current_td, bool(is_done), self._buffer_task(info))
                     )
             with self.performance_profiler.phase("replay_insertion"):
                 for previous_td, current_td, is_done, task in pending_insertions:

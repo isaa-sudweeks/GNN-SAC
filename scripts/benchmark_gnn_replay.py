@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import resource
 from types import SimpleNamespace
 import sys
+import tempfile
 import time
 
 import numpy as np
@@ -19,6 +21,8 @@ for path in (ROOT, SAC_ROOT):
         sys.path.insert(0, str(path))
 
 from common.gnn_buffer import GNNBuffer
+from common.tensor_gnn_buffer import TensorGNNBuffer
+from gnn_sac import GNNSAC
 
 
 def make_graph(
@@ -67,11 +71,11 @@ def transition(
     ]
 
 
-def make_buffer(args: argparse.Namespace, node_counts: list[int]) -> GNNBuffer:
+def make_config(args: argparse.Namespace, node_counts: list[int], backend: str):
     task_names = [f"benchmark:task-{index}" for index in range(len(node_counts))]
     batch_size_per_task = args.batch_size // len(task_names)
     capacity_per_task = max(batch_size_per_task * 2, args.entries_per_task)
-    config = SimpleNamespace(
+    return SimpleNamespace(
         device=args.device,
         task="benchmark",
         tasks=task_names,
@@ -82,16 +86,51 @@ def make_buffer(args: argparse.Namespace, node_counts: list[int]) -> GNNBuffer:
         batch_size=args.batch_size,
         steps=capacity_per_task * len(task_names),
         use_virtual_node=args.virtual_node,
+        obs_dim=args.feature_dim,
+        action_dim=1,
+        node_counts=node_counts,
+        replay_backend=backend,
+        replay_storage=args.storage,
+        replay_gpu_fraction=args.replay_gpu_fraction,
+        replay_gpu_max_gb=args.replay_gpu_max_gb,
+        replay_gpu_reserve_gb=args.replay_gpu_reserve_gb,
+        graph_features={},
+        embedding_dim=64,
+        mlp_dim=64,
+        dropout=0.0,
+        Q_output_dim=64,
+        head_hidden_dims=[64],
+        num_q=2,
+        log_std_min=-10.0,
+        log_std_max=2.0,
+        lr=3e-4,
+        entropy_coef=0.2,
+        target_entropy="auto",
+        num_policy_actions=max(node_counts),
+        episode_length=100,
+        discount_denom=500,
+        discount_min=.95,
+        discount_max=.995,
+        tau=.005,
+        grad_clip_norm=10.,
+        pcgrad=False,
+        gradient_diagnostics=False,
     )
-    buffer = GNNBuffer(config)
+
+
+def make_buffer(args: argparse.Namespace, node_counts: list[int], backend: str):
+    config = make_config(args, node_counts, backend)
+    buffer = GNNBuffer(config) if backend == "legacy" else TensorGNNBuffer(config)
     generator = torch.Generator().manual_seed(args.seed)
-    for task, node_count in zip(task_names, node_counts):
-        for _ in range(capacity_per_task):
+    started_at = time.perf_counter()
+    for task, node_count in zip(config.tasks, node_counts):
+        for _ in range(config.buffer_size // len(config.tasks)):
             buffer.add(
                 transition(node_count, args.feature_dim, generator),
                 task=task,
             )
-    return buffer
+    synchronize(torch.device(args.device))
+    return buffer, time.perf_counter() - started_at
 
 
 def synchronize(device: torch.device) -> None:
@@ -143,6 +182,68 @@ def summarize(samples: list[float], batch_size: int) -> dict[str, float]:
     }
 
 
+def checkpoint_benchmark(buffer, args, node_counts, backend, directory):
+    clone_samples, serialize_samples, deserialize_samples = [], [], []
+    restore_samples, sizes = [], []
+    for iteration in range(args.checkpoint_repeats):
+        path = Path(directory) / f"{backend}-{iteration}.pt"
+        holder = {}
+        clone_samples.append(measure_call(lambda: holder.update(state=buffer.state_dict()), torch.device(args.device)))
+        serialize_samples.append(measure_call(lambda: torch.save(holder["state"], path), torch.device(args.device)))
+        sizes.append(path.stat().st_size)
+        loaded = {}
+        deserialize_samples.append(measure_call(
+            lambda: loaded.update(state=torch.load(path, map_location="cpu", weights_only=False)),
+            torch.device(args.device),
+        ))
+        def restore_storage():
+            restored = (
+                GNNBuffer(make_config(args, node_counts, backend))
+                if backend == "legacy"
+                else TensorGNNBuffer(make_config(args, node_counts, backend))
+            )
+            restored.load_state_dict(loaded["state"])
+        restore_samples.append(measure_call(restore_storage, torch.device(args.device)))
+    return {
+        "snapshot_clone": summarize(clone_samples, buffer.size),
+        "serialization": summarize(serialize_samples, buffer.size),
+        "deserialization": summarize(deserialize_samples, buffer.size),
+        "device_restoration": summarize(restore_samples, buffer.size),
+        "full_save_median_ms": summarize(clone_samples, buffer.size)["median_ms"] + summarize(serialize_samples, buffer.size)["median_ms"],
+        "full_load_median_ms": summarize(deserialize_samples, buffer.size)["median_ms"] + summarize(restore_samples, buffer.size)["median_ms"],
+        "file_bytes": sizes,
+    }
+
+
+def optimizer_benchmark(legacy_buffer, tensor_buffer, args, node_counts, device):
+    cfg = make_config(args, node_counts, "legacy")
+    torch.manual_seed(args.seed + 50_000)
+    legacy_agent = GNNSAC(cfg)
+    tensor_agent = GNNSAC(make_config(args, node_counts, "torchrl_tensor"))
+    tensor_agent.load_training_state_dict(legacy_agent.training_state_dict())
+    for iteration in range(min(args.warmup, 5)):
+        seed = args.seed + 55_000 + iteration
+        torch.manual_seed(seed)
+        legacy_agent.update(legacy_buffer)
+        torch.manual_seed(seed)
+        tensor_agent.update(tensor_buffer)
+    legacy_samples, tensor_samples = [], []
+    for iteration in range(args.optimizer_repeats):
+        seed = args.seed + 60_000 + iteration
+        torch.manual_seed(seed)
+        legacy_samples.append(measure_call(lambda: legacy_agent.update(legacy_buffer), device))
+        torch.manual_seed(seed)
+        tensor_samples.append(measure_call(lambda: tensor_agent.update(tensor_buffer), device))
+    return {
+        "legacy": summarize(legacy_samples, args.batch_size),
+        "torchrl_tensor": summarize(tensor_samples, args.batch_size),
+        "throughput_gain_fraction": (
+            summarize(tensor_samples, args.batch_size)["batches_per_second"]
+            / summarize(legacy_samples, args.batch_size)["batches_per_second"] - 1.0
+        ),
+    }
+
+
 def benchmark(args: argparse.Namespace) -> dict:
     node_counts = [int(value) for value in args.node_counts.split(",")]
     if not node_counts or any(value <= 0 for value in node_counts):
@@ -153,7 +254,7 @@ def benchmark(args: argparse.Namespace) -> dict:
     if device.type == "cuda" and not torch.cuda.is_available():
         raise ValueError("CUDA was requested but is unavailable")
 
-    buffer = make_buffer(args, node_counts)
+    buffer, insertion_seconds = make_buffer(args, node_counts, "legacy")
     torch.manual_seed(args.seed + 1)
     legacy_batch = legacy_sample(buffer)
     torch.manual_seed(args.seed + 1)
@@ -187,7 +288,7 @@ def benchmark(args: argparse.Namespace) -> dict:
 
     legacy = summarize(legacy_samples, args.batch_size)
     optimized = summarize(optimized_samples, args.batch_size)
-    return {
+    result = {
         "device": str(device),
         "batch_size": args.batch_size,
         "task_count": len(node_counts),
@@ -201,12 +302,90 @@ def benchmark(args: argparse.Namespace) -> dict:
         "legacy": legacy,
         "optimized": optimized,
         "speedup": legacy["mean_ms"] / optimized["mean_ms"],
+        "insertion": {"legacy_seconds": insertion_seconds},
     }
+    if args.prototype:
+        tensor, tensor_insertion_seconds = make_buffer(args, node_counts, "torchrl_tensor")
+        torch.manual_seed(args.seed + 2)
+        expected = buffer.sample()
+        expected_rng = torch.random.get_rng_state()
+        torch.manual_seed(args.seed + 2)
+        actual = tensor.sample()
+        actual_rng = torch.random.get_rng_state()
+        assert_batches_equal(expected, actual)
+        if not torch.equal(expected_rng, actual_rng):
+            raise RuntimeError("Tensor coordinator changed the Torch RNG state")
+
+        tensor_direct_samples, tensor_ensemble_samples = [], []
+        ensemble_exact = None
+        ensemble_error = None
+        try:
+            torch.manual_seed(args.seed + 3)
+            direct = tensor.sample()
+            direct_rng = torch.random.get_rng_state()
+            torch.manual_seed(args.seed + 3)
+            ensemble = tensor.sample_ensemble()
+            ensemble_rng = torch.random.get_rng_state()
+            assert_batches_equal(direct, ensemble)
+            if not torch.equal(direct_rng, ensemble_rng):
+                raise RuntimeError("ReplayBufferEnsemble changed the Torch RNG state")
+            ensemble_exact = True
+        except (RuntimeError, ValueError) as error:
+            ensemble_exact, ensemble_error = False, str(error)
+
+        for iteration in range(args.warmup):
+            torch.manual_seed(args.seed + 30_000 + iteration)
+            tensor.sample()
+            if ensemble_exact:
+                torch.manual_seed(args.seed + 30_000 + iteration)
+                tensor.sample_ensemble()
+        for iteration in range(args.repeats):
+            seed = args.seed + 40_000 + iteration
+            torch.manual_seed(seed)
+            tensor_direct_samples.append(measure_call(tensor.sample, device))
+            if ensemble_exact:
+                torch.manual_seed(seed)
+                tensor_ensemble_samples.append(measure_call(tensor.sample_ensemble, device))
+
+        tensor_direct = summarize(tensor_direct_samples, args.batch_size)
+        ensemble_summary = summarize(tensor_ensemble_samples, args.batch_size) if tensor_ensemble_samples else None
+        ensemble_overhead = (
+            ensemble_summary["median_ms"] / tensor_direct["median_ms"] - 1.0
+            if ensemble_summary is not None else None
+        )
+        result["insertion"]["torchrl_tensor_seconds"] = tensor_insertion_seconds
+        result["tensor_direct"] = tensor_direct
+        result["tensor_equivalence"] = "exact"
+        result["ensemble"] = {
+            "exact": ensemble_exact,
+            "error": ensemble_error,
+            "timing": ensemble_summary,
+            "median_overhead_fraction": ensemble_overhead,
+            "adopt": bool(ensemble_exact and ensemble_overhead is not None and ensemble_overhead <= .05),
+        }
+        result["placement"] = tensor.runtime_storage_metadata()
+        if args.optimizer_repeats:
+            result["optimizer_update"] = optimizer_benchmark(
+                buffer, tensor, args, node_counts, device
+            )
+        with tempfile.TemporaryDirectory(prefix="gnn-replay-benchmark-") as directory:
+            result["checkpoint"] = {
+                "legacy": checkpoint_benchmark(buffer, args, node_counts, "legacy", directory),
+                "torchrl_tensor": checkpoint_benchmark(tensor, args, node_counts, "torchrl_tensor", directory),
+            }
+        result["process_peak_rss_kib"] = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        if device.type == "cuda":
+            result["cuda"] = {
+                "allocated_bytes": int(torch.cuda.memory_allocated(device)),
+                "reserved_bytes": int(torch.cuda.memory_reserved(device)),
+                "max_allocated_bytes": int(torch.cuda.max_memory_allocated(device)),
+            }
+    return result
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Compare legacy and direct-collation GNN replay sampling."
+        description="Benchmark legacy and TorchRL tensorized GNN replay."
     )
     parser.add_argument(
         "--device",
@@ -220,6 +399,13 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=50)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--virtual-node", action="store_true")
+    parser.add_argument("--prototype", action="store_true")
+    parser.add_argument("--storage", choices=("cpu_pinned", "cuda", "auto"), default="cpu_pinned")
+    parser.add_argument("--replay-gpu-fraction", type=float, default=.20)
+    parser.add_argument("--replay-gpu-max-gb", type=float, default=8.)
+    parser.add_argument("--replay-gpu-reserve-gb", type=float, default=12.)
+    parser.add_argument("--checkpoint-repeats", type=int, default=3)
+    parser.add_argument("--optimizer-repeats", type=int, default=0)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 

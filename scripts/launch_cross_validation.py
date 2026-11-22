@@ -15,6 +15,7 @@ from typing import Sequence
 
 from omegaconf import OmegaConf
 
+UV_PYTHON = ("uv", "run", "python")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SAC_ROOT = PROJECT_ROOT / "sac"
@@ -76,6 +77,10 @@ def validate_overrides(overrides: Sequence[str]) -> None:
             )
 
 
+def has_sac_backend_override(overrides: Sequence[str]) -> bool:
+    return any(override.lstrip("+~").startswith("sac_backend=") for override in overrides)
+
+
 def build_launch(
     *,
     config_name: str,
@@ -83,18 +88,22 @@ def build_launch(
     seeds: Sequence[int],
     shuffle_seed: int,
     overrides: Sequence[str],
-    python_executable: str = sys.executable,
+    python_command: Sequence[str] = UV_PYTHON,
 ) -> tuple[list[str], list[dict]]:
     """Build the Hydra command and its explicit fold-by-seed manifest rows."""
     validate_overrides(overrides)
     folds = ordered_folds(spec, shuffle_seed)
+    # sac/train.py defaults to the MLP backend; keep the GNN default unless the
+    # caller picks a backend (e.g. sac_backend=padded_mlp).
+    backend = [] if has_sac_backend_override(overrides) else ["sac_backend=gnn"]
     command = [
-        python_executable,
-        str(PROJECT_ROOT / "sac" / "gnn_train.py"),
+        *python_command,
+        str(PROJECT_ROOT / "sac" / "train.py"),
         "-m",
         f"cross_validation={config_name}",
         f"cross_validation.held_out_group={','.join(folds)}",
         f"seed={','.join(str(seed) for seed in seeds)}",
+        *backend,
         *overrides,
     ]
     group_names = list(spec["groups"])

@@ -1,0 +1,9 @@
+# @package _global_
+defaults:
+  - override /sac_backend: padded_mlp
+
+exp_name: padded-mlp-generalist
+mlp_training_mode: generalist
+# Supply a topology list or a cross-validation split. No paper set is assumed.
+truss_topologies: null
+pcgrad: false

@@ -65,6 +65,39 @@ class TopologyAliasTest(unittest.TestCase):
 
         self.assertEqual(cfg.truss_topologies, ["octahedron", "tetrahedron"])
 
+    def test_learning_parameters_scale_as_per_topology_values(self):
+        cfg = parse_cfg(
+            topology_cfg(
+                truss_topologies=["a", "b", "c", "d"],
+                steps=10_000_000,
+                batch_size=256,
+                buffer_size=1_000_000,
+            )
+        )
+
+        self.assertEqual(cfg.training_topology_count, 4)
+        self.assertEqual(cfg.per_topology_steps, 10_000_000)
+        self.assertEqual(cfg.per_topology_batch_size, 256)
+        self.assertEqual(cfg.per_topology_buffer_size, 1_000_000)
+        self.assertEqual(cfg.steps, 40_000_000)
+        self.assertEqual(cfg.batch_size, 1_024)
+        self.assertEqual(cfg.buffer_size, 4_000_000)
+
+    def test_single_topology_learning_parameters_are_unchanged(self):
+        cfg = parse_cfg(
+            topology_cfg(
+                truss_topologies=["a"],
+                steps=100,
+                batch_size=8,
+                buffer_size=50,
+            )
+        )
+
+        self.assertEqual(cfg.training_topology_count, 1)
+        self.assertEqual(cfg.steps, 100)
+        self.assertEqual(cfg.batch_size, 8)
+        self.assertEqual(cfg.buffer_size, 50)
+
     def test_matching_topology_aliases_are_allowed(self):
         cfg = parse_cfg(
             topology_cfg(
@@ -99,19 +132,19 @@ class RunMetadataTest(unittest.TestCase):
         self.assertEqual(cfg.wandb_dir, ROOT)
 
     def test_records_shell_safe_original_launch_command(self):
-        argv = [".venv/bin/python", "sac/gnn_train.py", "exp_name=my run", "steps=1000"]
+        argv = [".venv/bin/python", "sac/train.py", "exp_name=my run", "steps=1000"]
         with patch.dict(os.environ, {}, clear=True), patch("common.parser.sys.orig_argv", argv):
             cfg = parse_cfg(topology_cfg())
 
         self.assertEqual(
             cfg.launch_command,
-            ".venv/bin/python sac/gnn_train.py 'exp_name=my run' steps=1000",
+            ".venv/bin/python sac/train.py 'exp_name=my run' steps=1000",
         )
 
     def test_captured_sweep_command_survives_submitit_worker_argv(self):
         sweep_argv = [
             ".venv/bin/python",
-            "sac/gnn_train.py",
+            "sac/train.py",
             "-m",
             "platform=supercomputer",
             "seed=1,2,3",
@@ -131,13 +164,13 @@ class RunMetadataTest(unittest.TestCase):
 
         self.assertEqual(
             expected,
-            ".venv/bin/python sac/gnn_train.py -m platform=supercomputer seed=1,2,3 "
+            ".venv/bin/python sac/train.py -m platform=supercomputer seed=1,2,3 "
             "exp_name=everything",
         )
         self.assertEqual(cfg.launch_command, expected)
 
     def test_submitit_import_does_not_overwrite_captured_sweep_command(self):
-        sweep_command = ".venv/bin/python sac/gnn_train.py -m seed=1,2,3"
+        sweep_command = ".venv/bin/python sac/train.py -m seed=1,2,3"
         worker_argv = [
             ".venv/bin/python",
             "-m",

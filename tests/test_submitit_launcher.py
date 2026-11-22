@@ -20,6 +20,7 @@ for path in (ROOT, SAC_ROOT):
 from common.submitit_launcher import (
     FilteringSlurmLauncher,
     completed_checkpoint_step,
+    completed_offline_distillation,
     resolve_checkpoint_dir,
 )
 
@@ -30,6 +31,7 @@ def sweep_cfg(
     override_dirname: str,
     steps: int | str = 100,
     resume="latest",
+    truss_topologies=None,
 ):
     return OmegaConf.create(
         {
@@ -38,6 +40,7 @@ def sweep_cfg(
             "isolate_multirun_runs": True,
             "resume_from_checkpoint": resume,
             "steps": steps,
+            "truss_topologies": truss_topologies,
             "hydra": {
                 "job": {
                     "num": "???",
@@ -72,6 +75,37 @@ def write_metadata_checkpoint(checkpoint_dir: Path, step: int, target_steps: int
 
 
 class CheckpointScanTest(unittest.TestCase):
+    def test_offline_completion_requires_stage_budget_and_files(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            directory = Path(tmp_dir)
+            cfg = OmegaConf.create({"distillation": {"pretrain_updates": 3}})
+            metadata = {
+                "format_version": 1, "step": 0, "target_steps": 0,
+                "checkpoint": "distillation_complete.pt",
+                "distillation": {"offline_only": True, "stage": "complete",
+                                 "completed_updates": 3, "pretrain_updates": 3},
+            }
+            (directory / "latest.metadata.json").write_text(json.dumps(metadata))
+            self.assertFalse(completed_offline_distillation(directory, cfg))
+            (directory / "latest.pt").touch()
+            (directory / "distillation_complete.pt").touch()
+            self.assertTrue(completed_offline_distillation(directory, cfg))
+            cfg.distillation.pretrain_updates = 4
+            self.assertFalse(completed_offline_distillation(directory, cfg))
+            cfg.distillation.pretrain_updates = 3
+            metadata["distillation"]["stage"] = "offline"
+            (directory / "latest.metadata.json").write_text(json.dumps(metadata))
+            self.assertFalse(completed_offline_distillation(directory, cfg))
+
+    def test_launcher_does_not_treat_zero_online_budget_as_offline_completion(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            directory = Path(tmp_dir)
+            cfg = sweep_cfg(directory, override_dirname="offline", steps=0)
+            cfg.distillation = {"offline_only": True, "pretrain_updates": 3}
+            write_legacy_checkpoint(directory, 0)
+            launcher = FilteringSlurmLauncher()
+            self.assertEqual(launcher._is_complete(cfg, directory), (False, None))
+
     def test_metadata_reports_saved_step_at_or_below_target(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             checkpoint_dir = Path(tmp_dir)
@@ -145,6 +179,11 @@ class FakeExecutor:
 
 
 class FilteringLauncherTest(unittest.TestCase):
+    def test_supercomputer_profile_defaults_to_nusey_account(self):
+        profile = OmegaConf.load(ROOT / "config" / "platform" / "supercomputer.yaml")
+
+        self.assertEqual(profile.hydra.launcher.account, "nusey")
+
     def test_production_launcher_is_instantiated_by_hydra_plugin_registry(self):
         script = """
 from pathlib import Path
@@ -283,6 +322,23 @@ assert isinstance(launcher, BaseFilteringSlurmLauncher)
                 launcher._is_complete(cfg, checkpoint_dir),
                 (True, 10_000),
             )
+
+    def test_multi_topology_step_target_uses_per_topology_budget(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            cfg = sweep_cfg(
+                root,
+                override_dirname="job=a",
+                steps=100,
+                truss_topologies=["a", "b", "c", "d"],
+            )
+            checkpoint_dir = resolve_checkpoint_dir(cfg, 0)
+            write_metadata_checkpoint(checkpoint_dir, 100, 400)
+            launcher = self.make_launcher(root, {"job=a": cfg})
+
+            self.assertEqual(launcher._is_complete(cfg, checkpoint_dir), (False, 100))
+            write_metadata_checkpoint(checkpoint_dir, 400, 400)
+            self.assertEqual(launcher._is_complete(cfg, checkpoint_dir), (True, 400))
 
 
 if __name__ == "__main__":

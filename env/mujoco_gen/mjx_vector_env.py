@@ -7,9 +7,21 @@ import numpy as np
 import torch
 from gymnasium import spaces
 
+from env.mujoco_gen.edge_extension_reward import (
+    edge_extension_weight,
+    nominal_edge_lengths,
+    squared_edge_extension,
+)
+
 from env.mujoco_gen.topology_envs import (
+    _broken_nodes_probability,
     _edge_roles_enabled,
+    _edge_direction_enabled,
+    control_edge_directions,
     _semantic_edge_roles,
+    broken_node_regime_fraction,
+    broken_node_regime_slots,
+    broken_node_schedule,
     make_truss_env_config,
     resolve_truss_topology,
 )
@@ -47,11 +59,28 @@ class MjxVectorGraphEnv(gym.Env):
             ) from exc
 
         self.cfg = cfg
+        self._edge_extension_weight = edge_extension_weight(cfg)
         self.task = str(getattr(cfg, "task", "truss-graph"))
         self.topology = resolve_truss_topology(cfg)
+        self._broken_node_probability = _broken_nodes_probability(cfg)
+        self._broken_nodes_sampling_enabled = True
         self.num_envs = int(getattr(cfg, "num_envs", 1))
         if self.num_envs < 1:
             raise ValueError("num_envs must be at least one.")
+        regime_fraction = broken_node_regime_fraction(cfg)
+        if (
+            broken_node_schedule(cfg) == "interleaved"
+            and regime_fraction > 0.0
+            and self.num_envs > 1
+        ):
+            self._broken_regime_slots = broken_node_regime_slots(self.num_envs, regime_fraction)
+        else:
+            # None (rather than an all-False array) preserves the exact
+            # legacy behavior when no regime split is configured -- including
+            # the single-env case, which cannot represent both regimes at
+            # once and must stay eligible for the plain per-node Bernoulli
+            # draw rather than being silently locked to standard.
+            self._broken_regime_slots = None
 
         self._jax = jax
         self._jnp = jnp
@@ -78,6 +107,12 @@ class MjxVectorGraphEnv(gym.Env):
         else:
             self._core = MjxNodeVelocityEnv(truss_config, mjx_impl=mjx_impl)
         self.mj_model = self._core.mujoco_model
+        if self._edge_extension_weight:
+            bodies, lengths = nominal_edge_lengths(
+                self.mj_model, truss_config.control_node_observation_source
+            )
+            self._edge_extension_bodies = self._jnp.asarray(bodies)
+            self._nominal_edge_lengths = self._jnp.asarray(lengths)
         self.max_episode_steps = int(self._core.config.max_steps)
         self.nsubsteps = int(self._core.config.nsubsteps)
         self.speed = float(self._core.config.speed)
@@ -90,9 +125,18 @@ class MjxVectorGraphEnv(gym.Env):
             )
             if is_passive
         ]
-        self._action_mask = torch.as_tensor(
-            ~np.asarray(self._core._controller.passive_node_mask, dtype=bool)
-        )
+        self._base_passive_node_mask = np.asarray(
+            self._core._controller.passive_node_mask, dtype=bool
+        ).copy()
+        if (
+            self._broken_node_probability is not None
+            and not np.any(~self._base_passive_node_mask)
+        ):
+            raise ValueError(
+                "Broken-node domain randomization requires at least one originally "
+                "active control node."
+            )
+        self._action_mask = torch.as_tensor(~self._base_passive_node_mask)
         self.num_external_actuators = int(len(self.mj_model.external_actuator_ids))
 
         node_count = int(self._core.action_size)
@@ -101,6 +145,17 @@ class MjxVectorGraphEnv(gym.Env):
         edge_index = get_edge_index(self.mj_model, graph_view="control")
         self._edge_index = torch.as_tensor(edge_index, dtype=torch.long)
         self._edge_role = None
+        self._edge_direction = None
+        from env.mujoco_gen.tube_physics import build_tube_physics_metadata, tube_physics_enabled
+        self.tube_physics_metadata = {}
+        if tube_physics_enabled(cfg):
+            from env.mujoco_gen.topology_envs import resolve_truss_realistic
+            if resolve_truss_realistic(cfg):
+                raise ValueError("Tube physics requires abstract models.")
+            self.tube_physics_metadata = {
+                k: torch.as_tensor(v) for k, v in build_tube_physics_metadata(
+                    self.mj_model, edge_index, _semantic_edge_roles(self.mj_model, graph_view="control"),
+                    normalized=bool(self._core.config.normalize_observations)).items()}
         observation_spaces = {
                 "x": spaces.Box(
                     low=-np.inf,
@@ -122,6 +177,8 @@ class MjxVectorGraphEnv(gym.Env):
                     dtype=np.float32,
                 ),
             }
+        for key, value in self.tube_physics_metadata.items():
+            observation_spaces[key] = spaces.Box(-np.inf, np.inf, shape=tuple(value.shape), dtype=np.float32)
         if _edge_roles_enabled(cfg):
             self._edge_role = torch.as_tensor(
                 _semantic_edge_roles(self.mj_model, graph_view="control"),
@@ -133,6 +190,11 @@ class MjxVectorGraphEnv(gym.Env):
                 shape=(edge_index.shape[1],),
                 dtype=np.int64,
             )
+        if _edge_direction_enabled(cfg):
+            self._edge_direction = torch.as_tensor(control_edge_directions(self.mj_model))
+            observation_spaces["edge_direction"] = spaces.Box(
+                low=-1, high=1, shape=(edge_index.shape[1],), dtype=np.float32
+            )
         self.observation_space = spaces.Dict(observation_spaces)
         self.action_space = spaces.Box(
             low=-1.0,
@@ -143,11 +205,17 @@ class MjxVectorGraphEnv(gym.Env):
 
         seed = int(getattr(cfg, "seed", 0))
         self._key = jax.random.key(seed)
+        self._broken_node_rng = np.random.default_rng(seed)
+        self._broken_node_masks = torch.zeros(
+            (self.num_envs, node_count),
+            dtype=torch.bool,
+            device=self.action_device,
+        )
         self._state = None
         self.active_env_idx = 0
         self._reset_compiled = jax.jit(self._core.reset)
         self._reset_where_compiled = jax.jit(self._core.reset_where)
-        self._step_compiled = jax.jit(self._step_with_actuator_energy)
+        self._step_compiled = jax.jit(self._step_with_reward_adjustments)
         self._step_masked_compiled = jax.jit(self._step_masked)
         self._rigidity_compiled = jax.jit(jax.vmap(self._core._critical_eig))
 
@@ -201,6 +269,7 @@ class MjxVectorGraphEnv(gym.Env):
         else:
             mask = self._index_mask(indices)
             flat_obs, self._state = self._reset_where_compiled(keys, self._state, mask)
+        self._sample_broken_nodes(indices)
         rigidity = self._rigidity_compiled(self._state.data)
         return self._graph_observations(flat_obs, indices, rigidity)
 
@@ -231,6 +300,7 @@ class MjxVectorGraphEnv(gym.Env):
             full_actions[env_idx] = action_tensor.reshape(-1)
 
         normalized_actions = full_actions.clamp(-1.0, 1.0)
+        normalized_actions.masked_fill_(self._broken_node_masks, 0.0)
         physical_actions = normalized_actions * self.speed
         jax_actions = self._jnp.from_dlpack(physical_actions.contiguous())
         keys = self._next_keys()
@@ -255,7 +325,14 @@ class MjxVectorGraphEnv(gym.Env):
             env_info = {key: value[env_idx] for key, value in torch_info.items()}
             env_info["task"] = self.task
             env_info["env_idx"] = env_idx
+            if self._broken_regime_slots is not None:
+                env_info["regime"] = "broken" if self._broken_regime_slots[env_idx] else "standard"
             env_info["success"] = float(env_info.get("success", 0.0))
+            if self._broken_node_probability is not None:
+                env_info["broken_node_mask"] = self._broken_node_masks[env_idx].clone()
+                env_info["broken_node_count"] = int(
+                    self._broken_node_masks[env_idx].sum().item()
+                )
             results.append(
                 (
                     observations[result_idx],
@@ -266,25 +343,126 @@ class MjxVectorGraphEnv(gym.Env):
             )
         return results
 
+    supports_batched_tensors = True
+
+    @property
+    def edge_index(self) -> torch.Tensor:
+        return self._edge_index
+
+    @property
+    def edge_role(self) -> torch.Tensor | None:
+        return self._edge_role
+
+    @property
+    def edge_direction(self) -> torch.Tensor | None:
+        return self._edge_direction
+
+    def batched_groups(self) -> list[tuple["MjxVectorGraphEnv", torch.Tensor]]:
+        """Return ``(env, global_indices)`` pairs for tensor-batched collection."""
+        return [(self, torch.arange(self.num_envs, dtype=torch.long))]
+
+    def slot_tasks(self) -> list[str]:
+        """Return the replay task key of every batch slot, including broken regimes."""
+        from env.mujoco_gen.topology_envs import regime_task_name
+
+        if self._broken_regime_slots is None:
+            return [self.task] * self.num_envs
+        return [
+            regime_task_name(self.task, "broken" if is_broken else "standard")
+            for is_broken in self._broken_regime_slots
+        ]
+
+    def reset_batch(self, env_indices: Sequence[int] | None = None) -> dict[str, torch.Tensor]:
+        """Reset selected slots and return dense observations for the whole batch.
+
+        Rows outside ``env_indices`` are not meaningful after a partial reset;
+        callers should merge only the reset rows into their cached observations.
+        """
+        indices = self._normalize_indices(env_indices)
+        keys = self._next_keys()
+        if self._state is None or len(indices) == self.num_envs:
+            flat_obs, self._state = self._reset_compiled(keys)
+        else:
+            mask = self._index_mask(indices)
+            flat_obs, self._state = self._reset_where_compiled(keys, self._state, mask)
+        self._sample_broken_nodes(indices)
+        rigidity = self._rigidity_compiled(self._state.data)
+        return self._dense_observations(flat_obs, rigidity)
+
+    def step_batch(self, actions: torch.Tensor):
+        """Step every slot with a dense ``[num_envs, nodes, 1]`` action tensor.
+
+        Returns ``(observations, reward, done, info)`` where every value is a
+        tensor with leading dimension ``num_envs`` and stays on the accelerator.
+        """
+        if self._state is None:
+            raise RuntimeError("reset_batch must be called before step_batch.")
+        normalized_actions = (
+            actions.to(device=self.action_device, dtype=torch.float32)
+            .reshape(self.num_envs, self._core.action_size)
+            .clamp(-1.0, 1.0)
+            .masked_fill(self._broken_node_masks, 0.0)
+        )
+        physical_actions = normalized_actions * self.speed
+        jax_actions = self._jnp.from_dlpack(physical_actions.contiguous())
+        flat_obs, self._state, reward, done, info = self._step_compiled(
+            self._next_keys(), self._state, jax_actions
+        )
+        observations = self._dense_observations(flat_obs, info["critical_eig"])
+        torch_info = {key: self._to_torch(value) for key, value in info.items()}
+        if self._broken_node_probability is not None:
+            torch_info["broken_node_count"] = self._broken_node_masks.sum(dim=-1)
+        return (
+            observations,
+            self._to_torch(reward).float(),
+            self._to_torch(done).bool(),
+            torch_info,
+        )
+
+    def _dense_observations(self, flat_obs, rigidity) -> dict[str, torch.Tensor]:
+        obs = self._to_torch(flat_obs)
+        node_count = self._core.action_size
+        positions = obs[:, : 3 * node_count].reshape(self.num_envs, node_count, 3)
+        velocities = obs[:, 3 * node_count : 6 * node_count].reshape(
+            self.num_envs, node_count, 3
+        )
+        device = self._broken_node_masks.device
+        return {
+            "x": torch.cat((positions, velocities), dim=-1).float(),
+            "rigidity": self._to_torch(rigidity).float().reshape(self.num_envs, 1),
+            "action_mask": self._action_mask.to(device) & ~self._broken_node_masks,
+        }
+
     def _step_masked(self, keys, state, actions, mask):
-        flat_obs, stepped_state, reward, done, info = self._step_with_actuator_energy(
+        flat_obs, stepped_state, reward, done, info = self._step_with_reward_adjustments(
             keys, state, actions
         )
-        batch_size = self.num_envs
-
-        def select(new_value, old_value):
-            expanded_mask = mask.reshape((batch_size,) + (1,) * (new_value.ndim - 1))
-            return self._jnp.where(expanded_mask, new_value, old_value)
-
-        merged_state = self._jax.tree.map(select, stepped_state, state)
+        # Warp data contains shared, fixed-capacity contact buffers whose leading
+        # dimension is not the environment batch. Delegate data merging to the
+        # upstream implementation so those leaves remain untouched while the
+        # genuinely batched state fields advance only selected environments.
+        merged_state = type(state)(
+            data=self._core._data_where(mask, state.data, stepped_state.data),
+            step_count=self._core._batch_where(
+                mask, state.step_count, stepped_state.step_count
+            ),
+            node_commands=self._core._batch_where(
+                mask, state.node_commands, stepped_state.node_commands
+            ),
+            domain_randomization=self._jax.tree.map(
+                lambda old, new: self._core._batch_where(mask, old, new),
+                state.domain_randomization,
+                stepped_state.domain_randomization,
+            ),
+        )
         flat_obs = self._core._get_obs(merged_state)
         reward = self._jnp.where(mask, reward, 0.0)
         done = self._jnp.where(mask, done, False)
         info = {key: self._jnp.where(mask, value, 0) for key, value in info.items()}
         return flat_obs, merged_state, reward, done, info
 
-    def _step_with_actuator_energy(self, keys, state, actions):
-        """Replace upstream's node-action energy term with routed actuator commands."""
+    def _step_with_reward_adjustments(self, keys, state, actions):
+        """Use routed actuator energy and add the optional edge extension penalty."""
         flat_obs, stepped_state, reward, done, info = self._core.step(keys, state, actions)
         actuator_commands = stepped_state.data.ctrl[..., self._core._actuator_ids]
         energy_penalty = self._jnp.sum(self._jnp.square(actuator_commands), axis=-1)
@@ -293,6 +471,14 @@ class MjxVectorGraphEnv(gym.Env):
         info = dict(info)
         info["energy"] = energy_reward
         info["energy_penalty_raw"] = energy_penalty
+        if self._edge_extension_weight:
+            extension = squared_edge_extension(
+                stepped_state.data.xpos, self._edge_extension_bodies,
+                self._nominal_edge_lengths, self._jnp,
+            )
+            penalty = -self._edge_extension_weight * extension
+            info["edge_extension_penalty"] = penalty
+            reward = reward + penalty
         return flat_obs, stepped_state, reward, done, info
 
     def _graph_observations(self, flat_obs, indices: Sequence[int], rigidity):
@@ -308,7 +494,10 @@ class MjxVectorGraphEnv(gym.Env):
             {
                 "x": features[env_idx],
                 "edge_index": self._edge_index,
-                "action_mask": self._action_mask,
+                "action_mask": (
+                    self._action_mask.to(self._broken_node_masks.device)
+                    & ~self._broken_node_masks[env_idx]
+                ).clone(),
                 "rigidity": rigidity[env_idx].reshape(1),
             }
             for env_idx in indices
@@ -316,7 +505,46 @@ class MjxVectorGraphEnv(gym.Env):
         if self._edge_role is not None:
             for observation in observations:
                 observation["edge_role"] = self._edge_role
+        if self._edge_direction is not None:
+            for observation in observations:
+                observation["edge_direction"] = self._edge_direction
+        for observation in observations:
+            observation.update(self.tube_physics_metadata)
         return observations
+
+    def _sample_broken_nodes(self, indices: Sequence[int]) -> None:
+        if self._broken_node_probability is None:
+            self._broken_node_masks[indices] = False
+            return
+
+        if not self._broken_nodes_sampling_enabled:
+            self._broken_node_masks[indices] = False
+            return
+
+        eligible_indices = np.flatnonzero(~self._base_passive_node_mask)
+        probability = self._broken_node_probability
+        for env_idx in indices:
+            if self._broken_regime_slots is not None and not self._broken_regime_slots[env_idx]:
+                # This slot is locked to the nominal regime: never sample a
+                # broken node here, regardless of the batch-wide toggle,
+                # so distillation always has teacher-compatible episodes.
+                self._broken_node_masks[env_idx] = False
+                continue
+            broken = np.zeros_like(self._base_passive_node_mask)
+            if probability > 0.0:
+                broken[eligible_indices] = (
+                    self._broken_node_rng.random(eligible_indices.size) < probability
+                )
+                if np.all(broken[eligible_indices]):
+                    restored_index = int(self._broken_node_rng.choice(eligible_indices))
+                    broken[restored_index] = False
+            self._broken_node_masks[env_idx] = torch.as_tensor(
+                broken, dtype=torch.bool, device=self._broken_node_masks.device
+            )
+
+    def set_broken_nodes_sampling_enabled(self, enabled: bool) -> None:
+        """Gate future reset-time samples without changing active episode masks."""
+        self._broken_nodes_sampling_enabled = bool(enabled)
 
     def _to_torch(self, value) -> torch.Tensor:
         return torch.utils.dlpack.from_dlpack(value)

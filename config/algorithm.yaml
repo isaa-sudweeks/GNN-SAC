@@ -2,14 +2,20 @@
 
 # Optimizer
 lr: 3e-4 # Adam learning rate for actor and critic optimizers.
-batch_size: 256 # Number of replay slices sampled for each gradient update.
+batch_size: 256 # Replay slices sampled per topology for each gradient update.
 grad_clip_norm: 10.0 # Maximum global gradient norm before clipping optimizer steps.
 pcgrad: false # GNN profiles can enable projection of conflicting per-task gradients.
 gradient_diagnostics: false # Compare task-specific actor and critic gradients without changing the optimizer update.
 gradient_diagnostics_freq: 100 # Optimizer-update interval for gradient diagnostics when enabled.
+finite_checks: true # Fail before non-finite replay, losses, gradients, actions, or checkpoints can silently poison training.
 
 # Replay and update cadence
-buffer_size: 1_000_000 # Maximum number of transitions stored in replay.
+buffer_size: 1_000_000 # Maximum transitions stored per topology in replay.
+replay_backend: torchrl_tensor # Default tensorized replay; set legacy for the object-based fallback.
+replay_storage: auto # Default bounded placement; cpu_pinned and cuda remain explicit alternatives.
+replay_gpu_fraction: 0.20 # Maximum fraction of total VRAM assigned to replay in auto mode.
+replay_gpu_max_gb: 8.0 # Absolute replay VRAM cap in auto mode.
+replay_gpu_reserve_gb: 12.0 # VRAM that auto mode must leave available to JAX/Warp and the learner.
 horizon: 2 # Sequence length used by the slice sampler; 2 gives one current/next transition.
 replay_ratio: 10.0 # Replay samples consumed per new transition; updates are replay_ratio * collected / batch_size.
 update_every_vector_steps: 1 # Spend accumulated update budget after this many vector-environment steps; set to 1 for every step.
@@ -20,9 +26,10 @@ entropy_coef: 0.2 # Weight on policy entropy in the actor objective.
 target_entropy: auto # SAC entropy target; auto uses -action_dim.
 tau: 0.005 # Polyak averaging rate for target critic updates and running value scale.
 rho: 0.5 # Temporal weighting factor for multi-step policy losses.
-discount_denom: 500 # Episode-length denominator used to derive the discount heuristic.
-discount_min: 0.95 # Lower bound for the derived discount factor.
-discount_max: 0.995 # Upper bound for the derived discount factor; MuJoCo wrapper may lower this.
+discount: 0.995 # SAC discount factor (gamma); null derives it from episode_length using the heuristic below.
+discount_denom: 500 # Episode-length denominator for the discount heuristic (used only when discount is null).
+discount_min: 0.95 # Lower bound for the derived discount factor (used only when discount is null).
+discount_max: 0.995 # Upper bound for the derived discount factor; MuJoCo wrapper may lower this (used only when discount is null).
 
 # Actor-critic architecture
 mlp_dim: 256 # Hidden width for the MLP actor and critic networks.

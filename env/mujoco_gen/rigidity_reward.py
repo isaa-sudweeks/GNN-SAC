@@ -1,5 +1,7 @@
 import numpy as np
 
+from env.mujoco_gen.edge_extension_reward import squared_edge_extension
+
 
 class FirstNonRigidEigenvalueRewardMixin:
     """Use the first non-rigid eigenvalue for graph rewards and observations."""
@@ -113,5 +115,14 @@ class FirstNonRigidEigenvalueRewardMixin:
             "collapse_penalty": collapse_penalty,
             "terminated_by_collapse": terminated,
         }
+
+        if self._edge_extension_weight:
+            extension = squared_edge_extension(
+                self.mj_model.data.xpos, self._edge_extension_bodies,
+                self._nominal_edge_lengths, np,
+            )
+            penalty = -self._edge_extension_weight * float(extension)
+            info["edge_extension_penalty"] = penalty
+            total_reward += penalty
 
         return float(total_reward), info, terminated

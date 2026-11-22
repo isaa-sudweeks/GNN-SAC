@@ -39,6 +39,7 @@ rigidity_weight: 0.1 # Reward multiplier for rigidity normalized by its initial 
 slip_weight: 0.1215063801500649 # Penalty multiplier for horizontal velocity at low-contact nodes.
 slip_height: 0.1879452990963082 # Height threshold used to decide which nodes count as ground contacts.
 critical_eig_threshold: 0.0001 # Terminate when normalized rigidity falls below this value.
+edge_extension_weight: 0.0 # Penalize squared extension beyond nominal control-graph edge lengths (meters).
 
 # Flat observation/action dimensions. make_env overwrites action_dim from the Gym space.
 obs_dim: 44 # Flat default octahedron observation size (overwritten at runtime).
@@ -57,6 +58,9 @@ edge_feature_dim: 0 # Per-edge feature width for future graph observations.
 effective_node_feature_dim: 6 # Resolved policy input width after configurable graph features.
 edge_role_vocabulary: [tube, connector, virtual] # Stable semantic order used by edge-role one-hot features.
 graph_features:
+  tube_nodes: false # One non-actuated hub per structural control-graph tube.
+  tube_physics: false # Validated route count/reference length/ratio/residual at tube hubs.
+  edge_direction: false # Signed controller routing on message edges; zero for connectors.
   node_roles: false # Append [actuated, passive] to each physical node observation.
   edge_roles: false # Append [tube, connector, virtual] to each directed message edge.
   edge_distance: false # Append endpoint distance computed from the observed xyz coordinates.

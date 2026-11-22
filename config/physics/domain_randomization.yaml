@@ -6,6 +6,22 @@ domain_randomization: true
 # Domain-randomization parameters live here so future randomized dynamics,
 # sensing, latency, terrain, and actuator effects can be added in one place.
 domain_randomization_params:
+  # Independently disable originally active control nodes for one episode.
+  # Requires graph_features.node_roles=true and use_control_graph=true.
+  broken_nodes:
+    enabled: false
+    probability: 0.1
+    # Fraction of parallel env slots permanently reserved for broken-node RL
+    # (the rest are locked to the nominal, all-active topology so
+    # distillation always sees teacher-compatible episodes). Only used when
+    # schedule=interleaved and num_envs>1.
+    regime_fraction: 0.3
+    # "interleaved": broken-node RL and standard/distillation RL run
+    # concurrently from step zero, via the fixed regime_fraction split above.
+    # "staged": legacy behavior — broken-node sampling stays off for every
+    # env until the distillation KL weight has fully decayed to zero.
+    schedule: interleaved
+
   # Randomly scale generated truss geometry at reset time.
   length_scale:
     enabled: false
@@ -103,6 +119,12 @@ domain_randomization_params:
     enabled: true
     min: -3.141592653589793
     max: 3.141592653589793
+  # Absolute position-servo gain shared by the internal connector hinges in
+  # realistic models. mujoco-truss-gen applies this at reset in MuJoCo and MJX.
+  hinge_position_kp:
+    enabled: false
+    min: 8.0
+    max: 12.0
 
   # Randomize mujoco-truss-gen TrussPhysicalParameters at reset time. Enable
   # the master switch above, then enable individual parameters here.
@@ -155,6 +177,8 @@ domain_randomization_params:
       enabled: false
       min: 0.8
       max: 1.2
+    # Deprecated compatibility alias. Prefer the fixed-shape
+    # domain_randomization_params.hinge_position_kp path above.
     hinge_position_kp:
       enabled: false
       min: 8.0
