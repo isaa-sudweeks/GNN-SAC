@@ -138,3 +138,7 @@ to prepare matched data for all arms.
 
 Checkpoints record the feature schema, so a checkpoint can only be loaded with
 the same flags it was trained with.
+
+Six-Vive inference derives signed edge directions from the triangle definition's
+actuator routes. See [full v4 policy inference](../real_robot_inference.md#full-v4-policy-on-the-six-vive-robot)
+for the feature flags and print-mode command.

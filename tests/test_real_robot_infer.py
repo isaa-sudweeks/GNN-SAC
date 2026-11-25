@@ -36,7 +36,9 @@ from real_robot_infer import (
 )
 from robot_operator import OperatorControls
 from robot_preview import draw_frame
-from sim_to_real_io import read_jsonl
+from gnn_sac import GNNSAC
+from replay_real_robot_commands import _build_environment
+from sim_to_real_io import load_triangle_graph_definition, read_jsonl
 from tests.test_gnn_mujoco_truss_gen_smoke import graph_test_cfg
 
 
@@ -63,6 +65,39 @@ class RealRobotObservationTest(unittest.TestCase):
         np.testing.assert_array_equal(positions, [[0, 0, 0], [1, 2, 3], [2, 4, 6]])
         np.testing.assert_array_equal(self.layout.action_mask, [True, False, True])
         np.testing.assert_array_equal(self.layout.edge_role, [0, 0, 1, 1])
+        self.assertIsNone(self.layout.edge_direction)
+
+    def test_hardware_octahedron_signed_routing_matches_simulator(self):
+        graph_path = ROOT / "config/tracker_maps/robot_def.json"
+        layout = TrackerLayout.from_files(
+            str(ROOT / "config/tracker_maps/vive_serial_map.json"), str(graph_path)
+        )
+        definition = load_triangle_graph_definition(graph_path)
+        cfg = graph_test_cfg(
+            truss_topology="octahedron:realistic",
+            domain_randomization=False,
+            graph_features={
+                "node_roles": True,
+                "edge_roles": True,
+                "edge_distance": True,
+                "edge_direction": True,
+                "tube_nodes": True,
+            },
+        )
+        env, metadata = _build_environment(cfg, definition)
+        self.addCleanup(env.close)
+        raw, _ = env.reset(seed=0)
+        self.assertEqual(layout.node_names, tuple(metadata.control_node_names))
+        np.testing.assert_array_equal(layout.edge_index, raw["edge_index"])
+        np.testing.assert_array_equal(layout.action_mask, raw["action_mask"])
+        np.testing.assert_array_equal(layout.edge_role, raw["edge_role"])
+
+        builder = RealRobotObservationBuilder(layout, False, 1.0)
+        observation = builder.build(raw["x"][:, :3], 0.0)
+        np.testing.assert_array_equal(observation.edge_direction.numpy(), raw["edge_direction"])
+        action = GNNSAC(cfg).act(observation, t0=True, eval_mode=True)
+        self.assertTrue(torch.isfinite(action).all())
+        np.testing.assert_array_equal(action.cpu().numpy()[~layout.action_mask], 0.0)
 
     def test_pose_filter_smooths_direct_positions_and_supports_passthrough(self):
         for alpha in (0.25, 1.0):
@@ -318,6 +353,7 @@ class RealRobotObservationTest(unittest.TestCase):
                 "node_roles": False,
                 "edge_roles": True,
                 "edge_distance": False,
+                "edge_direction": True,
             },
         )
         cfg.tracker_assignment = "automatic"
@@ -326,6 +362,7 @@ class RealRobotObservationTest(unittest.TestCase):
         self.assertEqual(preset.reference_positions.shape, (len(preset.node_names), 3))
         self.assertEqual(preset.edge_index.shape[0], 2)
         self.assertEqual(preset.edge_role.shape[0], preset.edge_index.shape[1])
+        self.assertEqual(preset.edge_direction.shape[0], preset.edge_index.shape[1])
         self.assertEqual(preset.action_mask.shape, (len(preset.node_names),))
 
     def test_triangle_plane_layout_accepts_one_mount_per_abstract_preset_node(self):
