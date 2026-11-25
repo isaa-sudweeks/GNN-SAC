@@ -538,6 +538,7 @@ class TrackerLayout:
     graph_definition: dict[str, object] | None = None
     graph_definition_sha256: str | None = None
     routed_actuator_edges: tuple[tuple[str, str], ...] | None = None
+    edge_direction: np.ndarray | None = None
 
     @staticmethod
     def _expand_triangle_definition(layout: Mapping[str, object]) -> dict:
@@ -839,6 +840,13 @@ class TrackerLayout:
 
         node_index = {name: idx for idx, name in enumerate(node_names)}
         directed_edges, directed_roles = [], []
+        edge_directions = None
+        if shared_graph is not None:
+            actuator_directions = {}
+            for source, target in shared_graph.actuator_edges:
+                actuator_directions[source, target] = 1.0
+                actuator_directions[target, source] = -1.0
+            edge_directions = []
         role_names = {"tube": 0, "connector": 1}
         for edge in layout["edges"]:
             source, target = str(edge[0]), str(edge[1])
@@ -848,6 +856,9 @@ class TrackerLayout:
             directed_edges.extend(((node_index[source], node_index[target]), (node_index[target], node_index[source])))
             if role is not None:
                 directed_roles.extend((role, role))
+            if edge_directions is not None:
+                direction = actuator_directions.get((source, target), 0.0)
+                edge_directions.extend((direction, -direction))
         edge_index = np.asarray(directed_edges, dtype=np.int64).T
         actuated = set(str(value) for value in layout.get("actuated_nodes", node_names))
         if not actuated <= set(node_names):
@@ -895,6 +906,10 @@ class TrackerLayout:
             graph_definition_sha256=(shared_graph.sha256 if shared_graph is not None else None),
             routed_actuator_edges=(
                 shared_graph.actuator_edges if shared_graph is not None else None
+            ),
+            edge_direction=(
+                np.asarray(edge_directions, dtype=np.float32)
+                if edge_directions is not None else None
             ),
         )
         result._validate_tracker_map()
@@ -974,6 +989,10 @@ class TrackerLayout:
                 assignment_mode=assignment_mode,
                 tracker_mounts=tracker_mounts,
                 plane_parallel_tolerance=plane_parallel_tolerance,
+                edge_direction=(
+                    observation.edge_direction.detach().cpu().numpy().astype(np.float32)
+                    if hasattr(observation, "edge_direction") else None
+                ),
             )
             result._validate_tracker_map()
             return result
@@ -1452,6 +1471,8 @@ class RealRobotObservationBuilder:
         )
         if self.layout.edge_role is not None:
             graph.edge_role = torch.from_numpy(self.layout.edge_role.copy()).long()
+        if self.layout.edge_direction is not None:
+            graph.edge_direction = torch.from_numpy(self.layout.edge_direction.copy())
         return graph
 
 
@@ -1918,6 +1939,11 @@ def run_real_robot_inference(cfg, source: TrackerSource | None = None) -> None:
             cfg,
             str(cfg.serial_map_file),
             str(layout_file) if layout_file is not None else None,
+        )
+    if cfg.graph_features.get("edge_direction", False) and layout.edge_direction is None:
+        raise ValueError(
+            "graph_features.edge_direction=true requires a triangle graph definition "
+            "or a simulator preset with signed control-graph routing."
         )
     builder = RealRobotObservationBuilder(
         layout,

@@ -229,6 +229,27 @@ python sac/real_robot_infer.py \
 
 Do not also set `tracker_layout_file`. The checkpoint architecture and enabled graph features must match the hand-authored definition. The triangle generator supplies `tube` and `connector` roles on every generated edge.
 
+### Full v4 policy on the six-Vive robot
+
+Use the physical layout in `robot_def.json`, including its passive nodes and roller order. Signed edge directions follow the MuJoCo triangle routing convention. The physical layout and the training preset place passive nodes differently, so policy performance on the hardware layout still needs evaluation. Inference preserves the sign of each action when converting it to firmware ticks.
+
+Run a short print-mode check with a v4 checkpoint and the training feature flags.
+
+```bash
+uv run python sac/real_robot_infer.py \
+  model=/path/to/latest.agent.pt \
+  truss_topology=octahedron:realistic \
+  serial_map_file=config/tracker_maps/vive_serial_map.json \
+  graph_definition_file=config/tracker_maps/robot_def.json \
+  num_policy_actions=8 \
+  graph_features.node_roles=true graph_features.edge_roles=true \
+  graph_features.edge_distance=true graph_features.edge_direction=true \
+  graph_features.tube_nodes=true \
+  command_transport=print control_steps=5
+```
+
+Both edge-extension reward arms use the same inference settings. Select a checkpoint from the penalty arm to test the policy trained with that reward.
+
 ## Transmitter command output and emergency stop
 
 Each control cycle prints the exact newline-delimited command expected by the Arduino USB transmitter:
